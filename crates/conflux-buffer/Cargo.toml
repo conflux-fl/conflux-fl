@@ -1,0 +1,13 @@
+[package]
+name = "conflux-buffer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread", "macros"] }
+thiserror = "2.0"
+tracing = "0.1"
+
+[dev-dependencies]
+tracing-test = "0.2"

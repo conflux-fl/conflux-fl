@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/conflux-proto",
+    "crates/conflux-config",
+    "crates/conflux-registry",
+    "crates/conflux-store",
+    "crates/conflux-selector",
+    "crates/conflux-net",
+    "crates/conflux-buffer",
+    "crates/conflux-privacy",
+    "crates/conflux-reputation",
+    "crates/conflux-core",
+    "crates/conflux-server",
+    "crates/conflux-node",
+    "crates/conflux-attacks",
+]

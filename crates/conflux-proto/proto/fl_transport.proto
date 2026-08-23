@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package conflux.v1;
+
+// FlTransport is reused verbatim over two hops with one schema: the network
+// hop between conflux-server and conflux-node (push or pull, per topology —
+// see docs/spec/conflux-spec-v1.md §3), and the local loopback gRPC hop
+// between conflux-node and the Python ClientApp (no TLS, localhost only —
+// see §7).
+service FlTransport {
+  // Pull mode: client asks for the next task.
+  rpc FetchTask (FetchTaskRequest) returns (TaskResponse);
+  // Push mode: server streams tasks to a subscribed client.
+  rpc SubscribeTasks (SubscribeRequest) returns (stream TaskResponse);
+  // Both modes: client streams its trained delta back.
+  rpc SubmitDelta (stream DeltaChunk) returns (SubmitAck);
+  rpc Register (RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message RegisterRequest {
+  string client_id = 1;
+  string auth_token = 2;
+}
+
+message RegisterResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message HeartbeatRequest {
+  string client_id = 1;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+}
+
+message FetchTaskRequest {
+  string client_id = 1;
+}
+
+message SubscribeRequest {
+  string client_id = 1;
+}
+
+// A training task dispatched to a client: the round's starting weights.
+message TaskResponse {
+  string task_id = 1;
+  uint64 round = 2;
+  bytes model_weights = 3; // little-endian packed f32
+}
+
+// One chunk of a streamed client update. Large deltas are split across
+// multiple DeltaChunk messages sharing the same (client_id, round);
+// conflux-buffer reassembles them into a ClientDelta.
+message DeltaChunk {
+  string client_id = 1;
+  uint64 round = 2;
+  uint32 chunk_index = 3;
+  uint32 total_chunks = 4;
+  bytes data = 5; // little-endian packed f32, this chunk's slice of the delta
+  // FedAvg's SampleCountWeighting input (McMahan et al., 2017) — repeated
+  // identically on every chunk of one client's stream (cheap, and avoids
+  // depending on chunk 0 arriving first) rather than sent once.
+  uint64 num_samples = 6;
+}
+
+message SubmitAck {
+  bool accepted = 1;
+  string message = 2;
+}
+
+// A fully reassembled client update, ready for aggregation
+// (conflux-core's Aggregator, conflux-reputation's ContributionScorer —
+// see docs/spec/conflux-spec-v1.md §5).
+message ClientDelta {
+  string client_id = 1;
+  uint64 round = 2;
+  bytes weights = 3; // little-endian packed f32
+  // FedAvg's SampleCountWeighting input (McMahan et al., 2017).
+  uint64 num_samples = 4;
+}

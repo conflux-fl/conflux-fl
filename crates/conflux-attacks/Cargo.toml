@@ -1,0 +1,16 @@
+[package]
+name = "conflux-attacks"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+rand = "0.10"
+rand_distr = "0.6"
+
+[dev-dependencies]
+# Dev-only: this crate's own tests run each attack against a real
+# Aggregator (attack_vs_defense.rs) — never a normal dependency (ADR
+# 0010: conflux-server's build must never pull in attack code, even
+# transitively).
+conflux-core = { path = "../conflux-core" }

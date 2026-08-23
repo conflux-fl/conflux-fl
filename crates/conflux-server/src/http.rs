@@ -1,0 +1,147 @@
+//! Minimal HTTP admin surface (spec §10, Phase 5), served on a separate
+//! port from the gRPC `FlTransport` service.
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use conflux_registry::{ClientId, NodeAllowlist, NodeIdentity, Registry, RegistryError};
+use serde::{Deserialize, Serialize};
+
+use crate::AppState;
+
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/round/status", get(round_status))
+        .route("/clients/register", post(register))
+        .route("/admin/allowlist", get(list_allowlist).post(allow_node))
+        .route("/admin/allowlist/{client_id}", delete(revoke_node))
+        .with_state(state)
+}
+
+async fn health() -> &'static str {
+    "ok"
+}
+
+#[derive(Serialize)]
+struct RoundStatusResponse {
+    round: u64,
+}
+
+async fn round_status(State(state): State<Arc<AppState>>) -> Json<RoundStatusResponse> {
+    Json(RoundStatusResponse {
+        round: state.round.load(Ordering::SeqCst),
+    })
+}
+
+#[derive(Deserialize)]
+struct RegisterHttpRequest {
+    client_id: String,
+}
+
+#[derive(Serialize)]
+struct RegisterHttpResponse {
+    accepted: bool,
+}
+
+/// Delegates to the same registry the gRPC `Register` RPC uses — this is
+/// an admin/observability entry point, not a second source of truth.
+async fn register(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterHttpRequest>,
+) -> Json<RegisterHttpResponse> {
+    let result = state.registry.register(ClientId(req.client_id)).await;
+    let accepted = matches!(result, Ok(()) | Err(RegistryError::AlreadyRegistered(_)));
+    Json(RegisterHttpResponse { accepted })
+}
+
+/// Phase 8c admin surface — mirrors `flwr supernode register`/`list`/
+/// `unregister`: the operator's way to populate the allow-list Phase 8b
+/// built and `dispatcher.rs`'s `register()` now enforces (when
+/// `config.require_node_auth` is on).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum NodeIdentityHttp {
+    CertFingerprint { fingerprint: String },
+    SharedToken { token: String },
+}
+
+impl From<NodeIdentityHttp> for NodeIdentity {
+    fn from(value: NodeIdentityHttp) -> Self {
+        match value {
+            NodeIdentityHttp::CertFingerprint { fingerprint } => {
+                NodeIdentity::CertFingerprint(fingerprint)
+            }
+            NodeIdentityHttp::SharedToken { token } => NodeIdentity::SharedToken(token),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AllowNodeRequest {
+    client_id: String,
+    identity: NodeIdentityHttp,
+}
+
+#[derive(Serialize)]
+struct AllowlistOpResponse {
+    ok: bool,
+}
+
+async fn allow_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AllowNodeRequest>,
+) -> (StatusCode, Json<AllowlistOpResponse>) {
+    match state
+        .node_allowlist
+        .allow(ClientId(req.client_id), req.identity.into())
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(AllowlistOpResponse { ok: true })),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AllowlistOpResponse { ok: false }),
+        ),
+    }
+}
+
+async fn revoke_node(
+    State(state): State<Arc<AppState>>,
+    Path(client_id): Path<String>,
+) -> (StatusCode, Json<AllowlistOpResponse>) {
+    match state.node_allowlist.revoke(&ClientId(client_id)).await {
+        Ok(()) => (StatusCode::OK, Json(AllowlistOpResponse { ok: true })),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AllowlistOpResponse { ok: false }),
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct AllowlistListResponse {
+    client_ids: Vec<String>,
+}
+
+async fn list_allowlist(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<AllowlistListResponse>) {
+    match state.node_allowlist.list().await {
+        Ok(ids) => (
+            StatusCode::OK,
+            Json(AllowlistListResponse {
+                client_ids: ids.into_iter().map(|id| id.0).collect(),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AllowlistListResponse {
+                client_ids: Vec::new(),
+            }),
+        ),
+    }
+}

@@ -1,0 +1,10 @@
+[package]
+name = "conflux-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+conflux-config = { path = "../conflux-config" }
+conflux-proto = { path = "../conflux-proto" }
+inventory = "0.3"
+thiserror = "2.0"

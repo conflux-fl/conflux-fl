@@ -1,0 +1,13 @@
+[package]
+name = "conflux-registry"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0"
+redis = { version = "1.6", features = ["aio", "tokio-comp", "connection-manager"] }
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

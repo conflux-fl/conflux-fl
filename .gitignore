@@ -1,0 +1,9 @@
+/target
+**/target
+*.pyc
+__pycache__/
+.venv/
+python/conflux_client/*_pb2.py
+python/conflux_client/*_pb2_grpc.py
+.claude/
+CLAUDE.md

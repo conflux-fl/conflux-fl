@@ -1,0 +1,279 @@
+//! Single-experiment state (ADR 0003 — no multi-tenancy): one `AppState`
+//! per server process, wiring together every library crate from Phases
+//! 1–4. Every family here still ships exactly one member (`FedAvg`,
+//! `GaussianClippingPrivacy`, `UniformRandomSelector`, `CosineScorer`), so
+//! this phase wires them concretely rather than through
+//! `conflux-config`'s `inventory` registry — see
+//! `docs/phases/phase-5-server.md`'s scope note.
+//!
+//! `registry`/`store` are `Arc<AnyRegistry>`/`Arc<AnyStore>` (Phase 8a) —
+//! see `backend_selection.rs` for how a caller picks which backend each
+//! resolves to.
+
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
+
+use conflux_buffer::RoundBuffer;
+use conflux_config::{Mode, ResolvedConfig};
+use conflux_core::Aggregator;
+use conflux_privacy::{PrivacyAccountant, PrivacyMechanism, RdpAccountant};
+use conflux_proto::TaskResponse;
+use conflux_registry::{
+    AnyNodeAllowlist, AnyRegistry, InMemoryNodeAllowlist, InMemoryRegistry, RedisNodeAllowlist,
+    RedisRegistry,
+};
+use conflux_reputation::CosineScorer;
+use conflux_selector::{ClientSelector, SelectionSeed};
+use conflux_store::{AnyStore, InMemoryStore, PostgresStore, PrivacyRoundLog, S3Store, StoreError};
+use tokio::sync::broadcast;
+
+use crate::backend_selection::{
+    AccountingBackend, BackendSelection, BackendSelectionError, RegistryBackend, StoreBackend,
+    validate_production_backends,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum AppStateError {
+    #[error(transparent)]
+    BackendSelection(#[from] BackendSelectionError),
+    #[error(transparent)]
+    Registry(#[from] conflux_registry::RegistryError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    NodeAuth(#[from] conflux_registry::NodeAuthError),
+}
+
+pub struct AppState {
+    pub config: ResolvedConfig,
+    pub registry: Arc<AnyRegistry>,
+    pub store: Arc<AnyStore>,
+    /// Phase 8c: always constructed, even when `config.require_node_auth`
+    /// is `false` — toggling the parameter is then just a config change
+    /// and a restart, not a wiring change, matching how every other
+    /// startup-only config value in this codebase works.
+    pub node_allowlist: Arc<AnyNodeAllowlist>,
+    /// Phase 10b: constructed by name from `config.selector.value` /
+    /// `config.aggregator.value` via each family's own `build_*`
+    /// function (`conflux-config`'s `inventory` registry, ADR 0002) —
+    /// `Box<dyn _>` rather than a concrete type since the constructed
+    /// type is only known at runtime.
+    pub selector: Box<dyn ClientSelector>,
+    pub aggregator: Box<dyn Aggregator>,
+    /// Phase 11b: constructed by name from `config.privacy_mechanism.value`
+    /// via `conflux_privacy::build_privacy_mechanism` — the third of the
+    /// three spec §5 families now registry-wired (Phase 10b did the
+    /// other two).
+    pub privacy: Box<dyn PrivacyMechanism>,
+    pub accountant: Mutex<RdpAccountant>,
+    /// `Some` when the privacy accountant's round history is durable
+    /// across restarts (Phase 7d) — `None` reproduces Phase 5's original
+    /// in-memory-only behavior exactly. Deliberately independent of
+    /// `store`'s own backend choice: a deployment can persist accounting
+    /// via Postgres while checkpointing to S3, say.
+    pub accountant_log: Option<Arc<PostgresStore>>,
+    pub reputation: CosineScorer,
+    /// The round a `fetch_task` call should hand out and a `submit_delta`
+    /// call should accept. `run_round` advances this only after a round's
+    /// checkpoint lands — a delta for a round that isn't current is
+    /// rejected, not silently accepted into the wrong batch.
+    pub round: AtomicU64,
+    pub current_buffer: Mutex<Option<Arc<RoundBuffer>>>,
+    /// Push-mode subscribers (spec §3: `cross_silo`) get every new round's
+    /// task broadcast to them; pull-mode clients just see it on their next
+    /// `fetch_task`.
+    pub push_sender: broadcast::Sender<TaskResponse>,
+}
+
+impl AppState {
+    /// Everything in-memory, no network backends — unchanged from Phase 5,
+    /// still the default every pre-Phase-8 test and call site uses.
+    pub fn new(config: ResolvedConfig, initial_weights: Vec<f32>) -> Self {
+        Self::assemble(
+            config,
+            Arc::new(AnyRegistry::InMemory(InMemoryRegistry::new())),
+            Arc::new(AnyStore::InMemory(InMemoryStore::new(initial_weights))),
+            Arc::new(AnyNodeAllowlist::InMemory(InMemoryNodeAllowlist::new())),
+            RdpAccountant::new(),
+            None,
+        )
+    }
+
+    /// Like [`AppState::new`], but the privacy accountant's round history
+    /// is durable across restarts (Phase 7d): connects `PostgresStore`,
+    /// replays any rounds it already holds into a fresh `RdpAccountant`
+    /// *before* the server answers its first round, and keeps the handle
+    /// so every future `record_round` also appends there. `registry`/
+    /// `store` stay in-memory — use [`AppState::connect`] for full
+    /// per-field backend selection.
+    pub async fn new_with_persistent_accounting(
+        config: ResolvedConfig,
+        initial_weights: Vec<f32>,
+        postgres_url: &str,
+    ) -> Result<Self, StoreError> {
+        // Matches `PostgresStore::connect`'s own default table name.
+        Self::new_with_persistent_accounting_table(
+            config,
+            initial_weights,
+            postgres_url,
+            "conflux_checkpoints",
+        )
+        .await
+    }
+
+    /// Same as [`AppState::new_with_persistent_accounting`], but against a
+    /// caller-chosen table rather than the default — this crate's own
+    /// tests use it for the same reason `PostgresStore::connect_with_table`
+    /// exists: `cargo test`'s parallel execution against one real,
+    /// never-wiped Postgres needs per-test isolation, not a shared table.
+    pub async fn new_with_persistent_accounting_table(
+        config: ResolvedConfig,
+        initial_weights: Vec<f32>,
+        postgres_url: &str,
+        table: impl Into<String>,
+    ) -> Result<Self, StoreError> {
+        let (accountant, accountant_log) = connect_accounting(postgres_url, table).await?;
+
+        Ok(Self::assemble(
+            config,
+            Arc::new(AnyRegistry::InMemory(InMemoryRegistry::new())),
+            Arc::new(AnyStore::InMemory(InMemoryStore::new(initial_weights))),
+            Arc::new(AnyNodeAllowlist::InMemory(InMemoryNodeAllowlist::new())),
+            accountant,
+            accountant_log,
+        ))
+    }
+
+    /// The general constructor (Phase 8a): connects whichever backend
+    /// `backends` selects for the registry, the store, and privacy
+    /// accounting, independently. Fails fast — before connecting
+    /// anything — if `mode = production` and any of the three still
+    /// resolves to its in-memory/disabled default (see
+    /// `backend_selection::validate_production_backends`).
+    pub async fn connect(
+        config: ResolvedConfig,
+        mode: Mode,
+        initial_weights: Vec<f32>,
+        backends: BackendSelection,
+    ) -> Result<Self, AppStateError> {
+        validate_production_backends(mode, &backends)?;
+
+        // The allow-list backend follows the registry backend's choice
+        // rather than being a fully independent fourth axis — a
+        // deliberate simplification (one fewer env var), documented in
+        // `docs/phases/phase-8c-node-auth-enforcement.md`.
+        let node_allowlist = match &backends.registry {
+            RegistryBackend::Memory => AnyNodeAllowlist::InMemory(InMemoryNodeAllowlist::new()),
+            RegistryBackend::Redis { url } => {
+                AnyNodeAllowlist::Redis(RedisNodeAllowlist::connect(url).await?)
+            }
+        };
+
+        let registry = match &backends.registry {
+            RegistryBackend::Memory => AnyRegistry::InMemory(InMemoryRegistry::new()),
+            RegistryBackend::Redis { url } => {
+                AnyRegistry::Redis(RedisRegistry::connect(url).await?)
+            }
+        };
+
+        let store = match &backends.store {
+            StoreBackend::Memory => AnyStore::InMemory(InMemoryStore::new(initial_weights)),
+            StoreBackend::Postgres { url } => {
+                AnyStore::Postgres(PostgresStore::connect(url).await?)
+            }
+            StoreBackend::S3 {
+                endpoint,
+                bucket,
+                access_key,
+                secret_key,
+            } => AnyStore::S3(
+                S3Store::connect(endpoint, bucket.clone(), access_key, secret_key).await?,
+            ),
+        };
+
+        let (accountant, accountant_log) = match &backends.accounting {
+            AccountingBackend::Disabled => (RdpAccountant::new(), None),
+            AccountingBackend::Postgres { url } => {
+                let (accountant, log) = connect_accounting(url, "conflux_checkpoints").await?;
+                (accountant, log)
+            }
+        };
+
+        Ok(Self::assemble(
+            config,
+            Arc::new(registry),
+            Arc::new(store),
+            Arc::new(node_allowlist),
+            accountant,
+            accountant_log,
+        ))
+    }
+
+    fn assemble(
+        config: ResolvedConfig,
+        registry: Arc<AnyRegistry>,
+        store: Arc<AnyStore>,
+        node_allowlist: Arc<AnyNodeAllowlist>,
+        accountant: RdpAccountant,
+        accountant_log: Option<Arc<PostgresStore>>,
+    ) -> Self {
+        let seed = match config.seed_mode.value {
+            conflux_config::SeedMode::Fixed => {
+                SelectionSeed::Fixed(config.seed_value.value.unwrap_or(42))
+            }
+            conflux_config::SeedMode::OsRandom => SelectionSeed::OsRandom,
+        };
+        let (push_sender, _receiver) = broadcast::channel(16);
+
+        // Phase 10b: every existing call site resolves `selector`/
+        // `aggregator` through the builtin fallback ("uniform_random"/
+        // "fedavg", `conflux-config/src/lib.rs`'s `resolve()`), so this
+        // can never actually panic for any test or default deployment —
+        // only an explicit override naming something unregistered would,
+        // the same "startup-invariant, not a runtime Result" treatment
+        // `main.rs` already gives config resolution itself. Keeping
+        // `assemble` infallible preserves `AppState::new`'s exact
+        // signature (Phase 8a's precedent).
+        let selector = conflux_selector::build_selector(&config.selector.value, seed)
+            .expect("unknown selector in resolved config");
+        let aggregator = conflux_core::build_aggregator(
+            &config.aggregator.value,
+            config.robust_byzantine_fraction.value,
+        )
+        .expect("unknown aggregator in resolved config");
+        let privacy = conflux_privacy::build_privacy_mechanism(
+            &config.privacy_mechanism.value,
+            config.clip_norm.value,
+            config.noise_multiplier.value,
+        )
+        .expect("unknown privacy mechanism in resolved config");
+
+        Self {
+            registry,
+            store,
+            node_allowlist,
+            selector,
+            aggregator,
+            privacy,
+            accountant: Mutex::new(accountant),
+            accountant_log,
+            reputation: CosineScorer,
+            round: AtomicU64::new(1),
+            current_buffer: Mutex::new(None),
+            push_sender,
+            config,
+        }
+    }
+}
+
+async fn connect_accounting(
+    postgres_url: &str,
+    table: impl Into<String>,
+) -> Result<(RdpAccountant, Option<Arc<PostgresStore>>), StoreError> {
+    let log = PostgresStore::connect_with_table(postgres_url, table).await?;
+    let mut accountant = RdpAccountant::new();
+    for (noise_multiplier, sample_rate) in log.load_rounds().await? {
+        accountant.record_round(noise_multiplier, sample_rate);
+    }
+    Ok((accountant, Some(Arc::new(log))))
+}

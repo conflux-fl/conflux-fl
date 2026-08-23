@@ -1,0 +1,15 @@
+[package]
+name = "conflux-node"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+conflux-net = { path = "../conflux-net" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = "0.14"
+async-trait = "0.1"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

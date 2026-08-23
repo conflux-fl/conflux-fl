@@ -1,0 +1,36 @@
+[package]
+name = "conflux-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+conflux-config = { path = "../conflux-config" }
+conflux-registry = { path = "../conflux-registry" }
+conflux-store = { path = "../conflux-store" }
+conflux-selector = { path = "../conflux-selector" }
+conflux-net = { path = "../conflux-net" }
+conflux-buffer = { path = "../conflux-buffer" }
+conflux-privacy = { path = "../conflux-privacy" }
+conflux-reputation = { path = "../conflux-reputation" }
+conflux-core = { path = "../conflux-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
+# tls-aws-lc, not tls-ring: matches conflux-net/conflux-store's existing
+# crypto-provider choice (see conflux-net/Cargo.toml's comment) — needed
+# here too now that Phase 8c's tests spin up a real mTLS server directly.
+tonic = { version = "0.14", features = ["tls-aws-lc"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0"
+async-trait = "0.1"
+rand = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+rcgen = "0.14"
+sha2 = "0.10"
