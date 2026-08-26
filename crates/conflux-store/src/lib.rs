@@ -20,6 +20,16 @@ pub use s3_store::S3Store;
 /// Only `PostgresStore` implements this — `InMemoryStore`/`FileStore` have
 /// no restart-durability story to extend, and a no-op impl for them would
 /// give a misleading "yes, persisted" answer for a backend that isn't.
+///
+/// Phase 14 (`AccountingScope::PerClient`): `append_round_for_client`/
+/// `load_client_rounds` are the per-client counterparts, persisting the
+/// same raw `(noise_multiplier, sample_rate)` shape — deliberately *not*
+/// a precomputed cumulative-epsilon number, even though that's smaller
+/// to store. A precomputed epsilon is only valid for whatever `delta` it
+/// was computed with; persisting raw rounds and recomputing on load
+/// (exactly like the experiment-wide history already does) stays correct
+/// under any `delta` a future run resolves, not just the one in effect
+/// when a round was recorded.
 pub trait PrivacyRoundLog: Send + Sync {
     fn append_round(
         &self,
@@ -27,6 +37,21 @@ pub trait PrivacyRoundLog: Send + Sync {
         sample_rate: f32,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
     fn load_rounds(&self) -> impl Future<Output = Result<Vec<(f32, f32)>, StoreError>> + Send;
+
+    fn append_round_for_client(
+        &self,
+        client_id: &str,
+        noise_multiplier: f32,
+        sample_rate: f32,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    /// Every client's full round history at once — mirrors
+    /// `load_rounds`'s "load everything, replay it all" shape; a
+    /// restarted server needs every client's history to rebuild the
+    /// accountant, not one client's at a time.
+    fn load_client_rounds(
+        &self,
+    ) -> impl Future<Output = Result<std::collections::HashMap<String, Vec<(f32, f32)>>, StoreError>>
+    + Send;
 }
 
 use std::future::Future;

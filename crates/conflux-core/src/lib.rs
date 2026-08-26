@@ -4,22 +4,31 @@
 
 mod averaging;
 mod robust;
+mod temporal;
 mod weights;
 
 pub use averaging::{AveragingWeighting, FedAvg, SampleCountWeighting, WeightedAverageAggregator};
 pub use robust::{
-    CoordinateWiseAggregator, CoordinateWiseRobustStatistic, DistanceMatrix, FilteredAggregator,
-    KrumFilter, MedianStatistic, MultiKrumFilter, SelectionResult, TrimmedMeanStatistic,
-    UpdateFilter,
+    BulyanFilter, CoordinateWiseAggregator, CoordinateWiseRobustStatistic, DistanceMatrix,
+    DivideAndConquerFilter, FabaFilter, FilteredAggregator, GeometricMedianStatistic, KrumFilter,
+    MedianOfMeansStatistic, MedianStatistic, MultiKrumFilter, RobustVectorStatistic,
+    SelectionResult, TrimmedMeanStatistic, UpdateFilter, VectorRobustAggregator,
 };
+pub use temporal::{ClientDssDiagnostic, DssAggregator, FoolsGoldAggregator};
 
 use conflux_config::{StrategyEntry, StrategyKind};
 use conflux_proto::ClientDelta;
 
 /// Turns one round's batch of client updates into new global weights.
 /// Spec §5 — every aggregation family member implements this: `FedAvg`
-/// directly, and `Krum`/`Multi-Krum`/`Trimmed Mean`/`Median` (Phase 11a)
-/// via `FilteredAggregator`/`CoordinateWiseAggregator`.
+/// directly; `Krum`/`Multi-Krum`/`FABA`/`Bulyan` (selection-based) via
+/// `FilteredAggregator`; `Trimmed Mean`/`Median` (coordinate-wise) via
+/// `CoordinateWiseAggregator`; `Geometric Median` (whole-vector) via
+/// `VectorRobustAggregator`. Conflux's aim is a faithful, extensible
+/// catalog of published methods for researchers to compare against — see
+/// each type's own doc comment for its citation; adding another method is
+/// a new small trait impl composed with the existing shared accumulators,
+/// not a change to this trait or `Aggregator` itself.
 pub trait Aggregator: Send + Sync {
     fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError>;
 }
@@ -45,12 +54,32 @@ inventory::submit! {
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "median" }
 }
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "faba" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "bulyan" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "geometric_median" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "median_of_means" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "divide_and_conquer" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "foolsgold" }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AggregatorBuildError {
     #[error(
         "unknown aggregator \"{0}\" — not a registered conflux-core strategy \
-         (known: \"fedavg\", \"krum\", \"multi_krum\", \"trimmed_mean\", \"median\")"
+         (known: \"fedavg\", \"krum\", \"multi_krum\", \"trimmed_mean\", \"median\", \
+         \"faba\", \"bulyan\", \"geometric_median\", \"median_of_means\", \
+         \"divide_and_conquer\", \"foolsgold\")"
     )]
     Unknown(String),
 }
@@ -79,6 +108,28 @@ pub fn build_aggregator(
             TrimmedMeanStatistic { byzantine_fraction },
         ))),
         "median" => Ok(Box::new(CoordinateWiseAggregator::new(MedianStatistic))),
+        "faba" => Ok(Box::new(FilteredAggregator::new(
+            FabaFilter { byzantine_fraction },
+            FedAvg::default(),
+        ))),
+        "bulyan" => Ok(Box::new(FilteredAggregator::new(
+            BulyanFilter { byzantine_fraction },
+            CoordinateWiseAggregator::new(TrimmedMeanStatistic { byzantine_fraction }),
+        ))),
+        "geometric_median" => Ok(Box::new(VectorRobustAggregator::new(
+            GeometricMedianStatistic::default(),
+        ))),
+        "median_of_means" => Ok(Box::new(CoordinateWiseAggregator::new(
+            MedianOfMeansStatistic::default(),
+        ))),
+        "divide_and_conquer" => Ok(Box::new(FilteredAggregator::new(
+            DivideAndConquerFilter {
+                byzantine_fraction,
+                ..Default::default()
+            },
+            FedAvg::default(),
+        ))),
+        "foolsgold" => Ok(Box::new(FoolsGoldAggregator::default())),
         other => Err(AggregatorBuildError::Unknown(other.to_string())),
     }
 }
@@ -106,7 +157,19 @@ pub enum AggregatorError {
 mod tests {
     use super::*;
 
-    const NAMES: &[&str] = &["fedavg", "krum", "multi_krum", "trimmed_mean", "median"];
+    const NAMES: &[&str] = &[
+        "fedavg",
+        "krum",
+        "multi_krum",
+        "trimmed_mean",
+        "median",
+        "faba",
+        "bulyan",
+        "geometric_median",
+        "median_of_means",
+        "divide_and_conquer",
+        "foolsgold",
+    ];
 
     #[test]
     fn build_aggregator_succeeds_for_every_shipped_name() {

@@ -63,11 +63,11 @@ model a deployment trains — Conflux has no way to know that on its own
 
 ## Real findings
 
-Running both harnesses live surfaced two genuine issues neither Phase
+Running both harnesses live surfaced three genuine issues neither Phase
 11's unit tests nor Phase 12's application-level tests (which fed
 attacks directly to an `Aggregator`, bypassing everything upstream of
-it) could have caught. Both are documented here in full because this is
-exactly the value real E2E testing is supposed to provide.
+it) could have caught. All three are documented here in full because
+this is exactly the value real E2E testing is supposed to provide.
 
 ### 1. `conflux-reputation`'s cosine filter has its own blind spot, upstream of `robust` aggregation
 
@@ -158,6 +158,61 @@ deferred): any model with hidden layers needs this same substitution.
 A future SDK design should probably make it automatic rather than
 something every client author has to remember.
 
+### 3. A single empty-data client can NaN-poison reputation for every client, no attacker required
+
+Running `e2e_numpy_logreg` with an aggressive Dirichlet split
+(`--dirichlet --dirichlet-alpha 0.1`, 5 clients, 1600 total samples)
+produced a shard with **zero samples**:
+
+```
+wrote shard_1.npz: 0 samples, class balance nan
+```
+
+That client's `train_steps` computed on an empty array, producing `NaN`
+weights (`grad_w = X.T @ (pred - y) / len(y)` divides by zero). It
+submitted them like any other round. `round.rs`'s reference for that
+round — `mean_vector(&decoded)` — then had `NaN` in it, because a mean
+that includes even one `NaN` term is `NaN` in every coordinate it
+touches. Every subsequent cosine-similarity comparison against that
+reference is `NaN` (any arithmetic involving `NaN` propagates it), and
+`NaN >= min_score` is `false` under IEEE 754 regardless of `min_score` —
+so **all five clients**, the four perfectly healthy ones included, were
+rejected:
+
+```
+update rejected by reputation filter client_id=client-0 score=NaN threshold=0.3
+update rejected by reputation filter client_id=client-1 score=NaN threshold=0.3
+update rejected by reputation filter client_id=client-2 score=NaN threshold=0.3
+update rejected by reputation filter client_id=client-3 score=NaN threshold=0.3
+update rejected by reputation filter client_id=client-4 score=NaN threshold=0.3
+```
+
+Held-out accuracy froze at 0.4975 (random-guessing level for binary
+classification) for the entire run — every round rejected everyone, so
+the model never moved past its initial checkpoint. Re-running with a
+less aggressive `alpha = 0.5` avoided the zero-sample shard entirely
+(smallest shard: 41 samples) and converged normally (0.7275 vs. a 0.7375
+centralized baseline).
+
+**This is a distinct bug from finding 1, not a restatement of it** — no
+attacker is required. A single client with degenerate local data (empty
+shard, or any input that produces non-finite gradients) can stall the
+*entire* round for *every* client, indefinitely, as an accident of data
+partitioning. It also means finding 1's proposed fixes don't
+automatically cover this case: a coordinate-wise median reference
+resists a large-but-finite outlier, but `NaN` poisons a median exactly
+as it poisons a mean (any comparison against `NaN` is `false`, so a
+`NaN`-valued client would sort undefined-where in a median too, and a
+single `NaN` coordinate is enough to make that coordinate's reported
+statistic `NaN`). What finding 1's fixes don't address, this finding
+needs on top: **non-finite values (`NaN`/`Inf`) in a submitted update
+should be rejected outright, logged, and excluded before any reference
+computation touches them** — independent of whatever the reference
+computation itself ends up being. Not yet fixed in either the harness
+or Conflux; a natural addition to the reputation fix's scope (see
+`docs/STATUS.md`'s "Next" section and
+`docs/phases/phase-13-reputation-reference-fix.md`).
+
 ## Architecture
 
 ```mermaid
@@ -235,8 +290,10 @@ Both harnesses' `partition_data.py` support two splits:
   data. This is also where `robust` family members and
   `conflux-reputation`'s cosine scorer have something real to react to,
   versus an IID split where every client's update looks similar by
-  construction. Not yet run live in this doc's verification pass — a
-  natural next step (`docs/STATUS.md`'s "Next" section).
+  construction. Both `run_demo.sh` scripts now expose this directly:
+  `./run_demo.sh fedavg 5 15 --dirichlet --dirichlet-alpha 0.5`. Run
+  live on both harnesses — see finding 3 below for what a too-aggressive
+  `alpha` surfaced.
 
 A held-out test set (never partitioned, never seen by any trainer
 client) is written separately by both `partition_data.py` scripts, for
@@ -294,6 +351,17 @@ Measured directly, not assumed:
 - **Option A and B, same attacker, reputation at its default**: both
   collapse to a random-ish accuracy — the real finding above, not a
   harness bug.
+- **Dirichlet non-IID, moderate skew (`alpha = 0.5`), no attack**:
+  Option A 0.7275 vs. 0.7375 centralized (shard sizes 41–657 out of
+  1600, class balance 0.00–1.00 per shard); Option B 0.891 vs. 0.889
+  centralized (shard sizes 159–897, real MNIST). Both converge close to
+  their centralized baselines despite real per-client heterogeneity —
+  FedAvg tolerating moderate non-IID skew as expected.
+- **Dirichlet non-IID, aggressive skew (`alpha = 0.1`), no attack**:
+  Option A produced a **zero-sample shard** and collapsed to 0.4975 —
+  finding 3 above, not a harness bug either. `alpha = 0.5` is the
+  practical floor for these dataset sizes/client counts until finding
+  3's fix lands.
 
 ## Where this lives
 

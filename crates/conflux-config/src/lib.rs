@@ -48,6 +48,16 @@ pub struct Overrides {
     /// category as `clip_norm`/`noise_multiplier`, not a
     /// research-vs-production posture.
     pub robust_byzantine_fraction: Option<f32>,
+    /// Phase 13: whether `conflux-reputation`'s pre-aggregation filter
+    /// runs at all. `Overrides`-only, no topology/mode ownership — like
+    /// `robust_byzantine_fraction`, this is a deployment policy choice
+    /// about whether to layer an extra, uncited filter in front of
+    /// whichever aggregator is configured, not a research-vs-production
+    /// posture. Builtin fallback `false`: every aggregator's default
+    /// behavior should match its cited paper with zero framework-imposed
+    /// interference — see `docs/phases/
+    /// phase-13-reputation-reference-fix.md`.
+    pub reputation_filter_enabled: Option<bool>,
     pub privacy_mechanism: Option<String>,
     pub clip_norm: Option<f32>,
     pub noise_multiplier: Option<f32>,
@@ -81,6 +91,7 @@ pub struct ResolvedConfig {
     pub seed_value: Resolved<Option<u64>>,
     pub aggregator: Resolved<String>,
     pub robust_byzantine_fraction: Resolved<f32>,
+    pub reputation_filter_enabled: Resolved<bool>,
     pub privacy_mechanism: Resolved<String>,
     pub clip_norm: Resolved<f32>,
     pub noise_multiplier: Resolved<f32>,
@@ -93,17 +104,15 @@ pub struct ResolvedConfig {
     pub config_log_format: Resolved<LogFormat>,
 }
 
+/// No variants today — `AccountingScope::PerClient` was the one
+/// resolve-time fail-fast case this enum existed for (ADR 0006), and
+/// Phase 14 closed it. Kept as a type (not removed) so `resolve()`'s
+/// `Result<ResolvedConfig, ConfigError>` signature doesn't need to
+/// change here and at every call site for what would otherwise be a
+/// purely cosmetic reason — the next genuinely-not-implemented-yet
+/// resolved value gets a variant added here, same as this one was.
 #[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    /// ADR 0006: `PerClient` accounting is deferred to Phase 8. Selecting
-    /// it before it exists must fail fast, not silently behave like
-    /// `Global`.
-    #[error(
-        "accounting_scope = \"per_client\" is not implemented yet (deferred to Phase 8, \
-         see docs/adr/0006-global-epsilon-accounting.md); select \"global\" instead"
-    )]
-    PerClientAccountingNotImplemented,
-}
+pub enum ConfigError {}
 
 /// Resolves one parameter against the precedence chain from spec §4.1:
 /// builtin fallback < topology profile < mode profile < file < env < cli.
@@ -343,6 +352,18 @@ pub fn resolve(
         &file_source,
         &env_var!("ROBUST_BYZANTINE_FRACTION"),
     );
+    let reputation_filter_enabled = layer(
+        false,
+        None,
+        None,
+        file_overrides.and_then(|o| o.reputation_filter_enabled),
+        env.reputation_filter_enabled,
+        cli.reputation_filter_enabled,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("REPUTATION_FILTER_ENABLED"),
+    );
     let privacy_mechanism = layer(
         "gaussian_clipping".to_string(),
         None,
@@ -464,9 +485,9 @@ pub fn resolve(
         &env_var!("CONFIG_LOG_FORMAT"),
     );
 
-    if accounting_scope.value == AccountingScope::PerClient {
-        return Err(ConfigError::PerClientAccountingNotImplemented);
-    }
+    // Phase 14: `AccountingScope::PerClient` used to fail fast here
+    // (ADR 0006) — now a real, implemented scope, resolved the same way
+    // as any other value.
 
     Ok(ResolvedConfig {
         connection_mode,
@@ -480,6 +501,7 @@ pub fn resolve(
         seed_value,
         aggregator,
         robust_byzantine_fraction,
+        reputation_filter_enabled,
         privacy_mechanism,
         clip_norm,
         noise_multiplier,
@@ -575,6 +597,12 @@ impl ResolvedConfig {
             "robust_byzantine_fraction",
             LoggedValue::Number(self.robust_byzantine_fraction.value.to_string()),
             &self.robust_byzantine_fraction.source,
+        ));
+        lines.push(log_line(
+            format,
+            "reputation_filter_enabled",
+            LoggedValue::Number(self.reputation_filter_enabled.value.to_string()),
+            &self.reputation_filter_enabled.source,
         ));
         lines.push(log_line(
             format,
@@ -786,6 +814,46 @@ mod tests {
     }
 
     #[test]
+    fn reputation_filter_enabled_defaults_off() {
+        // Phase 13: every aggregator's default behavior should match its
+        // cited paper with zero framework-imposed interference.
+        let resolved = resolve(
+            Topology::CrossSilo,
+            Mode::Research,
+            None,
+            &Overrides::default(),
+            &Overrides::default(),
+        )
+        .unwrap();
+
+        assert!(!resolved.reputation_filter_enabled.value);
+        assert_eq!(
+            resolved.reputation_filter_enabled.source,
+            ConfigSource::BuiltinFallback
+        );
+    }
+
+    #[test]
+    fn reputation_filter_enabled_explicit_override_wins() {
+        let cli_overrides = Overrides {
+            reputation_filter_enabled: Some(true),
+            ..Default::default()
+        };
+
+        let resolved = resolve(
+            Topology::CrossSilo,
+            Mode::Research,
+            None,
+            &Overrides::default(),
+            &cli_overrides,
+        )
+        .unwrap();
+
+        assert!(resolved.reputation_filter_enabled.value);
+        assert_eq!(resolved.reputation_filter_enabled.source, ConfigSource::Cli);
+    }
+
+    #[test]
     fn file_wins_over_topology_and_mode() {
         let file_overrides = Overrides {
             round_timeout_secs: Some(120),
@@ -911,25 +979,27 @@ mod tests {
     }
 
     #[test]
-    fn per_client_accounting_fails_fast() {
+    fn per_client_accounting_resolves_successfully() {
+        // Phase 14: inverted from this test's original assertion — see
+        // this test's own former name (`per_client_accounting_fails_fast`)
+        // in git history. `PerClient` is now a real, implemented scope;
+        // resolving it should succeed like any other `AccountingScope`
+        // value, not fail fast the way ADR 0006 originally required.
         let cli_overrides = Overrides {
             accounting_scope: Some(AccountingScope::PerClient),
             ..Default::default()
         };
 
-        let err = resolve(
+        let resolved = resolve(
             Topology::CrossSilo,
             Mode::Research,
             None,
             &Overrides::default(),
             &cli_overrides,
         )
-        .unwrap_err();
+        .expect("PerClient must resolve successfully now that Phase 14 has implemented it");
 
-        assert!(matches!(
-            err,
-            ConfigError::PerClientAccountingNotImplemented
-        ));
+        assert_eq!(resolved.accounting_scope.value, AccountingScope::PerClient);
     }
 
     #[test]

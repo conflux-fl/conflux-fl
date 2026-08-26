@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-08-22, project renamed Confluo → Conflux (see ADR 0009's "Update" section)
+Last updated: 2026-08-26, Phase 14 (`PerClient` epsilon accounting) shipped — first of the seven ready-to-build Part B items; `docs/CLI_DESIGN.md` (a `cflux`/`cflux-dev` CLI proposal, full comparison against `flwr`) added as a new planning doc
 
 ## Done
 - [x] Git repo initialized
@@ -434,58 +434,531 @@ Last updated: 2026-08-22, project renamed Confluo → Conflux (see ADR 0009's "U
   Postgres-dependent integration tests, once the containers were
   recreated).
 
+- **Dirichlet non-IID E2E runs + reputation-fix phase brief (2026-08-23)**:
+  both `run_demo.sh` scripts gained a `--dirichlet [--dirichlet-alpha N]`
+  flag (previously `--split dirichlet` existed in `partition_data.py` but
+  no harness script exposed it). Run live on both options: at
+  `alpha = 0.5`, both converge close to their centralized baselines
+  despite real per-client heterogeneity (Option A: 0.7275 vs. 0.7375;
+  Option B, real MNIST: 0.891 vs. 0.889). At an aggressive `alpha = 0.1`,
+  Option A produced a **zero-sample client shard**, whose resulting `NaN`
+  gradient poisoned `conflux-reputation`'s shared batch-mean reference —
+  `NaN` propagates through arithmetic and `NaN >= threshold` is always
+  `false`, so **all five clients**, not just the broken one, were
+  rejected every round; accuracy froze at 0.4975 for the whole run. A
+  third real finding (`docs/E2E_TESTING.md`'s "Real findings" #3),
+  distinct from the pipeline-order finding above — no attacker required,
+  and a coordinate-wise-median fix for the outlier finding doesn't fix
+  this one (`NaN` poisons a median exactly as it poisons a mean).
+
+  This fed directly into `docs/phases/phase-13-reputation-reference-fix.md`
+  (draft, not started) — the scoping brief for the reputation fix, which
+  also **corrects** `docs/AGGREGATION_LANDSCAPE.md`'s earlier
+  recommendation: that doc argued for an FLTrust-style independent
+  trusted reference as the strongest fix, but a closer read of the
+  codebase during scoping found this requires the *server* to train its
+  own reference update on real data — directly conflicting with ADR
+  0004's boundary that `conflux-server` never trains anything. The
+  trusted-reference approach is now recorded as a separate, deferred,
+  ADR-0004-revisiting question, not this phase's scope. Phase 13's actual
+  recommended scope: (1) reject non-finite (`NaN`/`Inf`) submissions in
+  `round.rs::decode_flushed_deltas` before any reference computation
+  touches them — fixes finding 3 directly; (2) replace `round.rs:72`'s
+  `mean_vector` with a coordinate-wise median, reusing
+  `conflux-core::MedianStatistic` (a new `conflux-reputation` →
+  `conflux-core` dependency edge, no cycle) rather than reimplementing
+  robust-statistic logic twice — fixes finding 1's specific reproduced
+  attack shape, explicitly *not* claimed as a complete Byzantine-fraction
+  defense. Full design, deliverables, test plan, and open questions in
+  that phase brief.
+
+- **Phase 13 revised — reputation filtering becomes opt-in, not more
+  robust (2026-08-23)**: project-owner guidance corrected the premise
+  the entry above and `docs/AGGREGATION_LANDSCAPE.md` were written
+  under. Conflux's purpose is a faithful, extensible catalog of every
+  published aggregation method — each behaving exactly as its own paper
+  defines it, never modified by the framework — for researchers to use
+  as literal comparison baselines; architecture priority is keeping the
+  family pattern (ADR 0002) simple so more methods stay cheap to add,
+  not minimizing attack surface. Under that lens, `conflux-reputation`'s
+  `CosineScorer` applied unconditionally in front of *every* aggregator
+  was itself the bug — no cited paper (Krum, Trimmed Mean, Median, ...)
+  asks for an extra uncited filter ahead of it. **Phase 13's scope is
+  now simpler**: reputation filtering becomes opt-in (`conflux-config`
+  gains `reputation_filter_enabled: bool`, default `false`) instead of
+  mandatory — every aggregator's default behavior matches its paper with
+  zero interference, which fixes finding 1 outright. The
+  coordinate-wise-median plan from the entry above is dropped (it was
+  solving robustness for a mandatory gate that no longer exists); the
+  non-finite (`NaN`/`Inf`) rejection fix for finding 3 still stands,
+  since that's a plain correctness bug independent of the default.
+  Methods with their own published trust mechanism (FLTrust, Zeno) would
+  be built as self-contained aggregators via the normal family-pattern
+  process, not as `conflux-reputation` extensions, if/when prioritized.
+  Full account in the phase brief's "Revision history" and
+  `docs/AGGREGATION_LANDSCAPE.md`'s second "Update" section.
+
+- **Six new aggregators + a research proposal (2026-08-23)**: catalog
+  grew from 4 to 10 named aggregators. `crates/conflux-core/src/robust.rs`
+  gained **FABA** (Xia, Zhang, Yang, Shao & Yin, 2019 — `UpdateFilter`),
+  **Bulyan** (El Mhamdi, Guerraoui & Rouault, 2018 —
+  `FilteredAggregator<BulyanFilter, TrimmedMean>`, a documented
+  combiner-trim simplification noted in its own doc comment), **Median-of-
+  Means** (Chen, Su & Xu, 2017 — `CoordinateWiseRobustStatistic`, groups
+  by array position, consistent across coordinates for free), and
+  **Divide-and-Conquer** (Shejwalkar & Houmansadr, 2021 — new
+  `top_singular_vector` power-iteration helper, `UpdateFilter`, the
+  paper's own `b = full dim, niters = 1` special case, documented as
+  such). A new **`RobustVectorStatistic`** trait + `VectorRobustAggregator<S>`
+  (a third family shape, whole-vector rather than per-coordinate or
+  selection-based) ships **Geometric Median / RFA** (Pillutla, Kakade &
+  Harchaoui, 2019/2022 — Weiszfeld's algorithm, weighted by `num_samples`
+  per the paper's own FL-specific formulation, unlike this crate's
+  deliberately-unweighted Trimmed Mean/Median). A new
+  `crates/conflux-core/src/temporal.rs` module ships **FoolsGold** (Fung,
+  Yoon & Beznosov, 2018/2020) — the first aggregator needing cross-round
+  state (`Mutex<HashMap<client_id, accumulated_history>>`, since
+  `Aggregator::aggregate` takes `&self`); its Sybil-detection test is
+  hand-computed and matches exactly (two colluding clients submitting
+  identical updates every round collapse to the honest-only average,
+  `[0.667, 0.0]`, not the unweighted all-five average `[2.4, 1.4]`).
+  Every new method: real numeric/poison tests (not just "doesn't crash"),
+  registered in the `inventory::submit!`/`build_aggregator` registry,
+  and a `conflux-server` end-to-end integration test. `cargo fmt --check`/
+  `clippy --workspace --all-targets` clean, 200+ tests stable across two
+  runs (the exact count grew with the new tests — see each crate's own
+  test output for the current total, not restated here to avoid this
+  entry going stale the next time a test is added).
+
+  Also: `docs/research/temporal-consistency-aggregation.md` — a
+  publication-track research proposal identifying a gap **all ten**
+  methods share (every one judges a round's batch in isolation, so none
+  can distinguish a colluding Sybil cluster from a legitimate majority,
+  and none can distinguish "malicious" from "legitimately, consistently
+  non-IID"). Proposes **Deviation Stability Scoring (DSS)**, a
+  cross-round wrapper hypothesis, with a full experimental plan (attacks,
+  metrics, datasets, statistical rigor) — explicitly a proposal, not a
+  validated result or a framework change, consistent with this project's
+  governing principle (faithful catalog, not a defense platform — see
+  the reputation-filtering revision above). FoolsGold was built as part
+  of this — a real, citable method that already partly fills the gap,
+  independent of whether DSS itself ever gets built.
+
+- **Phase 13 shipped — reputation filtering is opt-in (2026-08-23)**:
+  `conflux-config` gained `reputation_filter_enabled: bool` (`Overrides`-
+  only, builtin fallback `false`), wired through `resolve()`/
+  `to_log_lines()` like every other parameter. `round.rs` skips the
+  `mean_vector`/`filter_by_threshold` stage entirely when the flag is
+  off — every aggregator's default behavior now matches its cited paper
+  with zero framework-imposed interference, fixing finding 1 outright
+  (proven directly: `krum` defends against a large-magnitude outlier
+  with the new default, no `--no-reputation` workaround needed).
+  `decode_flushed_deltas` also now excludes any non-finite (`NaN`/`Inf`)
+  submission — logged, not a whole-round failure — regardless of the
+  flag, fixing finding 3. `main.rs` gained
+  `CONFLUX_REPUTATION_FILTER_ENABLED`. Three new integration tests in
+  `crates/conflux-server/tests/reputation_opt_in.rs`, each hand-verified
+  against the actual cosine-similarity mechanism (not just "doesn't
+  crash"). `cargo fmt --check`/`clippy --workspace --all-targets` clean,
+  full suite stable across two runs.
+
+- **FoolsGold corrected against the authors' reference implementation
+  (2026-08-23)**: the previous entry's FoolsGold was implemented from
+  the paper's prose description; the user supplied the actual reference
+  code (<https://github.com/DistributedML/FoolsGold>,
+  `deep-fg/fg/foolsgold.py`/`trainer.py`), which turned up two real
+  discrepancies — the "pardoning" step loops over *every* client pair
+  comparing each pair's own max-similarity (not just each row's argmax,
+  and the earlier version also had the comparison direction backwards),
+  and the combine step divides by client count `n` (matching the
+  reference's own `aggregate_gradients`), not by the sum of trust
+  weights or by `num_samples` like every other aggregator in this crate
+  — a deliberate, documented exception, since this is the one method
+  where matching the original paper's exact experimental setup matters
+  more than this codebase's usual weighting convention. Rewrote
+  `foolsgold_weights` as a direct line-by-line translation of the
+  reference; tests re-verified by hand against the corrected math
+  (worked example: 3 mutually-orthogonal honest histories + 2 identical
+  colluders converge to weights `[1.0, 1.0, 1.0, 0.0, 0.0]` exactly).
+  `cargo fmt --check`/`clippy` clean, tests stable.
+
+- **`PersistentSybilAttack` + experiment infrastructure + real Section 2
+  results (2026-08-23)**: `conflux-attacks` gained `PersistentSybilAttack`
+  — every other attack in the crate crafts its output as a function of
+  *that round's* honest batch, so its raw output drifts round to round
+  even with fixed parameters; this one submits the exact same update
+  every round regardless, the scenario `FoolsGoldAggregator` and any
+  future temporal defense need to be tested against (`docs/research/
+  temporal-consistency-aggregation.md`, Section 2.2). New application
+  test: `foolsgold_defends_against_persistent_sybil_collusion_across_rounds`
+  (beats undefended FedAvg every round over a 5-round simulation).
+
+  Ran as `crates/conflux-attacks/examples/run_experiment.rs` — deliberately
+  **not** a new workspace crate (`conflux-experiments`, this entry's
+  first draft) after re-examining that choice: it's a research/dev tool,
+  not a product component, and `conflux-attacks` already carries
+  `conflux-core` as a dev-dependency for its own `tests/
+  attack_vs_defense.rs` (ADR 0010) — examples can use dev-dependencies
+  too, so this needed no new crate, no new workspace member, and no new
+  ADR to justify a 14th crate the spec's stated 13-crate layout doesn't
+  mention. Prints one JSON line per (aggregator × attack × collusion
+  size × round) invocation to stdout. Three shell scripts in
+  `docs/research/scripts/` (`experiment_2_1_collusion_scaling.sh`,
+  `experiment_2_2_persistent_collusion.sh`, `summarize.py` — JSONL → CSV,
+  no dependencies beyond the standard library) sweep the actual
+  parameter grids from the research proposal's Section 2 and write
+  results to `docs/research/results/`.
+
+  **Both experiments actually run, not just built** — real results in
+  `docs/research/results/*.jsonl`/`*.csv`. Two genuine findings:
+  1. Experiment 2.1 (187 rows): `ScalingAttack` at higher collusion
+     counts (`scale_factor=5`) defeats every aggregator in the catalog,
+     including the `robust`-family ones — consistent with why boosted/
+     scaled attacks are the literature's own backdoor-attack mechanism
+     (Bagdasaryan et al., 2020, cited on `ScalingAttack` itself already).
+  2. Experiment 2.2 (440 rows, 20 rounds × 11 aggregators × 2 attacks —
+     `PersistentSybilAttack` and, since 2026-08-23, `AdaptiveEvasionAttack`
+     too, see below): `foolsgold` performs **worse** than every
+     single-round `robust` method against both (mean distance ~1.2–1.55
+     vs. ~0.18–0.32), because its reference-matched combine step divides
+     by total client count `n`, not the honest survivor count — so even
+     perfect Sybil detection still dilutes the result by the excluded
+     clients' share. A real, faithful property of the original paper's
+     algorithm (not a bug in this implementation, and not "fixed" here,
+     per this project's own faithful-catalog principle), and a concrete,
+     measured reason `docs/research/
+     temporal-consistency-aggregation.md`'s Deviation Stability Scoring
+     hypothesis should renormalize by the trusted survivor weight if it
+     gets built, rather than inheriting this specific property.
+
+- **`AdaptiveEvasionAttack` (2026-08-23)**: `conflux-attacks`' Section
+  2.2 stretch goal, built. The `Attack` trait gained
+  `craft_adaptive(&self, honest_updates, num_attackers, feedback:
+  Option<&RoundFeedback>)`, with a default implementation that just
+  calls `craft` — every existing attack (`Gaussian`/`SignFlipping`/
+  `Alie`/`Scaling`/`PersistentSybil`) needed zero code changes. `
+  RoundFeedback { previous_submission, previous_aggregate }` is built
+  from plain `Vec<f32>`s every `Aggregator` already produces, so it
+  works uniformly across the whole catalog regardless of family shape —
+  not just `UpdateFilter` members with a `SelectionResult` to inspect.
+  `AdaptiveEvasionAttack` itself: a local hill-climbing heuristic (not a
+  reproduction of Fang et al. 2020's optimization search, documented as
+  such) — escalate magnitude ×1.2 when last round's submission mostly
+  survived into the aggregate, retreat ×0.5 when it got pulled back
+  toward honest consensus. Deterministic tests verify exact compounding
+  (10.0 → 12.0 → 14.4 across two successful rounds). Wired into
+  `run_experiment` and `experiment_2_2_persistent_collusion.sh`
+  (now sweeps both `persistent_sybil` and `adaptive_evasion`, 440 rows
+  total) — `foolsgold` shows the same dilution weakness against this
+  harder, reactive attacker too, consistent with the persistent-sybil
+  finding above.
+
+- **Experiment 2.1b — `byzantine_fraction`-matched confirmation
+  (2026-08-23, 176 rows)**: re-ran Experiment 2.1's `ScalingAttack` sweep
+  with `byzantine_fraction` computed dynamically per point
+  (`(num_attackers+1)/total_clients`, capped at 0.49) instead of a fixed
+  guess, isolating whether the attack has any advantage beyond parameter
+  mismatch. It doesn't — every previously-collapsing survivor-count-
+  bounded method (Multi-Krum, FABA, Divide-and-Conquer, Trimmed Mean)
+  stays in the 0.05–0.4 distance range once correctly parameterized,
+  confirming the original 187-row result was a parameter-mismatch
+  artifact, not a fundamental weakness in those methods
+  (`experiment_2_1b_matched_byzantine_fraction.sh`).
+- **Multi-seed statistical rigor (2026-08-23)**: Experiment 2.1 now
+  defaults to 5 seeds (935 rows, was 187) and Experiment 2.2 to 5
+  independent 20-round repeats (2,200 rows, was 440), both overridable
+  via a second script argument. `summarize.py` gained a `ci95()` helper
+  (95% CI via normal approximation, `1.96*stdev/sqrt(n)`, documented as
+  a stdlib-only simplification of the more correct t-distribution CI,
+  adequate at n≥5) plus `n_seeds`/`ci95_distance_from_true_value`/
+  `ci95_asr` summary columns.
+- **`AdaptiveEvasionAttack` v2 (2026-08-23)**: the original heuristic
+  (comparing `pulled_fraction` against a fixed 0.5 threshold) had a real
+  bug, found via honest reporting of its own real-data behavior: it
+  couldn't distinguish "a real defense suppressed me" from "I'm 2 of 10
+  clients, so any weighted average dilutes me" — it retreated even
+  against fully undefended `fedavg`. Fixed by computing the *expected*
+  dilution an undefended weighted average would have produced from last
+  round's honest batch + submission, and only treating suppression
+  beyond that baseline (+ a 0.15 margin) as evidence of a real defense.
+  Re-verified against real data: `fedavg`'s distance under the fixed
+  attack now climbs monotonically and without bound (mean 161.3,
+  last-round 553.0 across 5 repeats — was flat/bounded under v1's bug),
+  while every defended method's numbers stay within noise of the
+  non-adaptive `PersistentSybilAttack` baseline.
+- **Experiment 2.3 — non-IID fairness (2026-08-23, 10,560 rows)**: new
+  `run_fairness_experiment` example + `experiment_2_3_noniid_fairness.sh`
+  (11 aggregators × 6 minority-shift values × 20 seeds, zero attackers).
+  Measurement design: leave-one-out influence
+  (`‖A(batch) − A(batch∖{i})‖`), normalized against `fedavg`'s own
+  leave-one-out influence on the identical batch/seed (raw influence is
+  confounded by a point's own extremity, not just whether it's
+  discriminated against — `fedavg` applies no filtering, so it's the
+  "no discrimination" reference). Result: a clean structural split, not
+  a uniform effect — Krum/Median/Bulyan/Geometric-Median show a strong
+  fairness cost (minority influence collapses to 22–39% of baseline at
+  high divergence); Multi-Krum/FABA/Divide-and-Conquer show weak-to-no
+  cost (flat 1.28–1.44 across the whole range); Trimmed Mean is a
+  genuine, not-fully-explained anomaly (influence *increases* with
+  divergence). Full writeup: `docs/research/
+  temporal-consistency-aggregation.md` §5.4.
+- **Deviation Stability Scoring (DSS) — implemented and validated
+  (2026-08-23)**: `DssAggregator` (`crates/conflux-core/src/temporal.rs`)
+  — a cross-round wrapper around any existing `Aggregator`, per §6.2 of
+  the research proposal. Deliberately **not** in `build_aggregator`'s
+  string-based catalog (a research hypothesis, never a framework
+  default, per this project's faithful-catalog principle) — constructed
+  directly (`DssAggregator::new(base)`) or via `run_experiment`'s
+  `--aggregator dss_<base>` convenience prefix. Folds in Experiment
+  2.2's own dilution finding before any code was written (renormalizes
+  by trusted weight sum, not raw client count). 4 new unit tests, 51
+  total in `conflux-core`. Validated against real data — Experiment 2.4
+  (1,400 rows, `experiment_2_4_dss_validation.sh`), same design as
+  Experiment 2.2 — with one confirming and two limiting findings:
+  1. Wrapping `fedavg` in DSS converts its catastrophic, unbounded
+     `adaptive_evasion` failure (mean 161.3) into a small, bounded one
+     (mean 1.18) — real evidence for the core hypothesis, on the one
+     attack shape (temporally *unstable* colluders) DSS actually targets.
+  2. DSS provides **zero** protection against `persistent_sybil` (stable
+     colluders) — predicted by its own unit tests: a stable attacker's
+     low deviation variance keeps its stability score high, so the
+     stability-AND-collusion gate never fires.
+  3. Wrapping an already-robust base method (Krum, Multi-Krum) in DSS
+     can make results **worse** than the unwrapped base (`dss_krum` vs.
+     `persistent_sybil`: mean 16.99, ~57× worse than plain `krum`'s
+     0.297) — DSS's combine step uses the base method's output only as a
+     deviation reference, never to gate the final weights, so whenever
+     DSS's own gate doesn't fire the combine silently degrades to a
+     plain weighted mean of everyone's raw submission, discarding the
+     base method's own exclusion. Not predicted in advance — found only
+     by measuring. Full writeup, including the practical recommendation
+     (DSS-on-`fedavg` only, for now): `docs/research/
+     temporal-consistency-aggregation.md` §5.5, §6.4.
+
+- **DSS novelty positioning + 4 new stress-test experiments
+  (2026-08-24)**: user asked whether DSS is a novel research
+  contribution and requested a literature comparison plus more
+  experiments justifying the claim — both done. `docs/research/
+  temporal-consistency-aggregation.md` §6.5 positions DSS's actual
+  mechanism against the closest real prior art (FoolsGold — history-
+  based collusion detection, but on raw gradient vectors, not scalar
+  deviation traces; Karimireddy, He & Jaggi 2021's Centered Clipping —
+  the paper establishing cross-round information helps Byzantine
+  robustness, newly added to References; FLTrust/Zeno — the trusted-
+  external-reference family DSS deliberately isn't), concluding DSS is a
+  genuine but narrow contribution: a specific synthesis of existing
+  ideas (temporal-variance stability + trace-similarity collusion,
+  AND-gated) assembled against this project's own Claim 1/Claim 2
+  formalization, not a new algorithmic primitive.
+  4 new real experiments substantiate that comparison (19,871 total
+  rows now, up from 15,271) rather than leaving it as architectural
+  argument:
+  1. **Mechanism ablation** (§5.6, Experiment 2.5, 600 rows,
+     `experiment_2_5_dss_ablation.sh`): stability-only and collusion-only
+     variants built by setting `DssAggregator`'s already-`pub`
+     thresholds to extreme values (`dssstab_`/`dsscoll_` prefixes in
+     `run_experiment.rs`, no code change to `DssAggregator` needed).
+     Finding: in this document's synthetic collusion model (identical
+     Sybil submissions), the AND-gate is numerically identical to
+     stability-only for both tested attacks; collusion-only would
+     additionally have caught `persistent_sybil` (mean 1.08 vs. the
+     shipped variant's 16.99) — quantifies the AND-gate's conservatism
+     cost precisely.
+  2. **Solo (non-Sybil) attacker** (§5.7, Experiment 2.6, 1,000 rows,
+     `experiment_2_6_solo_attacker.sh`): drops to 1 attacker, no
+     colluding partner. DSS still helps (`dss_fedavg` 36.97 vs. plain
+     `fedavg` 80.68) but far less than the 2-attacker case, and
+     `dss_krum` regresses plain `krum` again (3.57 vs. 0.30) — a second,
+     independent confirmation of Finding 3 above.
+  3. **Mechanism analysis** (§5.8, using new `DssAggregator::
+     last_diagnostics()` instrumentation — a pure, read-only diagnostic
+     capture, never consulted by `aggregate()` itself — and a new
+     `run_dss_diagnostics.rs` example): found a real, previously-unknown
+     numerical implementation bug. When DSS wraps a fragile base
+     (`fedavg`) under a solo attacker, the shared reference point
+     itself gets dragged into instability, spuriously saturating
+     *every* client's collusion score near ceiling (measured: 0.999998
+     mean pairwise collusion among 9 honest clients, confirmed across 3
+     seeds) — weights become tiny, floating-point-noise-dominated
+     values that never hit the intended exact-zero fallback threshold,
+     producing chaotic rather than predictable output. Concrete fix
+     identified (epsilon-threshold fallback), not yet applied — tracked
+     in §8.
+  4. **Joint non-IID + attack** (§5.9, new `run_dss_diagnostics.rs
+     --scenario joint`, 5 seeds, saved to `dss_diagnostics_joint.jsonl`):
+     the still-open temporal-fairness scope note from §5.4/§6.4, now
+     built and run. Finding: the joint protection claim (non-IID
+     minority protected, attacker suppressed) holds *asymptotically* in
+     every seed — but with a measured 6–13-round transient window where
+     the legitimately non-IID, non-colluding minority is *also* wrongly
+     zeroed alongside the real attackers, for the same shared-reference-
+     instability reason as finding 3. The single most important
+     qualification this session added to DSS's own hypothesis.
+  Both new example runners (`run_experiment.rs`'s ablation prefixes,
+  `run_dss_diagnostics.rs`) reuse the existing `Aggregator`/`Attack`
+  trait surfaces unchanged — the only new production code is the
+  additive `last_diagnostics()` method and its backing `Mutex` field on
+  `DssAggregator`. 52 tests now passing in `conflux-core` (was 51, +1 for
+  the new diagnostics accessor). Full workspace: 249 tests, `cargo fmt`
+  and `cargo clippy --workspace --all-targets` both clean.
+
+- **`cflux`/`cflux-dev` CLI design (2026-08-26)**: `docs/CLI_DESIGN.md`
+  — a planning document, nothing built. Two binaries (production vs.
+  research/testing), for the same reason `conflux-attacks` is a
+  dev-dependency of nothing `conflux-server` ships (ADR 0010) — a single
+  CLI binary with both `server start` and `experiment run` subcommands
+  would quietly undo that guarantee. Full command tree (`cflux init`/
+  `doctor`/`server`/`node`/`allowlist`/`checkpoint`;
+  `cflux-dev experiment`/`aggregator`/`selector`/`privacy`/`attack`) and
+  a command-by-command comparison against Flower's real, current `flwr`
+  CLI (fetched live from `flower.ai/docs`, not from memory — their CLI
+  turned out considerably larger than expected: app publishing to
+  Flower Hub, federation/invitation management, a hosted chat agent).
+  The comparison's conclusion: most of that extra surface exists to
+  support things Conflux FL deliberately doesn't do (a hosted
+  multi-tenant registry, personal-account login, multi-run-per-server
+  job submission) — each traces back to an already-documented design
+  choice (ADR 0003's no-multi-tenancy, the self-hosted posture), so the
+  size difference mostly *confirms* those choices rather than surfacing
+  real gaps. Two things flagged as genuinely worth adopting regardless:
+  `--format json` on every command, not just some; and an open question
+  (not answered) about whether a lighter-weight simulated-clients mode
+  is worth building alongside the existing real-process e2e demos.
+
+- **Phase 14 — `PerClient` epsilon accounting, shipped (2026-08-26)**:
+  the first of the seven Part B items that had a ready-to-build phase
+  brief. `RdpAccountant` (`conflux-privacy`) gained
+  `record_round_for_client`/`current_epsilon_for_client`/
+  `budget_exhausted_for_client`, sharing the exact same RDP composition
+  math as `Global` scope (factored into one `epsilon_from_rounds`
+  helper) — evaluated against a different history, never a different
+  formula. `PrivacyRoundLog` (`conflux-store`) gained
+  `append_round_for_client`/`load_client_rounds`, persisting raw
+  `(noise_multiplier, sample_rate)` rounds per client in a new
+  `PostgresStore` table — deliberately *not* a precomputed cumulative
+  epsilon number (a real, deliberate deviation from the phase brief's
+  literal schema, explained in the phase brief's own "Outcome" section
+  and ADR 0006's second "Update"): a precomputed value is only valid
+  for whatever `delta` computed it, and goes silently stale the moment a
+  later run resolves a different one. `conflux-server`'s round pipeline
+  moved the budget check from a pre-selection experiment-wide gate
+  (`Global`, unchanged) to a post-decode per-client filter (`PerClient`,
+  new) — `budget_exhausted_action = Halt` aborts the round the moment
+  any one client is over budget, `ContinueWithoutGuarantee` excludes
+  just that client and continues with everyone else. Both `RdpAccountant`
+  and `PrivacyRoundLog` now always record/persist *both* scopes'
+  history regardless of which is configured, so switching
+  `accounting_scope` between restarts never silently loses whichever
+  history wasn't active at the time — not specified by the brief,
+  the more robust choice. `AccountingScope::PerClient` no longer fails
+  fast at `resolve()` (ADR 0006's original fail-fast test inverted, as
+  that ADR's own text predicted it would). Two new real end-to-end
+  tests (a live gRPC server, two real client connections, one
+  pre-exhausted) confirm both `budget_exhausted_action` outcomes;
+  a real-Postgres restart-recovery test confirms per-client history
+  survives a simulated restart. 249 → 260 tests passing workspace-wide
+  (11 new); `cargo fmt` and `cargo clippy --workspace --all-targets`
+  both clean.
+
 ## In progress
 (none)
 
 ## Next
-The reputation/aggregation pipeline-order gap above is the highest-value
-next item — it's a real, currently-open weakness discovered by this
-session's own E2E testing, not a hypothetical.
-`docs/AGGREGATION_LANDSCAPE.md` (2026-08-22) generalizes it against ~18
-real aggregation methods to inform the fix's design before it's scoped: a
-batch-derived reference (even a robust one, like coordinate-wise median)
-still has a Byzantine-fraction breakdown point, while FLTrust/Zeno's
-"independent trusted reference" pattern doesn't — worth designing this
-fix around a reusable trusted-reference primitive rather than just a more
-robust batch statistic. That doc's exact call site:
-`crates/conflux-server/src/round.rs:72`'s `mean_vector(&decoded)`, fed
-into `conflux_reputation::filter_by_threshold` — `ContributionScorer`'s
-own trait signature already takes `reference` as a caller-supplied
-argument, so the fix is scoped to that call site, not a
-`conflux-reputation` interface change. Candidate fixes (not yet designed
-in detail): a trusted server-held reference (Category 3 of that doc); a
-robust reference point (e.g. coordinate-wise median) as a lighter-weight
-interim step; reputation scoring after aggregation instead of before; or
-making reputation filtering off-by-default for deployments relying on
-`robust` aggregation. That same doc also flags two trait-taxonomy gaps
-worth resolving alongside this fix — Geometric Median/RFA needs a
-whole-vector (not per-coordinate) robust-statistic shape, and Centered
-Clipping needs cross-round aggregator state the current `Aggregator`
-trait doesn't support — plus a proto-schema note: FedNova and SCAFFOLD
-(popular, non-robustness-related methods) need new `ClientDelta`/
-`DeltaChunk` fields, not just new trait impls, when they're eventually
-built. Also
-still open: a Dirichlet non-IID run of both E2E harnesses (both
-`partition_data.py` scripts support `--split dirichlet`, not yet
-exercised live); `PerClient` accounting (ADR 0006 — gated on per-client
-round history landing in `conflux-registry`/`ExperimentStore`),
-resource-aware/utility-based selectors, resolved Python SDK,
-`libloading`-based dynamic plugin loading, hierarchical topology. A
-future Bulyan-shaped `robust` member (El Mhamdi, Guerraoui & Rouault,
-2018) now composes as `FilteredAggregator<BulyanFilter, TrimmedMean>`
-with zero new plumbing, per Phase 11a's redesign. Fang et al. (2020)'s
-optimization-based attack against Krum/Trimmed-Mean/Median specifically,
-and a many-round/higher-dimensional attack/defense harness (to actually
-observe ALIE's documented failure modes, which Phase 12's single-round
-test didn't reproduce — this session's E2E work also didn't run ALIE
-specifically, only the four attacks' simpler cousins), are natural
+Every item from `docs/research/temporal-consistency-aggregation.md`'s
+original validation plan (§7.1, now 8 items) is done, including DSS
+itself, its mechanism ablation, its solo-attacker generalization, and the
+temporal-fairness-under-attack experiment. What remains, per the user's
+own combined task list plus the 2026-08-24 novelty-positioning follow-up:
+
+**Research (Part A)**
+1. **Fix §5.8's numerical bug** (route to the unweighted-mean fallback
+   when `weight_sum` is below a small epsilon, e.g. `1e-4 * n`, not only
+   exactly `0.0`) and re-run Experiments 2.6 (§5.7) and the joint
+   diagnostics (§5.9) to see whether it shortens or removes the
+   transient false-positive window both share a root cause with —
+   priority order per the doc's own "Recommended order" (§8): cheap,
+   mechanical, and worth doing before more design work sits on top of a
+   known bug.
+2. **Fix DSS's Finding 3** (combine step should blend the base method's
+   own selection into the final weights, not just measure deviation
+   against its output) and re-run Experiments 2.4/2.6 to confirm — OR
+   scope DSS to `fedavg`-only use until that redesign happens (now
+   confirmed in two independent scenarios, §5.5 and §5.7).
+3. **A harder synthetic collusion model** (correlated but non-identical
+   Sybils) — §5.6's ablation used identical-submission Sybils, which
+   can't test whether the collusion signal adds independent value beyond
+   stability alone; a harder model could.
+4. **CIFAR-10 / FEMNIST / Shakespeare dataset harnesses** — not started.
+   Deliberately last per the original plan (expensive relative to what
+   they'd add), and now more valuable once 1–3 narrow DSS's remaining
+   open questions first.
+
+**Planning/design (Part B) — scoped 2026-08-23, all 10 topics have a
+planning document; implementation started 2026-08-26 (1 of 7 ready-to-build
+phase briefs shipped so far)**:
+- ~~[`docs/phases/phase-14-perclient-accounting.md`](phases/phase-14-perclient-accounting.md)~~
+  — **shipped**, see the "Done" entry above.
+  [`docs/adr/0006-global-epsilon-accounting.md`](adr/0006-global-epsilon-accounting.md)
+  now has a second "Update" section recording it.
+- [`docs/adr/0005-python-sdk-deferred.md`](adr/0005-python-sdk-deferred.md)'s
+  2026-08-23 "Update" section — Python SDK, decomposed into three
+  separable questions (model handoff, code distribution, `ClientApp`
+  interface); recommends resolving the interface question first since
+  it's the only one this codebase can answer alone.
+- [`docs/adr/0011-server-trusted-reference-boundary.md`](adr/0011-server-trusted-reference-boundary.md)
+  (new) — FLTrust/Zeno's server-training requirement vs. ADR 0004;
+  recommends an optional sidecar process rather than a server-binary
+  training dependency.
+- [`docs/phases/phase-15-centered-clipping.md`](phases/phase-15-centered-clipping.md)
+  — buildable now, no proto change needed, `temporal.rs`'s `Mutex`
+  pattern is the precedent.
+- [`docs/adr/0012-stateful-aggregator-and-proto-extension.md`](adr/0012-stateful-aggregator-and-proto-extension.md)
+  (new) — the shared plumbing FedNova/SCAFFOLD/FedOpt all need: keeps
+  `Aggregator::aggregate`'s `&self` signature, adds two `optional`
+  `ClientDelta` fields additively.
+- [`docs/phases/phase-16-jwt-auth-verification.md`](phases/phase-16-jwt-auth-verification.md)
+  — mirrors Phase 9a's `resolve_server_tls` pattern; RS256/ES256 via
+  `jsonwebtoken`, orthogonal to Phase 8c's `SharedToken` allow-list check.
+- [`docs/phases/phase-17-client-side-privacy-transform.md`](phases/phase-17-client-side-privacy-transform.md)
+  — reuses `GaussianClippingPrivacy::transform` unchanged from
+  `conflux-node`, gated by a new `client_side_privacy_transform` toggle.
+- [`docs/phases/phase-18-push-mode-node.md`](phases/phase-18-push-mode-node.md)
+  — closes the gap where `cross_silo`'s own default configuration
+  (`push` + mTLS) can't currently run end-to-end.
+- [`docs/phases/phase-19-simd-aggregation.md`](phases/phase-19-simd-aggregation.md)
+  — the `wide` crate, one shared `accumulate_weighted` helper covering
+  every family member's combine step, with a criterion benchmark to
+  actually measure the claimed speedup rather than assume it.
+- [`docs/phases/phase-20-config-file-parsing.md`](phases/phase-20-config-file-parsing.md)
+  — the experiment-level half only (`resolve()`'s `file` parameter is
+  already fully plumbed and tested, just never fed a real parsed file);
+  profile-file `inherits` semantics explicitly deferred to a future
+  Phase 21.
+
+`docs/AGGREGATION_LANDSCAPE.md` gained a matching "Update (2026-08-23,
+fourth)" section cross-linking the four aggregation-related documents
+above from its own summary table.
+
+`docs/AGGREGATION_LANDSCAPE.md`'s original trait-taxonomy gaps are now
+closed — Geometric Median/RFA (whole-vector shape), a Bulyan-shaped
+member, and DSS (the temporal-defense shape) all shipped this session
+(see the "Done" entries above), leaving Centered Clipping and
+FLTrust/Zeno as Part B's only remaining aggregation-taxonomy gaps (both
+listed above). Also still open, not part of the user's current Part
+A/Part B list: resource-aware/utility-based selectors, `libloading`-
+based dynamic plugin loading, hierarchical topology. Fang et al.
+(2020)'s optimization-based attack against Krum/Trimmed-Mean/Median
+specifically, and a many-round/higher-dimensional attack/defense harness
+(to actually observe ALIE's documented failure modes, which Phase 12's
+single-round test didn't reproduce — this session's work also didn't run
+ALIE specifically, only the other attacks), are natural
 `conflux-attacks` follow-ups — see `docs/phases/
-phase-12-attack-simulation.md`'s "Not in scope" note. Also
-still open:
-- JWT auth verification, client-side privacy transform, push mode in
-  `conflux-node`, SIMD aggregation, and config-file parsing remain
-  unimplemented (see "Known deviations from spec" below) — each is a
-  larger, dedicated-phase-sized feature, not a small fix.
+phase-12-attack-simulation.md`'s "Not in scope" note.
+
+See "Known deviations from spec" below for JWT auth verification,
+client-side privacy transform, push mode in `conflux-node`, SIMD
+aggregation, and config-file parsing — each a larger, dedicated-
+phase-sized feature also listed in Part B above, not a small fix.
 
 ## Known deviations from spec
 - `conflux-proto` uses `tonic` + `tonic-prost`/`tonic-prost-build` rather

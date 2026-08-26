@@ -10,7 +10,12 @@ rand_distr = "0.6"
 
 [dev-dependencies]
 # Dev-only: this crate's own tests run each attack against a real
-# Aggregator (attack_vs_defense.rs) — never a normal dependency (ADR
-# 0010: conflux-server's build must never pull in attack code, even
-# transitively).
+# Aggregator (attack_vs_defense.rs), and examples/run_experiment.rs (the
+# docs/research/ experiment runner) needs it too — never a normal
+# dependency (ADR 0010: conflux-server's build must never pull in attack
+# code, even transitively).
 conflux-core = { path = "../conflux-core" }
+# examples/run_experiment.rs only — JSON output for docs/research/
+# scripts/*.sh to collect into JSONL results files.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -20,6 +20,9 @@ pub struct PostgresStore {
     /// way the same per-test-unique table name Phase 7b's tests already
     /// pass gives both tables the same isolation for free.
     privacy_rounds_table: String,
+    /// Phase 14: same derivation pattern as `privacy_rounds_table`, one
+    /// more table for per-client history.
+    client_privacy_rounds_table: String,
 }
 
 impl PostgresStore {
@@ -59,6 +62,12 @@ impl PostgresStore {
         // ADR 0003 (no multi-tenancy) is why there's no experiment-scoping
         // column — one process, one experiment, one table.
         let privacy_rounds_table = format!("{table}_privacy_rounds");
+        // Phase 14: one row per (client, round) — `client_id` alongside
+        // the same `noise_multiplier`/`sample_rate` shape the
+        // experiment-wide table already uses, per `PrivacyRoundLog`'s own
+        // doc comment on why raw rounds (not a precomputed epsilon) are
+        // what gets persisted.
+        let client_privacy_rounds_table = format!("{table}_client_privacy_rounds");
         let create_tables = format!(
             "CREATE TABLE IF NOT EXISTS {table} (
                 round BIGINT PRIMARY KEY,
@@ -66,6 +75,12 @@ impl PostgresStore {
             );
             CREATE TABLE IF NOT EXISTS {privacy_rounds_table} (
                 round_index BIGSERIAL PRIMARY KEY,
+                noise_multiplier REAL NOT NULL,
+                sample_rate REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS {client_privacy_rounds_table} (
+                round_index BIGSERIAL PRIMARY KEY,
+                client_id TEXT NOT NULL,
                 noise_multiplier REAL NOT NULL,
                 sample_rate REAL NOT NULL
             );"
@@ -79,6 +94,7 @@ impl PostgresStore {
             client,
             table,
             privacy_rounds_table,
+            client_privacy_rounds_table,
         })
     }
 }
@@ -114,6 +130,47 @@ impl PrivacyRoundLog for PostgresStore {
             .into_iter()
             .map(|row| (row.get(0), row.get(1)))
             .collect())
+    }
+
+    async fn append_round_for_client(
+        &self,
+        client_id: &str,
+        noise_multiplier: f32,
+        sample_rate: f32,
+    ) -> Result<(), StoreError> {
+        let query = format!(
+            "INSERT INTO {} (client_id, noise_multiplier, sample_rate) VALUES ($1, $2, $3)",
+            self.client_privacy_rounds_table
+        );
+        self.client
+            .execute(&query, &[&client_id, &noise_multiplier, &sample_rate])
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn load_client_rounds(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<(f32, f32)>>, StoreError> {
+        let query = format!(
+            "SELECT client_id, noise_multiplier, sample_rate FROM {} ORDER BY round_index",
+            self.client_privacy_rounds_table
+        );
+        let rows = self
+            .client
+            .query(&query, &[])
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let mut by_client: std::collections::HashMap<String, Vec<(f32, f32)>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let client_id: String = row.get(0);
+            by_client
+                .entry(client_id)
+                .or_default()
+                .push((row.get(1), row.get(2)));
+        }
+        Ok(by_client)
     }
 }
 
@@ -170,6 +227,7 @@ impl Store for PostgresStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-postgres -e POSTGRES_PASSWORD=conflux
@@ -253,5 +311,74 @@ mod tests {
             store.load_rounds().await.unwrap(),
             vec![(1.0, 0.1), (2.0, 0.2), (3.0, 0.3)]
         );
+    }
+
+    // Phase 14: PerClient accounting persistence.
+
+    #[tokio::test]
+    async fn load_client_rounds_is_empty_before_any_append() {
+        let store = connect("empty_client_rounds").await;
+
+        assert_eq!(store.load_client_rounds().await.unwrap(), HashMap::new());
+    }
+
+    #[tokio::test]
+    async fn appended_client_rounds_replay_in_recording_order_per_client() {
+        let store = connect("client_append_order").await;
+
+        store
+            .append_round_for_client("client-a", 1.0, 0.1)
+            .await
+            .unwrap();
+        store
+            .append_round_for_client("client-b", 2.0, 0.2)
+            .await
+            .unwrap();
+        store
+            .append_round_for_client("client-a", 3.0, 0.3)
+            .await
+            .unwrap();
+
+        let loaded = store.load_client_rounds().await.unwrap();
+        assert_eq!(
+            loaded.get("client-a").unwrap(),
+            &vec![(1.0, 0.1), (3.0, 0.3)]
+        );
+        assert_eq!(loaded.get("client-b").unwrap(), &vec![(2.0, 0.2)]);
+    }
+
+    /// The real "restart recovery" property this whole phase exists
+    /// for: a fresh `PostgresStore` instance against the *same* table
+    /// (simulating a server restart) recovers every client's exact
+    /// history — mirrors `appended_rounds_replay_in_recording_order`'s
+    /// global-scope equivalent, now per-client.
+    #[tokio::test]
+    async fn client_rounds_survive_a_simulated_restart() {
+        let table = unique_table("client_restart_recovery");
+        {
+            let store = PostgresStore::connect_with_table(TEST_POSTGRES_URL, table.clone())
+                .await
+                .unwrap();
+            store
+                .append_round_for_client("client-a", 1.0, 0.1)
+                .await
+                .unwrap();
+            store
+                .append_round_for_client("client-a", 1.0, 0.1)
+                .await
+                .unwrap();
+            store
+                .append_round_for_client("client-b", 1.0, 0.1)
+                .await
+                .unwrap();
+        } // `store` (and its connection) dropped — simulates the process exiting
+
+        let restarted = PostgresStore::connect_with_table(TEST_POSTGRES_URL, table)
+            .await
+            .unwrap();
+        let recovered = restarted.load_client_rounds().await.unwrap();
+
+        assert_eq!(recovered.get("client-a").unwrap().len(), 2);
+        assert_eq!(recovered.get("client-b").unwrap().len(), 1);
     }
 }

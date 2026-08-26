@@ -7,6 +7,7 @@
 # Usage:
 #   ./run_demo.sh [AGGREGATOR] [N_CLIENTS] [ROUNDS]
 #   ./run_demo.sh krum 5 15 --poison --no-reputation
+#   ./run_demo.sh fedavg 5 15 --dirichlet --dirichlet-alpha 0.1   # non-IID
 #
 # First run downloads MNIST (~10MB) to /tmp/conflux_mnist — cached after.
 # Run from this directory with the venv already active (see README.md).
@@ -17,12 +18,20 @@ N_CLIENTS="${2:-5}"
 ROUNDS="${3:-15}"
 POISON=false
 NO_REPUTATION=false
+DIRICHLET=false
+DIRICHLET_ALPHA=0.5
+prev_arg=""
 for arg in "$@"; do
   if [ "$arg" = "--poison" ]; then POISON=true; fi
   if [ "$arg" = "--no-reputation" ]; then NO_REPUTATION=true; fi
+  if [ "$arg" = "--dirichlet" ]; then DIRICHLET=true; fi
+  if [ "$prev_arg" = "--dirichlet-alpha" ]; then DIRICHLET_ALPHA="$arg"; fi
+  prev_arg="$arg"
 done
 MIN_REPUTATION_SCORE=0.3
 if [ "$NO_REPUTATION" = true ]; then MIN_REPUTATION_SCORE=-1.0; fi
+SPLIT_FLAGS=(--split iid)
+if [ "$DIRICHLET" = true ]; then SPLIT_FLAGS=(--split dirichlet --dirichlet-alpha "$DIRICHLET_ALPHA"); fi
 
 LR=0.1
 STEPS=10
@@ -52,8 +61,8 @@ DIM=$(cd "$SCRIPT_DIR" && python3 -c "from model import new_model, param_count; 
 echo "model dimension (flattened MLP parameter count): $DIM"
 
 echo ""
-echo "=== 2. downloading + partitioning MNIST (N=$N_CLIENTS clients) ==="
-python3 "$SCRIPT_DIR/partition_data.py" --n-clients "$N_CLIENTS" --out-dir "$WORK_DIR"
+echo "=== 2. downloading + partitioning MNIST (N=$N_CLIENTS clients, split=${SPLIT_FLAGS[1]}) ==="
+python3 "$SCRIPT_DIR/partition_data.py" --n-clients "$N_CLIENTS" --out-dir "$WORK_DIR" "${SPLIT_FLAGS[@]}"
 
 echo ""
 echo "=== 3. centralized baseline (target accuracy) ==="

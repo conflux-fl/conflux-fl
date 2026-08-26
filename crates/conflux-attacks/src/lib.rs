@@ -12,9 +12,29 @@
 mod attacks;
 mod stats;
 
-pub use attacks::{AlieAttack, GaussianAttack, ScalingAttack, SignFlippingAttack};
+pub use attacks::{
+    AdaptiveEvasionAttack, AlieAttack, GaussianAttack, PersistentSybilAttack, ScalingAttack,
+    SignFlippingAttack,
+};
 
 use conflux_proto::ClientDelta;
+
+/// What a previous round actually did with an adaptive attacker's
+/// submission — the feedback signal `AdaptiveEvasionAttack` (and any
+/// future attack in this shape) reacts to. Deliberately built from
+/// information available to *any* aggregator regardless of family
+/// shape (every `Aggregator` produces a plain `Vec<f32>` result,
+/// unlike, say, a `SelectionResult`, which only selection-based methods
+/// have) — so this works uniformly across the whole catalog, not just
+/// `UpdateFilter` members.
+#[derive(Debug, Clone)]
+pub struct RoundFeedback {
+    /// What the attacker actually submitted last round (its own crafted
+    /// update, for comparison against what came out).
+    pub previous_submission: Vec<f32>,
+    /// The round's actual aggregate result.
+    pub previous_aggregate: Vec<f32>,
+}
 
 /// An "omniscient" attacker: sees the honest batch a round would
 /// otherwise have received, then crafts `num_attackers` malicious
@@ -23,4 +43,21 @@ use conflux_proto::ClientDelta;
 /// attacker can only do worse).
 pub trait Attack {
     fn craft(&self, honest_updates: &[ClientDelta], num_attackers: usize) -> Vec<ClientDelta>;
+
+    /// Like `craft`, but given the chance to react to how the
+    /// *previous* round actually went (`None` on the first round, or
+    /// whenever a caller doesn't track feedback). Only meaningful for
+    /// attacks that adapt round to round; the default implementation
+    /// ignores `feedback` and just calls `craft`, so every existing
+    /// (stateless, single-round) attack needs no changes at all to keep
+    /// working exactly as before — only `AdaptiveEvasionAttack`
+    /// overrides this.
+    fn craft_adaptive(
+        &self,
+        honest_updates: &[ClientDelta],
+        num_attackers: usize,
+        _feedback: Option<&RoundFeedback>,
+    ) -> Vec<ClientDelta> {
+        self.craft(honest_updates, num_attackers)
+    }
 }

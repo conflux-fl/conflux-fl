@@ -14,6 +14,10 @@
 #       see docs/E2E_TESTING.md's "A real finding" section. Without this
 #       flag, the demo shows the pipeline exactly as shipped, including
 #       that interaction.
+#   ./run_demo.sh fedavg 5 15 --dirichlet                    # non-IID split, alpha=0.5
+#   ./run_demo.sh fedavg 5 15 --dirichlet --dirichlet-alpha 0.1
+#       lower alpha = more skewed per-client class distributions (more
+#       realistically non-IID); default IID split otherwise.
 #
 # Run from this directory with the venv already active (see README.md).
 set -euo pipefail
@@ -23,12 +27,20 @@ N_CLIENTS="${2:-5}"
 ROUNDS="${3:-15}"
 POISON=false
 NO_REPUTATION=false
+DIRICHLET=false
+DIRICHLET_ALPHA=0.5
+prev_arg=""
 for arg in "$@"; do
   if [ "$arg" = "--poison" ]; then POISON=true; fi
   if [ "$arg" = "--no-reputation" ]; then NO_REPUTATION=true; fi
+  if [ "$arg" = "--dirichlet" ]; then DIRICHLET=true; fi
+  if [ "$prev_arg" = "--dirichlet-alpha" ]; then DIRICHLET_ALPHA="$arg"; fi
+  prev_arg="$arg"
 done
 MIN_REPUTATION_SCORE=0.3
 if [ "$NO_REPUTATION" = true ]; then MIN_REPUTATION_SCORE=-1.0; fi
+SPLIT_FLAGS=(--split iid)
+if [ "$DIRICHLET" = true ]; then SPLIT_FLAGS=(--split dirichlet --dirichlet-alpha "$DIRICHLET_ALPHA"); fi
 
 FEATURES=10
 DIM=$((FEATURES + 1)) # + bias
@@ -57,9 +69,9 @@ SERVER_BIN="$REPO_ROOT/target/debug/conflux-server"
 NODE_BIN="$REPO_ROOT/target/debug/conflux-node"
 
 echo ""
-echo "=== 2. partitioning data (N=$N_CLIENTS clients, $FEATURES features) ==="
+echo "=== 2. partitioning data (N=$N_CLIENTS clients, $FEATURES features, split=${SPLIT_FLAGS[1]}) ==="
 python3 "$SCRIPT_DIR/partition_data.py" \
-  --n-clients "$N_CLIENTS" --n-features "$FEATURES" --out-dir "$WORK_DIR"
+  --n-clients "$N_CLIENTS" --n-features "$FEATURES" --out-dir "$WORK_DIR" "${SPLIT_FLAGS[@]}"
 
 echo ""
 echo "=== 3. centralized baseline (target accuracy) ==="

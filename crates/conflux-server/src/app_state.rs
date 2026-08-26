@@ -275,5 +275,14 @@ async fn connect_accounting(
     for (noise_multiplier, sample_rate) in log.load_rounds().await? {
         accountant.record_round(noise_multiplier, sample_rate);
     }
+    // Phase 14: always replay per-client history too, regardless of
+    // which `accounting_scope` is currently configured — a deployment
+    // that switches scope between restarts should never silently lose
+    // whichever history it wasn't actively using at the time.
+    for (client_id, rounds) in log.load_client_rounds().await? {
+        for (noise_multiplier, sample_rate) in rounds {
+            accountant.record_round_for_client(&client_id, noise_multiplier, sample_rate);
+        }
+    }
     Ok((accountant, Some(Arc::new(log))))
 }

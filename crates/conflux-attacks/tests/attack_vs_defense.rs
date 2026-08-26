@@ -201,6 +201,58 @@ fn alie_attack_against_defended_aggregators_at_high_attacker_fraction() {
     assert!(!findings.is_empty());
 }
 
+/// The concrete motivation for building `PersistentSybilAttack`
+/// (`docs/research/temporal-consistency-aggregation.md`, Section 2.2):
+/// a single-round-only defense (every `robust`-family member above) has
+/// no way to know these two attackers submitted the *same* update last
+/// round too — but `FoolsGoldAggregator` does. The honest batch is
+/// redrawn each round (fresh noise, real training's actual behavior —
+/// reusing one fixed batch would make every client's history scale
+/// uniformly, and cosine similarity is scale-invariant, so nothing would
+/// ever change round to round and this test would prove nothing).
+/// Against that natural honest variation, the sybils' *exactly*
+/// repeated update stands out as unnaturally consistent — the signal
+/// FoolsGold is built to catch — and its defense should hold up
+/// reliably across every round, not just get lucky once.
+#[test]
+fn foolsgold_defends_against_persistent_sybil_collusion_across_rounds() {
+    use conflux_attacks::PersistentSybilAttack;
+    use conflux_core::{Aggregator, FoolsGoldAggregator, build_aggregator};
+
+    let attack = PersistentSybilAttack {
+        fixed_update: vec![50.0, 50.0, 50.0],
+    };
+    let foolsgold = FoolsGoldAggregator::default();
+    let fedavg = build_aggregator("fedavg", 0.0).unwrap();
+
+    let mut foolsgold_distances = Vec::new();
+    let mut fedavg_distances = Vec::new();
+    for round in 0..5u64 {
+        let honest = honest_batch(8, round + 1); // different noise each round
+        let attackers = attack.craft(&honest, 2);
+        let mut batch = honest;
+        batch.extend(attackers);
+
+        foolsgold_distances.push(distance_from_true_value(
+            &foolsgold.aggregate(&batch).unwrap(),
+        ));
+        fedavg_distances.push(distance_from_true_value(&fedavg.aggregate(&batch).unwrap()));
+    }
+
+    for (round, (&fg, &fa)) in foolsgold_distances
+        .iter()
+        .zip(&fedavg_distances)
+        .enumerate()
+    {
+        assert!(
+            fg < fa,
+            "round {round}: expected FoolsGold ({fg}) to beat undefended FedAvg \
+             ({fa}) against the persistent sybils: foolsgold={foolsgold_distances:?} \
+             fedavg={fedavg_distances:?}"
+        );
+    }
+}
+
 #[test]
 fn decode_weights_round_trips_for_sanity() {
     // Not an attack test — just confirms this test file's own encoding

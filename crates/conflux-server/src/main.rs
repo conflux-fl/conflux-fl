@@ -38,6 +38,15 @@
 //! container) unless it shares this process's network namespace. Defaults
 //! stay loopback-only — the admin API has no auth of its own, so binding
 //! wider is an explicit opt-in, not a new default.
+//!
+//! `CONFLUX_REPUTATION_FILTER_ENABLED` (Phase 13): reputation filtering
+//! is opt-in, defaulting to `false` — `conflux-reputation`'s
+//! `CosineScorer`, applied unconditionally in front of every aggregator,
+//! was itself the bug the "real finding" above documents: no cited paper
+//! (Krum, Trimmed Mean, Median, ...) asks for an extra uncited filter
+//! ahead of it. See `docs/phases/phase-13-reputation-reference-fix.md`.
+//! `CONFLUX_MIN_REPUTATION_SCORE` still controls the threshold used
+//! *when* this is explicitly turned on.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -201,6 +210,7 @@ fn overrides_from_env() -> Overrides {
         privacy_mechanism: std::env::var("CONFLUX_PRIVACY_MECHANISM").ok(),
         robust_byzantine_fraction: var("CONFLUX_ROBUST_BYZANTINE_FRACTION"),
         min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
+        reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),
         quorum: var("CONFLUX_QUORUM"),
         round_timeout_secs: var("CONFLUX_ROUND_TIMEOUT_SECS"),
         clip_norm: var("CONFLUX_CLIP_NORM"),

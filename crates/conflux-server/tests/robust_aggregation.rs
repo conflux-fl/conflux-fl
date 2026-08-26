@@ -1,9 +1,9 @@
-//! Phase 11a: proves each `robust` family member resolves through
-//! `conflux-config`'s strategy registry and completes a real round
-//! end-to-end — the same shape as Phase 10b's
-//! `strategy_registry.rs::explicit_aggregator_and_selector_overrides_resolve_through_the_registry_end_to_end`,
-//! extended to the four new names. See
-//! `docs/phases/phase-11a-robust-aggregation.md`.
+//! Phase 11a (and its later extensions, FABA/Bulyan/Geometric Median):
+//! proves each `robust` family member resolves through `conflux-config`'s
+//! strategy registry and completes a real round end-to-end — the same
+//! shape as Phase 10b's `strategy_registry.rs::
+//! explicit_aggregator_and_selector_overrides_resolve_through_the_registry_end_to_end`.
+//! See `docs/phases/phase-11a-robust-aggregation.md`.
 
 use std::sync::Arc;
 
@@ -105,6 +105,45 @@ async fn trimmed_mean_resolves_through_the_registry_end_to_end() {
 #[tokio::test]
 async fn median_resolves_through_the_registry_end_to_end() {
     assert_eq!(run_single_client_round("median").await, vec![10.0, 20.0]);
+}
+
+#[tokio::test]
+async fn faba_resolves_through_the_registry_end_to_end() {
+    assert_eq!(run_single_client_round("faba").await, vec![10.0, 20.0]);
+}
+
+#[tokio::test]
+async fn bulyan_resolves_through_the_registry_end_to_end() {
+    assert_eq!(run_single_client_round("bulyan").await, vec![10.0, 20.0]);
+}
+
+#[tokio::test]
+async fn geometric_median_resolves_through_the_registry_end_to_end() {
+    assert_eq!(
+        run_single_client_round("geometric_median").await,
+        vec![10.0, 20.0]
+    );
+}
+
+#[tokio::test]
+async fn median_of_means_resolves_through_the_registry_end_to_end() {
+    assert_eq!(
+        run_single_client_round("median_of_means").await,
+        vec![10.0, 20.0]
+    );
+}
+
+#[tokio::test]
+async fn divide_and_conquer_resolves_through_the_registry_end_to_end() {
+    assert_eq!(
+        run_single_client_round("divide_and_conquer").await,
+        vec![10.0, 20.0]
+    );
+}
+
+#[tokio::test]
+async fn foolsgold_resolves_through_the_registry_end_to_end() {
+    assert_eq!(run_single_client_round("foolsgold").await, vec![10.0, 20.0]);
 }
 
 #[test]

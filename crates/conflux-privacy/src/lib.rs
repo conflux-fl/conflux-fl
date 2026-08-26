@@ -146,13 +146,75 @@ pub trait PrivacyAccountant: Send + Sync {
 /// accountant reports a conservative upper bound, never an underestimate.
 /// Exact subsampled RDP needs numerical-integration machinery out of scope
 /// for Phase 2.
+///
+/// Phase 14 (`AccountingScope::PerClient`, ADR 0006): `client_rounds`
+/// tracks each client's own round history *in addition to* the
+/// experiment-wide `rounds` above — both are always recorded,
+/// regardless of which scope is actually configured, so switching
+/// `accounting_scope` between restarts never silently loses history one
+/// scope was already accumulating. The RDP math itself
+/// (`epsilon_from_rounds`) is shared between the two — `PerClient`
+/// changes *which* history it's evaluated against, never the
+/// composition itself (out of scope for this phase, see the phase
+/// brief).
 pub struct RdpAccountant {
     rounds: Vec<(f32, f32)>,
+    client_rounds: std::collections::HashMap<String, Vec<(f32, f32)>>,
 }
 
 impl RdpAccountant {
     pub fn new() -> Self {
-        Self { rounds: Vec::new() }
+        Self {
+            rounds: Vec::new(),
+            client_rounds: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Records one round of exposure for a single client — called once
+    /// per client actually admitted into a round's aggregate, when
+    /// `accounting_scope = PerClient`. Independent of [`record_round`]
+    /// (`PrivacyAccountant`'s experiment-wide counterpart, still called
+    /// unconditionally by `conflux-server` — see this struct's doc
+    /// comment on why both are always recorded).
+    pub fn record_round_for_client(
+        &mut self,
+        client_id: &str,
+        noise_multiplier: f32,
+        sample_rate: f32,
+    ) {
+        self.client_rounds
+            .entry(client_id.to_string())
+            .or_default()
+            .push((noise_multiplier, sample_rate));
+    }
+
+    /// A single client's own cumulative epsilon — `0.0` for a client
+    /// with no recorded rounds yet, the same "nothing spent yet"
+    /// convention [`PrivacyAccountant::current_epsilon`] uses.
+    pub fn current_epsilon_for_client(&self, client_id: &str, delta: f64) -> f64 {
+        match self.client_rounds.get(client_id) {
+            Some(rounds) => epsilon_from_rounds(rounds, delta),
+            None => 0.0,
+        }
+    }
+
+    /// Whether this specific client's own cumulative epsilon has reached
+    /// `target_epsilon` — the per-client counterpart to
+    /// [`PrivacyAccountant::budget_exhausted`].
+    pub fn budget_exhausted_for_client(
+        &self,
+        client_id: &str,
+        target_epsilon: f64,
+        delta: f64,
+    ) -> bool {
+        self.current_epsilon_for_client(client_id, delta) >= target_epsilon
+    }
+
+    /// Every client with at least one recorded round — used by
+    /// `conflux-server`'s tests to confirm per-client isolation, and
+    /// available for any future admin/introspection surface.
+    pub fn client_ids(&self) -> impl Iterator<Item = &String> {
+        self.client_rounds.keys()
     }
 }
 
@@ -171,32 +233,42 @@ const RDP_ORDERS: &[f64] = &[
     64.0, 96.0, 128.0, 192.0, 256.0,
 ];
 
+/// The RDP composition math itself (Mironov, 2017) — shared by
+/// `current_epsilon` (the experiment-wide total) and
+/// `current_epsilon_for_client` (Phase 14). Extracted once so
+/// `PerClient` accounting is guaranteed to use *exactly* the same
+/// composition as `Global`, just evaluated against a different history
+/// — the one thing this phase's brief explicitly keeps out of scope is
+/// touching this math at all.
+fn epsilon_from_rounds(rounds: &[(f32, f32)], delta: f64) -> f64 {
+    if rounds.is_empty() {
+        return 0.0;
+    }
+    RDP_ORDERS
+        .iter()
+        .map(|&alpha| {
+            let rdp_total: f64 = rounds
+                .iter()
+                .map(|&(noise_multiplier, _sample_rate)| {
+                    // Non-subsampled Gaussian mechanism RDP at order α
+                    // (Mironov, 2017): α / (2σ²).
+                    alpha / (2.0 * (noise_multiplier as f64).powi(2))
+                })
+                .sum();
+            // RDP → (ε, δ)-DP conversion (Mironov, 2017):
+            // ε(α) = RDP(α) + ln(1/δ)/(α−1).
+            rdp_total + (1.0 / delta).ln() / (alpha - 1.0)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 impl PrivacyAccountant for RdpAccountant {
     fn record_round(&mut self, noise_multiplier: f32, sample_rate: f32) {
         self.rounds.push((noise_multiplier, sample_rate));
     }
 
     fn current_epsilon(&self, delta: f64) -> f64 {
-        if self.rounds.is_empty() {
-            return 0.0;
-        }
-        RDP_ORDERS
-            .iter()
-            .map(|&alpha| {
-                let rdp_total: f64 = self
-                    .rounds
-                    .iter()
-                    .map(|&(noise_multiplier, _sample_rate)| {
-                        // Non-subsampled Gaussian mechanism RDP at order α
-                        // (Mironov, 2017): α / (2σ²).
-                        alpha / (2.0 * (noise_multiplier as f64).powi(2))
-                    })
-                    .sum();
-                // RDP → (ε, δ)-DP conversion (Mironov, 2017):
-                // ε(α) = RDP(α) + ln(1/δ)/(α−1).
-                rdp_total + (1.0 / delta).ln() / (alpha - 1.0)
-            })
-            .fold(f64::INFINITY, f64::min)
+        epsilon_from_rounds(&self.rounds, delta)
     }
 
     fn budget_exhausted(&self, target_epsilon: f64, delta: f64) -> bool {
@@ -329,5 +401,98 @@ mod tests {
         }
 
         assert!(accountant.budget_exhausted(0.5, 1e-5));
+    }
+
+    // Phase 14: PerClient accounting.
+
+    #[test]
+    fn client_epsilon_is_zero_for_a_client_with_no_recorded_rounds() {
+        let accountant = RdpAccountant::new();
+
+        assert_eq!(accountant.current_epsilon_for_client("client-a", 1e-5), 0.0);
+    }
+
+    #[test]
+    fn two_clients_composing_independently_never_affect_each_others_total() {
+        let mut accountant = RdpAccountant::new();
+
+        for _ in 0..10 {
+            accountant.record_round_for_client("heavy-user", 1.0, 0.1);
+        }
+        accountant.record_round_for_client("light-user", 1.0, 0.1);
+
+        let heavy = accountant.current_epsilon_for_client("heavy-user", 1e-5);
+        let light = accountant.current_epsilon_for_client("light-user", 1e-5);
+
+        assert!(heavy > light);
+        // Confirms isolation, not just "different values" — a bug that
+        // accidentally shared state across clients could still produce
+        // different numbers by coincidence.
+        assert_eq!(
+            light,
+            {
+                let mut solo = RdpAccountant::new();
+                solo.record_round_for_client("light-user", 1.0, 0.1);
+                solo.current_epsilon_for_client("light-user", 1e-5)
+            },
+            "light-user's epsilon must match what it would be in total isolation from heavy-user"
+        );
+    }
+
+    #[test]
+    fn a_clients_own_epsilon_increases_monotonically_across_rounds() {
+        let mut accountant = RdpAccountant::new();
+
+        let mut previous = accountant.current_epsilon_for_client("client-a", 1e-5);
+        for _ in 0..5 {
+            accountant.record_round_for_client("client-a", 1.0, 0.1);
+            let current = accountant.current_epsilon_for_client("client-a", 1e-5);
+            assert!(current > previous);
+            previous = current;
+        }
+    }
+
+    #[test]
+    fn per_client_budget_exhausted_flips_true_independently_per_client() {
+        let mut accountant = RdpAccountant::new();
+
+        for _ in 0..50 {
+            accountant.record_round_for_client("heavy-user", 1.0, 0.1);
+        }
+        // light-user never composes at all — confirms heavy-user's
+        // exhausted budget doesn't leak into a client with no history of
+        // its own, the same isolation property the tests above already
+        // check for `current_epsilon_for_client` directly.
+
+        assert!(accountant.budget_exhausted_for_client("heavy-user", 0.5, 1e-5));
+        assert!(!accountant.budget_exhausted_for_client("light-user", 0.5, 1e-5));
+    }
+
+    #[test]
+    fn global_and_per_client_history_are_recorded_independently() {
+        // Both are always tracked regardless of which scope is
+        // configured (see RdpAccountant's own doc comment) — recording
+        // one must never affect the other.
+        let mut accountant = RdpAccountant::new();
+        accountant.record_round(1.0, 0.1); // global-scope call
+        accountant.record_round_for_client("client-a", 1.0, 0.1); // per-client call
+
+        assert!(accountant.current_epsilon(1e-5) > 0.0);
+        assert!(accountant.current_epsilon_for_client("client-a", 1e-5) > 0.0);
+        // client-b never had a per-client round recorded, even though a
+        // global round was recorded — global and per-client are genuinely
+        // separate histories, not two views of the same data.
+        assert_eq!(accountant.current_epsilon_for_client("client-b", 1e-5), 0.0);
+    }
+
+    #[test]
+    fn client_ids_lists_every_client_with_at_least_one_recorded_round() {
+        let mut accountant = RdpAccountant::new();
+        accountant.record_round_for_client("client-a", 1.0, 0.1);
+        accountant.record_round_for_client("client-b", 1.0, 0.1);
+
+        let mut ids: Vec<&String> = accountant.client_ids().collect();
+        ids.sort();
+        assert_eq!(ids, vec!["client-a", "client-b"]);
     }
 }

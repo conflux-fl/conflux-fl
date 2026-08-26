@@ -811,6 +811,8 @@ dependencies = [
  "conflux-proto",
  "rand",
  "rand_distr",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

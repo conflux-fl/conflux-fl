@@ -209,12 +209,12 @@ and don't fit neatly into the above five:
 | 3 | Multi-Krum | 2 | Shipped |
 | 4 | Trimmed Mean | 2 | Shipped |
 | 5 | Median | 2 | Shipped |
-| 6 | Bulyan | 2 | Composes existing shapes |
-| 7 | FABA | 2 | New `UpdateFilter` member |
-| 8 | Divide-and-Conquer | 2 | New `UpdateFilter` member (spectral, not distance-based) |
-| 9 | Geometric Median / RFA | 2 | New trait shape (whole-vector statistic) |
-| 10 | Centered Clipping | 2 + 4 | New trait shape + cross-round state |
-| 11 | FLTrust | 3 — trusted-reference | New trait shape + a trusted-reference primitive |
+| 6 | Bulyan | 2 | **Shipped** (2026-08-23) — composed existing shapes exactly as predicted |
+| 7 | FABA | 2 | **Shipped** (2026-08-23) |
+| 8 | Divide-and-Conquer | 2 | **Shipped** (2026-08-23) — `UpdateFilter`, new `top_singular_vector` power-iteration helper |
+| 9 | Geometric Median / RFA | 2 | **Shipped** (2026-08-23) — new `RobustVectorStatistic` trait + `VectorRobustAggregator<S>` |
+| 10 | Centered Clipping | 2 + 4 | New trait shape + cross-round state — `temporal.rs`'s `Mutex`-based state (built for FoolsGold, below) is now a concrete precedent for the cross-round part |
+| 11 | FLTrust | 3 — trusted-reference | New trait shape + a trusted-reference primitive — still needs its own ADR-0004-revisiting scoping (Phase 13's "Revision history") |
 | 12 | Zeno / Zeno++ | 3 | Same trusted-reference primitive as above |
 | 13 | FedNova | 4 — needs new plumbing | `conflux-proto` field (local step count) |
 | 14 | FedAdam/Yogi/Adagrad | 4 | Cross-round server optimizer state |
@@ -222,6 +222,8 @@ and don't fit neatly into the above five:
 | 16 | FedProx | 5 — already supported | Nothing (client-side only) |
 | 17 | SignSGD majority vote | wire-format stress test | Different update representation entirely |
 | 18 | FedPer / Ditto / pFedMe | personalization, orthogonal | Partial-aggregation model the pipeline doesn't have yet |
+| 19 | Median-of-Means | 2 (not in the original 18 — added during implementation) | **Shipped** (2026-08-23) — `CoordinateWiseRobustStatistic`, groups by array position |
+| 20 | FoolsGold | **new Category 6 — cross-round/temporal** (not in the original taxonomy; see `docs/research/temporal-consistency-aggregation.md`) | **Shipped** (2026-08-23) — first member of a new `temporal.rs` module, `Mutex`-based per-client history, the first Conflux aggregator with real cross-round state |
 
 ## Where this leaves the reputation fix
 
@@ -234,3 +236,113 @@ just a more robust batch statistic, since that same primitive pays for
 itself again the moment FLTrust or Zeno gets built. Still real design
 work deserving its own phase brief, not a same-session patch — see
 `docs/STATUS.md`'s "Next" section.
+
+## Update (2026-08-23) — the trusted-reference recommendation above is corrected in the phase brief
+
+`docs/phases/phase-13-reputation-reference-fix.md` (the scoping brief
+this section called for) found a real problem with the trusted-reference
+recommendation two paragraphs up: **FLTrust and Zeno both require the
+server to train its own reference update on real data.** Conflux's server
+never trains anything — that's not an incidental gap, it's ADR 0004's
+central boundary (`conflux-server` is opaque to model architecture by
+design, which is *why* the wire format is a flat `f32[]`). Adopting a
+trusted-reference design isn't a reputation-module change under that
+boundary; it's new server-side ML capability that would need its own ADR
+revisiting 0004 first. The phase brief scopes Phase 13 to what's
+achievable without that: reject non-finite submissions outright (a
+distinct bug this doc's Category-2 analysis didn't anticipate — see the
+brief and `docs/E2E_TESTING.md`'s finding 3, found via this session's
+Dirichlet non-IID testing, after this doc was written), and replace the
+raw-mean reference with a coordinate-wise median reusing
+`conflux-core::MedianStatistic` — real, in-scope improvements, explicitly
+not claimed to close the general Byzantine-fraction ceiling Category 3
+describes. That larger question stays open, correctly identified above,
+just not being solved by Phase 13.
+
+## Update (2026-08-23, second) — this whole doc's framing was too defense-oriented
+
+Project-owner guidance corrected the premise this document was written
+under: Conflux's purpose is a **faithful, extensible catalog of every
+published aggregation method**, not a maximally-defended system. Each
+method should behave exactly as its cited paper defines it — Krum should
+be literal Krum — with the framework never modifying a method's own
+behavior, and reputation/trust mechanisms treated as a property of
+whichever specific method defines one (FLTrust, Zeno), not something
+imposed generically in front of every aggregator. Priority is keeping
+the family pattern (ADR 0002) simple so more methods keep being cheap to
+add, not minimizing attack surface.
+
+Under that lens, `docs/phases/phase-13-reputation-reference-fix.md` was
+revised a second time: **the fix is not "make `conflux-reputation`'s
+filter more robust" (the update immediately above), it's "stop making
+that filter mandatory."** `CosineScorer` applied unconditionally in
+front of every aggregator was itself the mistake — no cited paper in
+this document's own tables asks for an extra uncited filter ahead of
+Krum, Trimmed Mean, or Median. The revised Phase 13 makes reputation
+filtering opt-in (off by default), so every method's default behavior
+matches its paper with zero interference, and drops the coordinate-wise
+median plan entirely (solving robustness for a mandatory gate that no
+longer exists). The non-finite (`NaN`/`Inf`) rejection fix from the
+first update still stands — that's a plain correctness bug independent
+of whether reputation filtering is on by default.
+
+This document's Category 2/3 taxonomy (which future methods this bug
+class would affect, which are structurally immune) remains accurate and
+useful groundwork for *if and when* FLTrust/Zeno get prioritized — each
+would be built as its own self-contained aggregator implementing its
+own cited trust mechanism faithfully, not as a `conflux-reputation`
+extension. What no longer holds is this document's implicit framing that
+Conflux's job is to defend every configured aggregator against every
+listed attack by default — it isn't. See `docs/phases/
+phase-13-reputation-reference-fix.md`'s "Revision history" for the full
+account.
+
+## Update (2026-08-23, third) — a new Category 6, and six methods shipped
+
+Six of this table's remaining entries (Bulyan, FABA, Divide-and-Conquer,
+Geometric Median, plus Median-of-Means and FoolsGold, not in the
+original 18) are now built — see the summary table above and
+`docs/STATUS.md`'s "Done" entry for that date. FoolsGold surfaces a gap
+this document's original taxonomy didn't have a category for: **every
+one of the ten pre-existing methods, across Categories 1–5, judges a
+round's batch in isolation** — none have memory of prior rounds. That's
+a real, distinct axis from "which geometric signal does the filtering,"
+worth calling **Category 6 — cross-round/temporal**. FoolsGold is its
+first member; `docs/research/temporal-consistency-aggregation.md` is a
+full research proposal exploring whether that axis, generalized, closes
+this document's Category 1/2 attack-adaptivity gap and the non-IID
+fairness problem simultaneously — read that document for the deeper
+analysis; it supersedes this doc as the place gap-analysis work
+continues from here. A second Category-6 member, Deviation Stability
+Scoring (DSS), is now also built and validated — see that document's
+§5.5/§6.4 for its own real, measured tradeoffs.
+
+## Update (2026-08-23, fourth) — this table's remaining gaps are now scoped, not just identified
+
+Every remaining "Not built" row in the summary table above now has a
+concrete planning document, closing the loop this doc opened:
+
+- **Centered Clipping** (row 10) — `docs/phases/
+  phase-15-centered-clipping.md`. Buildable now, independent of the
+  proto-extension ADR below — needs cross-round state only,
+  `temporal.rs`'s `Mutex`-based pattern (proven twice over, by FoolsGold
+  and DSS) is the direct precedent.
+- **FLTrust / Zeno** (rows 11–12) — the "still needs its own
+  ADR-0004-revisiting scoping" this table already flagged is now written:
+  `docs/adr/0011-server-trusted-reference-boundary.md`. Recommends an
+  optional sidecar process (keeping `conflux-server` itself training-free,
+  preserving ADR 0004's actual boundary) over embedding a training
+  capability in the server binary directly.
+- **FedNova / FedOpt-family / SCAFFOLD** (rows 13–15) — the shared
+  plumbing question ("what this means architecturally" point 4, above)
+  is now resolved as a proposed decision:
+  `docs/adr/0012-stateful-aggregator-and-proto-extension.md`. Keeps
+  `Aggregator::aggregate`'s `&self` signature (the `temporal.rs` pattern
+  generalizes rather than requiring `&mut self`), adds two `optional`
+  `ClientDelta` fields (`local_steps`, `control_variate`) additively —
+  every existing producer of `ClientDelta` is unaffected.
+
+None of these four are implemented yet — each remains a proposal
+awaiting project-owner review, per those documents' own "Status" lines —
+but the analysis-to-scoping gap this table's rows described is now
+closed for every entry that had one.

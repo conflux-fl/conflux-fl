@@ -11,7 +11,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use conflux_buffer::RoundBuffer;
-use conflux_config::{BudgetExhaustedAction, Mode, Overrides, Topology};
+use conflux_config::{AccountingScope, BudgetExhaustedAction, Mode, Overrides, Topology};
 use conflux_net::{FlTransportService, PullTransport, RoundDispatcher};
 use conflux_privacy::PrivacyAccountant;
 use conflux_proto::fl_transport_server::FlTransportServer;
@@ -192,6 +192,158 @@ async fn budget_exhausted_halts_without_touching_store_or_registry() {
 
     // Round never advanced and the checkpoint is untouched — proof
     // `run_round` bailed out before doing any real work.
+    assert_eq!(state.round.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.store.load_latest_weights().await.unwrap(),
+        initial_weights
+    );
+}
+
+// Phase 14: PerClient accounting.
+
+#[tokio::test]
+async fn per_client_budget_excludes_only_the_exhausted_client_when_continuing() {
+    let overrides = Overrides {
+        accounting_scope: Some(AccountingScope::PerClient),
+        budget_exhausted_action: Some(BudgetExhaustedAction::ContinueWithoutGuarantee),
+        target_epsilon: Some(0.5),
+        ..Default::default()
+    };
+    let config = deterministic_config(&overrides);
+    let state = Arc::new(AppState::new(config, vec![0.0, 0.0]));
+
+    state
+        .registry
+        .register(ClientId("healthy-client".to_string()))
+        .await
+        .unwrap();
+    state
+        .registry
+        .register(ClientId("exhausted-client".to_string()))
+        .await
+        .unwrap();
+
+    // Pre-exhaust exactly one client's own budget — the other client
+    // has no recorded rounds at all, so it isn't exhausted.
+    {
+        let mut accountant = state.accountant.lock().unwrap();
+        for _ in 0..50 {
+            accountant.record_round_for_client("exhausted-client", 1.0, 0.1);
+        }
+    }
+
+    let addr = spawn_grpc(Arc::clone(&state)).await;
+    let round_state = Arc::clone(&state);
+    let round_handle = tokio::spawn(async move { run_round(&round_state).await });
+    wait_until_buffer_open(&state).await;
+
+    let mut healthy = PullTransport::connect(addr.clone()).await.unwrap();
+    healthy.register("healthy-client", "token").await.unwrap();
+    healthy.fetch_task("healthy-client").await.unwrap();
+    healthy
+        .submit_delta(vec![DeltaChunk {
+            client_id: "healthy-client".to_string(),
+            round: 1,
+            chunk_index: 0,
+            total_chunks: 1,
+            data: encode_weights(&[10.0, 20.0]),
+            num_samples: 5,
+        }])
+        .await
+        .unwrap();
+
+    let mut exhausted = PullTransport::connect(addr).await.unwrap();
+    exhausted
+        .register("exhausted-client", "token")
+        .await
+        .unwrap();
+    exhausted.fetch_task("exhausted-client").await.unwrap();
+    exhausted
+        .submit_delta(vec![DeltaChunk {
+            client_id: "exhausted-client".to_string(),
+            round: 1,
+            chunk_index: 0,
+            total_chunks: 1,
+            data: encode_weights(&[1000.0, 2000.0]), // would be obvious if it leaked through
+            num_samples: 5,
+        }])
+        .await
+        .unwrap();
+
+    let summary = round_handle.await.unwrap().unwrap();
+    assert_eq!(summary.num_submitted, 2, "both clients submitted");
+    assert_eq!(
+        summary.num_passed, 1,
+        "only the non-exhausted client's update was admitted"
+    );
+
+    // FedAvg of exactly one update (healthy-client's) is that update
+    // unchanged — confirms exhausted-client's update never reached
+    // aggregation, not just that the count matched.
+    let checkpoint = state.store.load_latest_weights().await.unwrap();
+    assert_eq!(checkpoint, vec![10.0, 20.0]);
+
+    // The round itself still completed normally — ContinueWithoutGuarantee
+    // excludes the one client, it doesn't fail the round.
+    assert_eq!(state.round.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn per_client_budget_halts_the_round_when_any_client_is_exhausted() {
+    let overrides = Overrides {
+        accounting_scope: Some(AccountingScope::PerClient),
+        budget_exhausted_action: Some(BudgetExhaustedAction::Halt),
+        target_epsilon: Some(0.5),
+        ..Default::default()
+    };
+    let config = deterministic_config(&overrides);
+    let initial_weights = vec![7.0, 8.0];
+    let state = Arc::new(AppState::new(config, initial_weights.clone()));
+
+    state
+        .registry
+        .register(ClientId("exhausted-client".to_string()))
+        .await
+        .unwrap();
+
+    {
+        let mut accountant = state.accountant.lock().unwrap();
+        for _ in 0..50 {
+            accountant.record_round_for_client("exhausted-client", 1.0, 0.1);
+        }
+    }
+
+    let addr = spawn_grpc(Arc::clone(&state)).await;
+    let round_state = Arc::clone(&state);
+    let round_handle = tokio::spawn(async move { run_round(&round_state).await });
+    wait_until_buffer_open(&state).await;
+
+    let mut transport = PullTransport::connect(addr).await.unwrap();
+    transport
+        .register("exhausted-client", "token")
+        .await
+        .unwrap();
+    transport.fetch_task("exhausted-client").await.unwrap();
+    transport
+        .submit_delta(vec![DeltaChunk {
+            client_id: "exhausted-client".to_string(),
+            round: 1,
+            chunk_index: 0,
+            total_chunks: 1,
+            data: encode_weights(&[10.0, 20.0]),
+            num_samples: 5,
+        }])
+        .await
+        .unwrap();
+
+    let err = round_handle.await.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        ServerError::BudgetExhaustedForClient { client_id } if client_id == "exhausted-client"
+    ));
+
+    // Halt aborts before checkpointing — same "nothing touched" guarantee
+    // Global's own Halt case already gives.
     assert_eq!(state.round.load(Ordering::SeqCst), 1);
     assert_eq!(
         state.store.load_latest_weights().await.unwrap(),
