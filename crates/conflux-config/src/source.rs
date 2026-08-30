@@ -1,8 +1,10 @@
-//! `ConfigSource` — spec §4.2's provenance enum — and the log-line
-//! formatting that makes resolution explainable "out loud" (ADR 0007).
+//! `ConfigSource` — which of the six precedence tiers produced a
+//! resolved value — and the log-line formatting that turns a
+//! `ResolvedConfig` into the lines `conflux-server` prints at startup,
+//! making resolution explainable "out loud" instead of just internally
+//! consistent.
 
-/// Where one resolved parameter's value came from. The exact enum from
-/// spec §4.2.
+/// Where one resolved parameter's value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigSource {
     Cli,
@@ -26,8 +28,9 @@ impl ConfigSource {
     }
 
     /// The extra JSON key/value naming *which* env var, file, or profile —
-    /// e.g. `("profile", "cross_device")` — mirrored in spec §4.2's
-    /// example: `"source":"topology_profile","profile":"cross_device"`.
+    /// e.g. `("profile", "cross_device")`, rendered as
+    /// `"source":"topology_profile","profile":"cross_device"` in the JSON
+    /// log line.
     fn json_qualifier(&self) -> Option<(&'static str, &str)> {
         match self {
             ConfigSource::Cli | ConfigSource::BuiltinFallback => None,
@@ -38,9 +41,8 @@ impl ConfigSource {
         }
     }
 
-    /// The phrase shown in the text format's parenthetical, e.g.
-    /// `topology profile "cross_device"` or `built-in fallback` — spec
-    /// §4.2's `(source: ...)` examples.
+    /// The phrase shown in the text format's `(source: ...)` parenthetical,
+    /// e.g. `topology profile "cross_device"` or `built-in fallback`.
     fn text_phrase(&self) -> String {
         match self {
             ConfigSource::Cli => "cli".to_string(),

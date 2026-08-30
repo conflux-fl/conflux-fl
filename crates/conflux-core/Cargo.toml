@@ -8,3 +8,16 @@ conflux-config = { path = "../conflux-config" }
 conflux-proto = { path = "../conflux-proto" }
 inventory = "0.3"
 thiserror = "2.0"
+
+[dev-dependencies]
+criterion = "0.8"
+# Phase 19: `benches/accumulate.rs` keeps explicit-SIMD variants of the
+# combine loop purely as the standing evidence for why the shipped code
+# is scalar. Nothing in `src/` uses this.
+wide = "1.7"
+
+# The evidence for Phase 19's premise. A SIMD change nobody measured is
+# an unverified claim, and this project measures.
+[[bench]]
+name = "accumulate"
+harness = false

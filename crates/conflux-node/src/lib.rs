@@ -7,7 +7,7 @@
 mod bridge;
 mod startup_guard;
 
-pub use bridge::NodeBridge;
+pub use bridge::{ConnectionMode, NodeBridge};
 pub use startup_guard::{
     ClientAppKind, RuntimeMode, StartupGuardError, validate_client_app_startup,
 };

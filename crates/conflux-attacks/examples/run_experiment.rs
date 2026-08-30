@@ -24,10 +24,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use conflux_attacks::{
-    AdaptiveEvasionAttack, AlieAttack, Attack, GaussianAttack, PersistentSybilAttack,
-    RoundFeedback, ScalingAttack, SignFlippingAttack,
+    AdaptiveEvasionAttack, AlieAttack, Attack, CorrelatedSybilAttack, GaussianAttack,
+    PersistentSybilAttack, RoundFeedback, ScalingAttack, SignFlippingAttack,
 };
-use conflux_core::{Aggregator, DssAggregator, build_aggregator};
+use conflux_core::{Aggregator, AggregatorParams, DssAggregator, build_aggregator};
 use conflux_proto::{ClientDelta, decode_weights, encode_weights};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -43,6 +43,9 @@ struct RoundResult {
     num_attackers: usize,
     dim: usize,
     byzantine_fraction: f32,
+    /// Only meaningful for `centered_clipping`; recorded on every row
+    /// regardless so a mixed sweep's JSONL stays one uniform schema.
+    clip_radius: f32,
     seed: u64,
     distance_from_true_value: f32,
     /// `null` when there were no attackers this round (nothing to
@@ -58,6 +61,7 @@ struct Args {
     dim: usize,
     seed: u64,
     byzantine_fraction: f32,
+    clip_radius: f32,
     rounds: u64,
     /// Every attack's own magnitude/direction knobs are fixed, documented
     /// defaults (matching `conflux-attacks`' own test conventions) rather
@@ -100,6 +104,7 @@ fn parse_args() -> Args {
         dim: get(&map, "dim", 3),
         seed: get(&map, "seed", 1),
         byzantine_fraction: get(&map, "byzantine-fraction", 0.2),
+        clip_radius: get(&map, "clip-radius", 1.0),
         rounds: get(&map, "rounds", 1),
         attack_magnitude: get(&map, "attack-magnitude", 50.0),
     }
@@ -145,9 +150,25 @@ fn build_attack(attack: &str, dim: usize, seed: u64, magnitude: f32) -> Box<dyn 
             fixed_update: vec![magnitude; dim],
         }),
         "adaptive_evasion" => Box::new(AdaptiveEvasionAttack::new(vec![1.0; dim], magnitude)),
+        // Non-identical colluders. `divergence` is deliberately a
+        // fraction of the attack magnitude rather than an absolute
+        // number, so "how identical are the colluders" stays meaningful
+        // when the attack's own scale changes.
+        "correlated_sybil" => Box::new(CorrelatedSybilAttack {
+            shared_update: vec![magnitude; dim],
+            divergence: magnitude * 0.2,
+            resample_each_round: false,
+            seed,
+        }),
+        "correlated_sybil_unstable" => Box::new(CorrelatedSybilAttack {
+            shared_update: vec![magnitude; dim],
+            divergence: magnitude * 0.2,
+            resample_each_round: true,
+            seed,
+        }),
         other => panic!(
             "unknown attack \"{other}\" (known: none, gaussian, sign_flipping, scaling, alie, \
-             persistent_sybil, adaptive_evasion)"
+             persistent_sybil, adaptive_evasion, correlated_sybil, correlated_sybil_unstable)"
         ),
     }
 }
@@ -157,6 +178,11 @@ fn build_attack(attack: &str, dim: usize, seed: u64, magnitude: f32) -> Box<dyn 
 /// never a framework default) — so a `--aggregator dss_<base>` name (e.g.
 /// `dss_fedavg`, `dss_krum`) is handled here instead, wrapping whatever
 /// `build_aggregator` constructs for `<base>` in a `DssAggregator`.
+///
+/// A `dssraw_<base>` name builds DSS with its **original** combine step
+/// (`combine_through_base = false`) — the one Finding 3 identified as
+/// discarding the base method's own selection. It exists so the fix and
+/// the defect can appear as two rows of one experiment.
 ///
 /// Two more prefixes build **ablated** variants of the same wrapper, for
 /// Experiment 2.5 (`docs/research/temporal-consistency-aggregation.md`
@@ -172,10 +198,31 @@ fn build_attack(attack: &str, dim: usize, seed: u64, magnitude: f32) -> Box<dyn 
 ///
 /// Anything without a `dss`-prefixed name is passed straight through to
 /// `build_aggregator`.
-fn build_experiment_aggregator(name: &str, byzantine_fraction: f32) -> Box<dyn Aggregator> {
+fn build_experiment_aggregator(
+    name: &str,
+    byzantine_fraction: f32,
+    clip_radius: f32,
+) -> Box<dyn Aggregator> {
     let build_base = |base_name: &str| {
-        build_aggregator(base_name, byzantine_fraction).unwrap_or_else(|e| panic!("{e}"))
+        build_aggregator(
+            base_name,
+            AggregatorParams {
+                byzantine_fraction,
+                clip_radius,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
     };
+    // `dssraw_<base>` is the pre-Finding-3 combine: DSS uses the base
+    // only as a deviation reference and then combines the raw batch
+    // itself. Kept selectable so the fix can be measured against what it
+    // replaced inside one sweep, rather than by diffing two runs of two
+    // different binaries.
+    if let Some(base_name) = name.strip_prefix("dssraw_") {
+        let mut dss = DssAggregator::new(build_base(base_name));
+        dss.combine_through_base = false;
+        return Box::new(dss);
+    }
     if let Some(base_name) = name.strip_prefix("dssstab_") {
         let mut dss = DssAggregator::new(build_base(base_name));
         dss.collusion_threshold = -2.0;
@@ -227,7 +274,8 @@ fn main() {
     let args = parse_args();
     let true_value = vec![1.0f32; args.dim];
 
-    let aggregator = build_experiment_aggregator(&args.aggregator, args.byzantine_fraction);
+    let aggregator =
+        build_experiment_aggregator(&args.aggregator, args.byzantine_fraction, args.clip_radius);
     let attack = build_attack(&args.attack, args.dim, args.seed, args.attack_magnitude);
     let last_feedback: Mutex<Option<RoundFeedback>> = Mutex::new(None);
 
@@ -273,6 +321,7 @@ fn main() {
             num_attackers: args.num_attackers,
             dim: args.dim,
             byzantine_fraction: args.byzantine_fraction,
+            clip_radius: args.clip_radius,
             seed: args.seed,
             distance_from_true_value,
             asr,

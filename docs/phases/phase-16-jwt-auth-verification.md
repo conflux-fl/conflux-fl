@@ -1,6 +1,6 @@
-# Phase 16 (draft) — JWT auth verification
+# Phase 16 — JWT auth verification
 
-**Status: scoping draft, not started.**
+**Status: shipped 2026-08-30.**
 
 ## Scope
 
@@ -109,9 +109,76 @@ independent-toggle precedent in this codebase).
 
 ## Definition of done
 
-- [ ] `cargo test -p conflux-net -p conflux-server` passes, including the
+- [x] `cargo test -p conflux-net -p conflux-server` passes, including the
       real signed/tampered-token end-to-end test.
-- [ ] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+- [x] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
       stay clean.
-- [ ] `docs/STATUS.md`'s "Known deviations from spec" JWT bullet removed;
+- [x] `docs/STATUS.md`'s "Known deviations from spec" JWT bullet removed;
       `docs/FLOWER_COMPARISON.md` updated if it references this gap.
+
+## Outcome
+
+Shipped to this brief's shape. Four things it didn't specify, each of
+which the implementation had to decide:
+
+1. **The algorithm is pinned to the key, never read from the token.**
+   A JWT carries its own `alg` header, and a verifier that trusts it can
+   be handed a token claiming whatever algorithm suits the attacker —
+   the classic algorithm-confusion attack. `JwtKeyMaterial` decides the
+   algorithm once, when the key is loaded (RSA → RS256, ECDSA → ES256),
+   and a token whose header disagrees is rejected before its signature
+   is considered. This is also why the algorithm is *inferred* rather
+   than configured: an RSA public key cannot verify an ES256 signature,
+   so a separate setting could only be redundant or wrong.
+
+2. **A new `DispatchError::Unauthenticated`, mapping to gRPC
+   `Unauthenticated` (16).** The brief asked for the JWT rejection to
+   stay "distinguishable, not conflated with the allow-list rejection
+   path" — the existing `NotAllowed` maps to `PermissionDenied` (7),
+   and gRPC already draws exactly the distinction needed: 16 means the
+   credential was bad, 7 means the credential was fine and the caller
+   still isn't authorized. Reusing `NotAllowed` would have sent an
+   operator chasing an allow-list entry over an expired token.
+
+3. **`exp` is required to be present, not merely validated.** Serde
+   would happily accept a token with no `exp` claim and `Validation`
+   would then have no expiry to reject. A JWT with no expiry is a bearer
+   credential valid forever — precisely what an expiring token exists to
+   avoid — so `exp` is in `required_spec_claims`. There is a test for
+   the token that simply omits it.
+
+4. **Two functions, not one.** The brief's five-case
+   `verify_jwt_if_required` runs per-registration, but its
+   production-no-key case was described as failing "fast at startup" —
+   which a per-request function cannot do. `validate_jwt_startup` was
+   added for that, called beside `resolve_server_tls` before the server
+   binds. `verify_jwt_if_required` keeps the production check anyway:
+   it is the function deciding whether an unverified caller gets in, and
+   it should not depend on another function having run first to be safe.
+
+Also worth recording: `ResolvedConfig` gained `topology` and `mode`
+fields. The dispatcher needs the resolved mode to make this decision and
+had no way to reach it — the axes were resolution *inputs* that never
+appeared on the output. They're plain values, not `Resolved<T>`, because
+they aren't layered: they're what *gives* every other field its
+provenance.
+
+`JwtKeyMaterial`'s `Debug` is hand-written and redacts the key. This one
+holds only a public key, so a leak would be harmless — but deriving
+`Debug` on key-material types is how the same shape ends up printing a
+private one later.
+
+18 new tests: 7 in `conflux-net::jwt` (valid, wrong key, expired,
+tampered, `sub` mismatch, no-`exp`, unusable PEM), 4 on the enforcement
+decision's five cases, and 7 real end-to-end
+(`tests/jwt_auth_verification.rs`) over a live gRPC connection —
+including both directions of gate independence: a valid token still
+loses to an allow-list that excludes the client, and being allow-listed
+under the presented token still doesn't excuse an expired one. 309 → 327
+workspace-wide.
+
+Verified against the real binary in all three smoke-test states:
+production + `cross_device` (`auth = jwt` by default) with no key
+refuses to start with `ProductionRequiresJwtKey`; with a real ES256 key
+it logs `algorithm="ES256"` and proceeds past the gate; research with no
+key warns that tokens will not be verified.

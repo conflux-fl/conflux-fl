@@ -6,10 +6,28 @@ edition = "2024"
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
 conflux-net = { path = "../conflux-net" }
+# Phase 17. This is a real change to the dependency line `docs/spec`'s §2
+# draws for `conflux-node` ("conflux-proto and conflux-net only"), made
+# deliberately: spec §8's own sequence diagram shows `Node->>Priv: clip +
+# noise (optional)` as a distinct step from the server-side transform, and
+# there is no way to honor that without conflux-node being able to reach
+# the mechanism. Note it transitively pulls in conflux-config too (that's
+# where conflux-privacy registers itself, ADR 0002) — conflux-node still
+# calls no conflux-config API directly, keeping Phase 6's "read env vars,
+# mirror the defaults inline" convention (see startup_guard.rs).
+conflux-privacy = { path = "../conflux-privacy" }
+rand = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
-tokio-stream = { version = "0.1", features = ["net"] }
+# "sync": `ReceiverStream`, which adapts the mpsc channel behind
+# push mode's reconnecting task relay into a `Stream`.
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tonic = "0.14"
 async-trait = "0.1"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Push mode's `cross_silo` test issues real certs so push and mTLS can be
+# exercised together — same generator `conflux-net`'s own mTLS tests use.
+rcgen = "0.14"

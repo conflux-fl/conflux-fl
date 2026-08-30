@@ -1,6 +1,6 @@
-# Phase 15 (draft) — Centered Clipping (CClip)
+# Phase 15 — Centered Clipping (CClip)
 
-**Status: scoping draft, not started.**
+**Status: shipped 2026-08-30.**
 
 ## Scope
 
@@ -100,9 +100,67 @@ config-resolved `f32`, not a hardcoded constant.
 
 ## Definition of done
 
-- [ ] `cargo test -p conflux-core` passes, including CClip's hand-derived
+- [x] `cargo test -p conflux-core` passes, including CClip's hand-derived
       tests.
-- [ ] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+- [x] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
       stay clean.
-- [ ] `docs/AGGREGATION_LANDSCAPE.md`'s summary table and `docs/STATUS.md`
+- [x] `docs/AGGREGATION_LANDSCAPE.md`'s summary table and `docs/STATUS.md`
       updated — CClip moves from "Not built" to shipped.
+
+## Outcome
+
+Shipped as scoped. Three notes, one of which is a correction to this
+brief's own arithmetic.
+
+1. **This brief's step 2 was wrong, and the paper was followed instead
+   (ADR 0008).** The brief writes the update as
+   `v^(t+1) = v^(t) + (1/n) Σ_i u_i'` while defining
+   `u_i' = v^(t) + min(1, τ/‖u_i − v^(t)‖)·(u_i − v^(t))` — but `u_i'`
+   already contains `v^(t)`, so that formula adds the reference twice
+   and drifts by `v` every round. Karimireddy et al.'s actual recursion
+   averages the **clipped deviations**, not the clipped updates:
+
+   ```text
+   v ← v + (1/n) Σ_i  min(1, τ / ‖u_i − v‖) · (u_i − v)
+   ```
+
+   which is equivalently `(1/n) Σ_i u_i'`. The sanity check that catches
+   it: with `τ` large enough that nothing clips, the method must reduce
+   to a plain mean of the updates. The paper's form does; the brief's
+   form returns `v + mean(u_i)`. There is a unit test asserting exactly
+   that degeneracy
+   (`centered_clipping_degenerates_to_the_plain_mean_when_the_radius_never_binds`).
+
+2. **Initialization deviates from the paper, deliberately and
+   documented.** The paper starts `v` at the zero vector. That assumes
+   gradient-like updates; Conflux transmits **full model weights**,
+   where clipping every client's deviation from the origin would gut
+   round one. `v` therefore starts `None` and is seeded from the first
+   round's plain mean — one of the paper's own permitted warm starts,
+   and the only one whose scale is knowable before a batch is seen. The
+   recursion itself is unmodified. This has a measured cost (§5.10 of
+   the research doc): under a large-magnitude attack the seeding mean is
+   already dragged, and CClip's bounded step then makes recovery slow.
+
+3. **`build_aggregator` took a params struct rather than a third
+   positional `f32`.** `AggregatorParams { byzantine_fraction,
+   clip_radius }` with a `Default` matching `conflux-config`'s builtin
+   fallbacks. Two bare `f32` arguments would have been silently
+   transposable at every call site; the struct also means the next
+   tunable is a field, not another signature break.
+
+Beyond the brief: `run_experiment.rs` gained `--clip-radius` (recorded on
+every result row, so a mixed sweep's JSONL stays one schema), and
+Experiment 2.7 was run — 3,000 rows across two results files, written up
+as §5.10. Headline: at `τ = 1.0` CClip's *mean* looks mediocre, but it is
+the only method tested whose trajectory converges on every attack and
+seed where `fedavg` diverges 32×; and the `τ` sweep shows the parameter
+bounds attacker influence and convergence rate with the same number, so
+no single `τ` is good at both (4.6× spread between best and worst `τ` on
+one attack). A new `summarize_tau_sweep.py` exists because the shared
+`summarize.py` groups by `(aggregator, attack)` and would have averaged
+four different `τ`s into one meaningless row.
+
+7 hand-derived unit tests in `conflux-core` (52 → 59) plus 2 config
+layering tests; 289 → 296 workspace-wide. `cargo fmt` and `cargo clippy
+--workspace --all-targets` clean.

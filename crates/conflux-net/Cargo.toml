@@ -20,6 +20,16 @@ async-trait = "0.1"
 # Phase 8c: hashing a peer certificate's DER bytes into the fingerprint
 # `NodeIdentity::CertFingerprint` compares against.
 sha2 = "0.10"
+# Phase 16: RS256/ES256 verification of RegisterRequest.auth_token.
+# Verification only — no signing key ever lives in a Conflux process.
+# `aws_lc_rs`, not `rust_crypto`, for exactly the reason the tonic
+# comment above gives: this workspace already links aws-lc-rs (via
+# aws-sdk-s3 -> rustls), and jsonwebtoken 11 requires exactly one crypto
+# provider feature. Picking the same one keeps a single crypto stack in
+# the binary rather than a second, parallel implementation of the same
+# primitives.
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 rcgen = "0.14"

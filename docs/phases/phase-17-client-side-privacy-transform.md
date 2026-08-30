@@ -1,6 +1,6 @@
-# Phase 17 (draft) — Client-side privacy transform in `conflux-node`
+# Phase 17 — Client-side privacy transform in `conflux-node`
 
-**Status: scoping draft, not started.**
+**Status: shipped 2026-08-30.**
 
 ## Scope
 
@@ -111,8 +111,70 @@ working server-side path.
 
 ## Definition of done
 
-- [ ] `cargo test -p conflux-node -p conflux-config` passes.
-- [ ] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+- [x] `cargo test -p conflux-node -p conflux-config` passes.
+- [x] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
       stay clean.
-- [ ] `docs/STATUS.md`'s "Known deviations from spec" bullet updated —
+- [x] `docs/STATUS.md`'s "Known deviations from spec" bullet updated —
       client-side privacy transform moves from listed-gap to shipped.
+
+## Outcome
+
+Shipped as scoped, with one deviation from the brief's wiring plan and
+three decisions the brief didn't cover.
+
+**The dependency change is real and worth stating plainly.** `docs/spec`
+§2 and CLAUDE.md both describe `conflux-node` as depending on
+`conflux-proto` and `conflux-net` only. This phase adds
+`conflux-privacy`, which transitively pulls in `conflux-config` as well
+(that's where `conflux-privacy` registers itself, ADR 0002). It was done
+deliberately, because spec §8's own sequence diagram shows
+`Node->>Priv: clip + noise (optional)` as a step distinct from the
+server-side transform, and there is no way to honor that without the
+node reaching the mechanism. CLAUDE.md's dependency line has been
+updated to match reality rather than left to drift.
+
+1. **`main.rs` reads env vars, not `conflux-config`.** The brief said it
+   should read "the resolved `client_side_privacy_transform` value",
+   which would mean a direct `conflux-config` dependency and a config
+   resolution pass inside `conflux-node`. That is a much larger change
+   than this phase needs, and it contradicts Phase 6's own scope
+   decision that `startup_guard.rs` documents. So the node reads
+   `CONFLUX_CLIENT_SIDE_PRIVACY_TRANSFORM`/`CONFLUX_CLIP_NORM`/
+   `CONFLUX_NOISE_MULTIPLIER`/`CONFLUX_SEED_VALUE` directly, mirroring
+   `conflux-config`'s builtin fallbacks inline — exactly the convention
+   `startup_guard.rs` established for `Mode` and `allow_stub_client`.
+   The config field itself was still added, resolved, and logged (ADR
+   0007), so the parameter is documented and layered like every other.
+
+2. **Chunks are reassembled before clipping, then re-split at their
+   original boundaries.** Not in the brief, and it is the difference
+   between a correct mechanism and one that looks correct. Clipping is
+   defined over the L2 norm of the *whole* update; clipping each chunk
+   separately to the same radius would bound each piece rather than the
+   whole, so a 3-chunk update would pass at up to √3 × the radius and
+   the actual privacy guarantee would depend on how the caller happened
+   to fragment its payload. There is a test that submits a 3-chunk
+   update and asserts the reassembled norm is exactly the radius.
+
+3. **The transform runs once, before the retry loop, and the RNG is
+   carried across calls rather than re-seeded per submission.** Two
+   distinct ways to get this wrong, both of which still "work":
+   re-transforming per retry attempt would draw fresh noise for each
+   resend, letting a server average the noise away across retries of one
+   submission; re-seeding from a fixed seed per call would make every
+   round's noise identical, which an observer can simply subtract. A
+   test asserts successive submissions differ, and another asserts two
+   bridges with the same seed agree — reproducible *sequence*, not
+   repeated *value*.
+
+The server-side transform still runs unconditionally afterwards, as the
+brief specified — this adds a stage in front of the existing pipeline
+rather than gating it.
+
+12 new tests: 5 in `conflux-node/tests/local_privacy.rs` (off is
+byte-identical, on clips and noises, whole-update clipping, seed
+determinism, non-repeating noise), 2 config layering tests, and a
+`conflux-server` integration test proving a round completes normally
+against an already-client-transformed delta with finite output. 327 →
+335 workspace-wide. `cargo fmt` and `cargo clippy --workspace
+--all-targets` clean.

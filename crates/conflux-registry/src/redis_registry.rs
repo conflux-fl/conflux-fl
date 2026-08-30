@@ -1,7 +1,6 @@
 //! `RedisRegistry` — a `Registry` backend that's durable across restarts
-//! and shared across processes, unlike `InMemoryRegistry` (Phase 1).
-//!
-//! See `docs/phases/phase-7a-redis-registry.md`.
+//! and shared across processes, unlike `InMemoryRegistry`, whose state
+//! lives only in that one process's memory.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,9 +11,9 @@ use crate::{ClientId, Registry, RegistryError};
 /// One Redis sorted set: member = client id, score = last-heartbeat time
 /// (Unix millis). `evict_expired` is `ZREMRANGEBYSCORE`; `active_clients`
 /// is `ZRANGE`. A sorted set rather than Redis's own per-key `EXPIRE`
-/// because `evict_expired` takes its `ttl` at call time (the trait's
-/// design, from Phase 1) — the TTL isn't known until then, so there's no
-/// single per-key expiry to set at write time.
+/// because `evict_expired` takes its `ttl` as a call-time argument (the
+/// `Registry` trait's design) — the TTL isn't known until then, so
+/// there's no single per-key expiry to set at write time.
 const DEFAULT_CLIENTS_KEY: &str = "conflux:registry:clients";
 
 pub struct RedisRegistry {
@@ -23,10 +22,12 @@ pub struct RedisRegistry {
 }
 
 impl RedisRegistry {
-    /// `redis_url` is a plain `redis://host:port/db` string — stays
-    /// argument-based rather than `conflux-config`-driven until spec §11
-    /// Open Item 2 gets a real config-file design, matching
-    /// `conflux-server`/`conflux-node`'s `main.rs` precedent.
+    /// `redis_url` is a plain `redis://host:port/db` string, passed straight
+    /// through to the `redis` crate — it isn't routed through
+    /// `conflux-config`'s layered resolution chain. `conflux-server` reads
+    /// it directly from `CONFLUX_REDIS_URL` at startup instead, since a
+    /// connection string like this doesn't need topology/mode layering, an
+    /// explainable source, or a CLI override — just a value at boot.
     pub async fn connect(redis_url: &str) -> Result<Self, RegistryError> {
         Self::connect_with_key(redis_url, DEFAULT_CLIENTS_KEY).await
     }
@@ -136,8 +137,8 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// `docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine`
-    /// — see `docs/phases/phase-7a-redis-registry.md`.
+    /// These tests need a real Redis reachable here; start one with
+    /// `docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine`.
     const TEST_REDIS_URL: &str = "redis://127.0.0.1:16379";
 
     /// Every test gets its own Redis key so `cargo test`'s parallel

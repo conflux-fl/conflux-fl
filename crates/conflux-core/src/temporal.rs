@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use conflux_proto::ClientDelta;
 
-use crate::weights::decode_and_validate;
+use crate::weights::{accumulate_scaled_difference, accumulate_weighted, decode_and_validate};
 use crate::{Aggregator, AggregatorError};
 
 fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
@@ -204,15 +204,11 @@ impl Aggregator for FoolsGoldAggregator {
             // (see its own doc comment) — an unweighted mean rather than
             // producing an all-zero aggregate.
             for w in &decoded {
-                for (c, x) in combined.iter_mut().zip(w) {
-                    *c += x;
-                }
+                accumulate_weighted(&mut combined, w, 1.0);
             }
         } else {
             for (i, w) in weights.iter().enumerate() {
-                for (c, x) in combined.iter_mut().zip(&decoded[i]) {
-                    *c += w * x;
-                }
+                accumulate_weighted(&mut combined, &decoded[i], *w);
             }
         }
         for c in &mut combined {
@@ -223,7 +219,30 @@ impl Aggregator for FoolsGoldAggregator {
     }
 }
 
-fn cosine_similarity_traces(a: &[f32], b: &[f32]) -> f32 {
+/// Cosine similarity between two deviation traces, **in `f64`**.
+///
+/// The precision is the point, and it is not a micro-optimization in
+/// reverse — it is a correctness fix. DSS turns this score into a weight
+/// with `weight = 1 − collusion`, and when two traces are nearly
+/// parallel the score sits just under `1.0`, so that subtraction is
+/// catastrophic cancellation: in `f32`, `1.0 − 0.999998` leaves barely
+/// one significant digit, and the surviving digit is rounding noise.
+/// `docs/research/temporal-consistency-aggregation.md` §5.8 measured the
+/// consequence — every client's weight collapsing into the `1e-7`–`1e-5`
+/// band with an essentially arbitrary ordering, so whichever client
+/// happened to hold the largest meaningless value decided the round.
+///
+/// Computed in `f64`, the same subtraction retains around ten
+/// significant digits, which is the difference between a weight that
+/// encodes a real (if very fine) trust judgment and one that encodes
+/// float noise.
+///
+/// `cosine_similarity` (the `f32` version) is deliberately left alone:
+/// `FoolsGoldAggregator` uses it, and that function is a line-by-line
+/// translation of the FoolsGold authors' own reference implementation
+/// (ADR 0008). Changing its arithmetic would silently make this
+/// codebase's FoolsGold something other than the published FoolsGold.
+fn cosine_similarity_traces_f64(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());
     if n == 0 {
         return 0.0;
@@ -231,7 +250,16 @@ fn cosine_similarity_traces(a: &[f32], b: &[f32]) -> f32 {
     // Compare the most recent shared window — a client with a longer
     // history than its peer is compared only over the overlap, not
     // padded with zeros (which would artificially depress similarity).
-    cosine_similarity(&a[a.len() - n..], &b[b.len() - n..])
+    let a = &a[a.len() - n..];
+    let b = &b[b.len() - n..];
+
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
+    let norm_a = a.iter().map(|x| *x as f64 * *x as f64).sum::<f64>().sqrt();
+    let norm_b = b.iter().map(|x| *x as f64 * *x as f64).sum::<f64>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a * norm_b)
 }
 
 /// **Deviation Stability Scoring (DSS)** — a research hypothesis from
@@ -274,6 +302,30 @@ fn cosine_similarity_traces(a: &[f32], b: &[f32]) -> f32 {
 /// client count `n` — the correction Experiment 2.2's Finding 1
 /// (`docs/research/temporal-consistency-aggregation.md` §5.3) found
 /// FoolsGold's own reference implementation needed and doesn't have.
+/// Encodes a DSS weight into a `num_samples` count the base method can
+/// act on.
+///
+/// `num_samples` is an integer, and every method that reads it
+/// (`SampleCountWeighting`, i.e. FedAvg) only ever uses it as a *ratio*
+/// against the batch's total — so the absolute scale is free, and
+/// multiplying through by a large fixed factor before truncating is what
+/// keeps a fractional weight from rounding away. Without it, weight
+/// `0.37` on `num_samples = 10` truncates to `3`, a 19% distortion of
+/// the judgment DSS just made.
+///
+/// Clamped to at least `1` for any surviving client: a client that
+/// passed the `w > 0.0` filter is one DSS chose to keep, and letting it
+/// round to zero here would silently re-exclude it — and, if every
+/// survivor did so, hand the base method a batch summing to zero.
+fn scale_samples(num_samples: u64, weight: f32) -> u64 {
+    const PRECISION: f64 = 1e6;
+    let scaled = weight as f64 * num_samples as f64 * PRECISION;
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return 1;
+    }
+    (scaled as u64).max(1)
+}
+
 pub struct DssAggregator {
     base: Box<dyn Aggregator>,
     /// How many recent rounds' deviation values each client's trace
@@ -285,6 +337,27 @@ pub struct DssAggregator {
     /// Above this, a client's trace counts as "suspiciously similar to
     /// some other client's."
     pub collusion_threshold: f32,
+    /// Whether the final combine runs *through* the wrapped base method
+    /// (the default, `true`) or is DSS's own weighted mean over every
+    /// raw submission (`false` — the original behavior, kept only so the
+    /// two can be compared within a single sweep).
+    ///
+    /// This is Finding 3's fix. With `false`, DSS uses the base method
+    /// solely to compute a deviation reference and then combines the raw
+    /// batch itself — so whenever DSS's own gate doesn't fire, every
+    /// weight is `1.0` and the result is a plain weighted mean,
+    /// **discarding whatever the base method would have excluded**. That
+    /// is why `dss_krum` measured ~57x worse than plain `krum` against
+    /// `persistent_sybil` (§5.5 of the research doc): stable colluders
+    /// never trip DSS's gate, so wrapping Krum silently replaced Krum
+    /// with FedAvg.
+    ///
+    /// With `true`, DSS applies its judgment by re-weighting the batch
+    /// and handing it back to the base method, which then runs its own
+    /// algorithm on it — Krum still selects, Trimmed Mean still trims. A
+    /// non-firing gate now degrades to *the base method*, which is the
+    /// floor a wrapper should have had all along.
+    pub combine_through_base: bool,
     history: Mutex<HashMap<String, VecDeque<f32>>>,
     /// Per-client (stability, collusion, weight) from the most recent
     /// `aggregate()` call — pure diagnostics, read by
@@ -321,9 +394,35 @@ impl DssAggregator {
             window: 5,
             stability_threshold: 0.5,
             collusion_threshold: 0.8,
+            combine_through_base: true,
             history: Mutex::new(HashMap::new()),
             last_diagnostics: Mutex::new(Vec::new()),
         }
+    }
+
+    fn record_diagnostics(
+        &self,
+        updates: &[ClientDelta],
+        stability: &[f32],
+        collusion: &[f64],
+        weights: &[f32],
+    ) {
+        *self
+            .last_diagnostics
+            .lock()
+            .expect("DssAggregator diagnostics mutex poisoned") = updates
+            .iter()
+            .zip(stability.iter().zip(collusion.iter().zip(weights.iter())))
+            .map(|(u, (&s, (&c, &w)))| ClientDssDiagnostic {
+                client_id: u.client_id.clone(),
+                stability: s,
+                // Narrowed for reporting only. The weight was computed
+                // from the full-precision value; this field is for
+                // humans reading a trace, not for arithmetic.
+                collusion: c as f32,
+                weight: w,
+            })
+            .collect();
     }
 
     /// Snapshot of each client's (stability, collusion, weight) from the
@@ -381,21 +480,25 @@ impl Aggregator for DssAggregator {
             })
             .collect();
 
-        let collusion: Vec<f32> = (0..n)
+        // Kept in `f64` all the way to the subtraction below — see
+        // `cosine_similarity_traces_f64` for why that is the whole point.
+        let collusion: Vec<f64> = (0..n)
             .map(|i| {
                 (0..n)
                     .filter(|&j| j != i)
-                    .map(|j| cosine_similarity_traces(&traces[i], &traces[j]))
-                    .fold(0.0f32, f32::max)
+                    .map(|j| cosine_similarity_traces_f64(&traces[i], &traces[j]))
+                    .fold(0.0f64, f64::max)
             })
             .collect();
 
         let weights: Vec<f32> = (0..n)
             .map(|i| {
                 let unstable = stability[i] < self.stability_threshold;
-                let colluding = collusion[i] > self.collusion_threshold;
+                let colluding = collusion[i] > self.collusion_threshold as f64;
                 if unstable && colluding {
-                    (1.0 - collusion[i]).max(0.0)
+                    // The cancellation happens here, in `f64`, and only
+                    // the result is narrowed to `f32`.
+                    (1.0 - collusion[i]).max(0.0) as f32
                 } else {
                     1.0
                 }
@@ -403,47 +506,228 @@ impl Aggregator for DssAggregator {
             .collect();
 
         let dim = decoded[0].len();
+
+        // Finding 3's fix: hand DSS's judgment back to the base method
+        // rather than acting on it here.
+        //
+        // The batch below carries DSS's weights as `num_samples`
+        // scaling, with fully-distrusted clients dropped outright.
+        // Dropping matters as much as scaling: a selection-based base
+        // (Krum, Multi-Krum, FABA, Bulyan) ignores `num_samples`
+        // entirely, so a client scaled to zero would still be a
+        // *candidate* it could pick. Removing it is the only way the
+        // judgment reaches those methods at all.
+        if self.combine_through_base {
+            let reweighted: Vec<ClientDelta> = updates
+                .iter()
+                .zip(&weights)
+                .filter(|(_, w)| **w > 0.0)
+                .map(|(u, &w)| ClientDelta {
+                    num_samples: scale_samples(u.num_samples, w),
+                    ..u.clone()
+                })
+                .collect();
+
+            let combined = if reweighted.is_empty() {
+                // Every client fully distrusted — the same degenerate
+                // case the original combine had, answered the same way:
+                // a stable unweighted mean beats returning nothing.
+                let mut mean = vec![0.0f32; dim];
+                for w in &decoded {
+                    accumulate_weighted(&mut mean, w, 1.0);
+                }
+                for m in &mut mean {
+                    *m /= n as f32;
+                }
+                mean
+            } else {
+                // The base method's own algorithm, run on the batch DSS
+                // has re-weighted. Errors propagate rather than being
+                // swallowed: if the base can't aggregate this batch,
+                // that is a real failure, not something to paper over
+                // with a mean.
+                self.base.aggregate(&reweighted)?
+            };
+
+            self.record_diagnostics(updates, &stability, &collusion, &weights);
+            return Ok(combined);
+        }
+
+        // Original combine (`combine_through_base = false`), kept for
+        // the A/B comparison in `docs/research/`'s Experiment 2.8.
         let mut combined = vec![0.0f32; dim];
         let mut weight_sum = 0.0f32;
         for (i, w) in weights.iter().enumerate() {
             let effective = w * updates[i].num_samples as f32;
             weight_sum += effective;
-            for (c, x) in combined.iter_mut().zip(&decoded[i]) {
-                *c += effective * x;
-            }
+            accumulate_weighted(&mut combined, &decoded[i], effective);
         }
+
         if weight_sum > 0.0 {
             for c in &mut combined {
                 *c /= weight_sum;
             }
         } else {
-            // Every client scored zero trust (degenerate) — fall back to
-            // an unweighted mean, same pattern as `FoolsGoldAggregator`.
+            // Nothing meaningfully distinguishes any client — fall back
+            // to a stable unweighted mean, same pattern as
+            // `FoolsGoldAggregator`.
+            //
+            // Reset before re-accumulating. Reaching this branch means
+            // every `effective` was exactly `0.0`, so `combined` is
+            // already the zero vector and this is a no-op today — kept
+            // so the branch is correct on its own terms rather than
+            // because of what the condition above happens to imply.
+            combined.iter_mut().for_each(|c| *c = 0.0);
             for w in &decoded {
-                for (c, x) in combined.iter_mut().zip(w) {
-                    *c += x;
-                }
+                accumulate_weighted(&mut combined, w, 1.0);
             }
             for c in &mut combined {
                 *c /= n as f32;
             }
         }
 
-        *self
-            .last_diagnostics
+        self.record_diagnostics(updates, &stability, &collusion, &weights);
+        Ok(combined)
+    }
+}
+
+/// **Centered Clipping** — Karimireddy, He & Jaggi, 2021, "Learning from
+/// History for Byzantine Robust Optimization" (ICML), Algorithm 1.
+///
+/// The insight the paper is built on: every single-round robust method
+/// (Krum, Trimmed Mean, Median, ...) throws away the one signal that
+/// makes a persistent attacker detectable — what the model looked like
+/// last round. Centered Clipping keeps a running reference vector `v`
+/// across rounds and clips each client's *deviation from that reference*
+/// to a radius `τ`, rather than clipping raw updates against a fixed
+/// origin or discarding suspicious clients outright.
+///
+/// That distinction is the whole method, and it is easy to get wrong:
+/// clipping `u_i` itself to norm `τ` would shrink every client toward
+/// the origin (meaningless for full weight vectors); clipping
+/// `u_i − v` bounds only how far any one client can *move the model*,
+/// which is exactly the quantity an attacker needs unbounded to do
+/// damage. Nobody is excluded — a Byzantine client still contributes,
+/// just never more than `τ`-worth of pull. That is why the method
+/// degrades gracefully rather than falling apart when the assumed
+/// attacker count is wrong, unlike the selection-based `robust` members.
+///
+/// Per round, with `n` updates `u_i`:
+///
+/// ```text
+/// v ← v + (1/n) Σ_i  min(1, τ / ‖u_i − v‖) · (u_i − v)
+/// ```
+///
+/// and that new `v` is both the round's aggregate and the next round's
+/// reference — the cross-round state that puts this in `temporal` rather
+/// than `robust`, despite being a Byzantine-robustness method.
+///
+/// **Fidelity notes (ADR 0008):**
+/// - The combine step is an unweighted `1/n` mean of clipped deviations,
+///   matching the paper. Like [`FoolsGoldAggregator`], this deliberately
+///   does *not* follow the codebase's `num_samples`-weighting convention
+///   — results stay directly comparable to the published experiments.
+/// - The paper initializes `v` to the zero vector (or a warm start). A
+///   zero start assumes updates are gradient-like and small; Conflux
+///   transmits **full model weights**, where clipping every client's
+///   deviation from the origin would gut round one. So `v` starts as
+///   `None` and is seeded from the first round's plain mean — one of the
+///   paper's own permitted warm starts, and the only one whose scale is
+///   knowable before a batch has been seen. The recursion itself is
+///   unmodified. The cost is real and worth stating: round one centers
+///   on a mean an attacker can drag, so the defense compounds over
+///   rounds rather than arriving fully formed in round one.
+/// - `τ` is problem-scale dependent — the paper tunes it per experiment,
+///   and so must a deployment. It is config-resolved (`clip_radius`),
+///   never a hardcoded constant. A negative `τ` would invert the
+///   clipping rather than bound it; like the `robust` family's
+///   `byzantine_fraction`, it is documented rather than validated, since
+///   the config layer is where an operator-supplied value belongs.
+pub struct CenteredClippingAggregator {
+    clip_radius: f32,
+    /// `None` until the first batch has been seen — see the fidelity
+    /// note on initialization. `Mutex` for the same reason
+    /// [`FoolsGoldAggregator`]'s history uses one: `Aggregator::aggregate`
+    /// takes `&self` (so one aggregator can serve concurrent rounds
+    /// behind an `Arc`), and interior mutability is what lets a method
+    /// carry state across rounds without changing that shared signature.
+    reference: Mutex<Option<Vec<f32>>>,
+}
+
+impl CenteredClippingAggregator {
+    pub fn new(clip_radius: f32) -> Self {
+        Self {
+            clip_radius,
+            reference: Mutex::new(None),
+        }
+    }
+
+    /// The current reference vector, or `None` before the first round.
+    /// Read-only — exposed for tests and diagnostics, never consulted by
+    /// `aggregate` itself.
+    pub fn reference(&self) -> Option<Vec<f32>> {
+        self.reference
             .lock()
-            .expect("DssAggregator diagnostics mutex poisoned") = updates
+            .expect("CenteredClippingAggregator reference mutex poisoned")
+            .clone()
+    }
+}
+
+impl Aggregator for CenteredClippingAggregator {
+    fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
+        if updates.is_empty() {
+            return Err(AggregatorError::EmptyBatch);
+        }
+        let decoded = decode_and_validate(updates)?;
+        let n = decoded.len();
+        let dim = decoded[0].len();
+
+        let mut reference = self
+            .reference
+            .lock()
+            .expect("CenteredClippingAggregator reference mutex poisoned");
+
+        // Re-seeding on a dimension change rather than erroring: a model
+        // whose weight-vector length changed mid-experiment has no
+        // meaningful continuity with the old reference, so carrying it
+        // forward would be worse than starting over.
+        let v: Vec<f32> = match reference.as_ref() {
+            Some(prev) if prev.len() == dim => prev.clone(),
+            _ => {
+                let mut mean = vec![0.0f32; dim];
+                for w in &decoded {
+                    accumulate_weighted(&mut mean, w, 1.0);
+                }
+                for m in &mut mean {
+                    *m /= n as f32;
+                }
+                mean
+            }
+        };
+
+        let mut clipped_sum = vec![0.0f32; dim];
+        for w in &decoded {
+            let distance = l2_distance(w, &v);
+            // `min(1, τ/d)`, with the `d == 0` case handled separately
+            // because `τ/0` is a division by zero — though the deviation
+            // it would scale is the zero vector either way, so the value
+            // chosen there cannot affect the result.
+            let scale = if distance > 0.0 {
+                (self.clip_radius / distance).min(1.0)
+            } else {
+                1.0
+            };
+            accumulate_scaled_difference(&mut clipped_sum, w, &v, scale);
+        }
+
+        let next: Vec<f32> = v
             .iter()
-            .zip(stability.iter().zip(collusion.iter().zip(weights.iter())))
-            .map(|(u, (&s, (&c, &w)))| ClientDssDiagnostic {
-                client_id: u.client_id.clone(),
-                stability: s,
-                collusion: c,
-                weight: w,
-            })
+            .zip(&clipped_sum)
+            .map(|(vi, acc)| vi + acc / n as f32)
             .collect();
 
-        Ok(combined)
+        *reference = Some(next.clone());
+        Ok(next)
     }
 }
 
@@ -692,6 +976,74 @@ mod tests {
     }
 
     #[test]
+    fn wrapping_a_robust_base_no_longer_discards_its_selection() {
+        // Finding 3, pinned. Stable colluders never trip DSS's
+        // "unstable AND colluding" gate — their deviation trace has low
+        // variance by construction — so every weight stays 1.0 and DSS
+        // has no opinion to apply. The question is what it does then.
+        //
+        // Before this fix, it combined the raw batch itself, which is a
+        // plain weighted mean: wrapping Krum silently replaced Krum with
+        // FedAvg, and the sybils won. Now the re-weighted batch goes
+        // back through Krum, which selects as it always would.
+        use crate::{FedAvg, FilteredAggregator, KrumFilter};
+
+        fn krum() -> Box<dyn Aggregator> {
+            Box::new(FilteredAggregator::new(
+                KrumFilter {
+                    byzantine_fraction: 0.2,
+                },
+                FedAvg::default(),
+            ))
+        }
+
+        // Three honest clients clustered near [1, 1]; two sybils sitting
+        // together far away, submitting the *same* value every round so
+        // they read as perfectly stable.
+        let batch = || {
+            vec![
+                client_delta("honest-1", &[1.0, 1.0]),
+                client_delta("honest-2", &[1.1, 0.9]),
+                client_delta("honest-3", &[0.9, 1.1]),
+                client_delta("sybil-1", &[50.0, 50.0]),
+                client_delta("sybil-2", &[50.0, 50.0]),
+            ]
+        };
+
+        let plain = krum().aggregate(&batch()).unwrap();
+
+        let through_base = DssAggregator::new(krum());
+        let mut raw = DssAggregator::new(krum());
+        raw.combine_through_base = false;
+
+        let mut through_result = vec![];
+        let mut raw_result = vec![];
+        for _ in 0..6 {
+            through_result = through_base.aggregate(&batch()).unwrap();
+            raw_result = raw.aggregate(&batch()).unwrap();
+        }
+
+        // Plain Krum excludes the sybils outright.
+        assert!(
+            plain[0] < 2.0,
+            "plain krum should sit near the honest cluster, got {plain:?}"
+        );
+
+        // The old combine threw that away and landed near the raw mean,
+        // which the sybils dominate.
+        assert!(
+            raw_result[0] > 10.0,
+            "the original combine should reproduce Finding 3 (sybil-dominated), got {raw_result:?}"
+        );
+
+        // The fix keeps Krum's own answer.
+        assert!(
+            through_result[0] < 2.0,
+            "combining through the base should preserve krum's exclusion, got {through_result:?}"
+        );
+    }
+
+    #[test]
     fn dss_down_weights_a_pair_that_is_both_erratic_and_mutually_identical() {
         // Two colluders submitting identical-to-each-other values that
         // vary erratically round to round (both unstable AND perfectly
@@ -725,5 +1077,152 @@ mod tests {
             "got {result:?}, expected pulled back toward the honest clients \
              (unweighted mean would be [3.25, 3.25])"
         );
+    }
+
+    // --- Centered Clipping (Karimireddy, He & Jaggi 2021) -------------
+    //
+    // Every expectation below is derived by hand from the published
+    // recursion, not read back off an implementation run.
+
+    #[test]
+    fn centered_clipping_bounds_each_clients_pull_to_exactly_the_clip_radius() {
+        // tau = 1, batch {[0,0], [2,0], [10,0]} on a fresh aggregator.
+        //   v_0   = mean = [4, 0]
+        //   devs  = [-4,0] (d=4), [-2,0] (d=2), [6,0] (d=6)
+        //   every d > tau, so each scales to exactly unit length:
+        //         [-1,0],  [-1,0],  [1,0]
+        //   sum   = [-1, 0];  /3 = [-1/3, 0]
+        //   v_1   = [4,0] + [-1/3,0] = [11/3, 0]
+        let agg = CenteredClippingAggregator::new(1.0);
+        let out = agg
+            .aggregate(&[
+                client_delta("a", &[0.0, 0.0]),
+                client_delta("b", &[2.0, 0.0]),
+                client_delta("c", &[10.0, 0.0]),
+            ])
+            .unwrap();
+
+        assert!((out[0] - 11.0 / 3.0).abs() < 1e-5, "got {out:?}");
+        assert!(out[1].abs() < 1e-6, "got {out:?}");
+
+        // The defining property: `c` sits 6 away from the reference but
+        // moved it by no more than tau/n — the same bound as the client
+        // sitting 2 away. Distance past the radius buys an attacker
+        // nothing.
+        let pull_of_c = 1.0 / 3.0;
+        assert!(
+            (4.0 - out[0] - pull_of_c).abs() < 1e-5,
+            "c's net pull should be exactly tau/n, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn centered_clipping_centers_the_next_round_on_the_last_output_not_the_batch_mean() {
+        let agg = CenteredClippingAggregator::new(1.0);
+        let batch = [
+            client_delta("a", &[0.0, 0.0]),
+            client_delta("b", &[2.0, 0.0]),
+            client_delta("c", &[10.0, 0.0]),
+        ];
+
+        let round_1 = agg.aggregate(&batch).unwrap();
+        assert!((round_1[0] - 11.0 / 3.0).abs() < 1e-5);
+
+        // Round 2, identical batch. A stateless method would return
+        // round 1's answer again. Centering on v = [11/3, 0] instead:
+        //   devs  = [-11/3,0] (d=11/3), [-5/3,0] (d=5/3), [19/3,0]
+        //   all d > tau=1 -> [-1,0], [-1,0], [1,0] -> sum [-1,0]
+        //   v_2 = [11/3, 0] + [-1/3, 0] = [10/3, 0]
+        let round_2 = agg.aggregate(&batch).unwrap();
+        assert!((round_2[0] - 10.0 / 3.0).abs() < 1e-5, "got {round_2:?}");
+        assert!(
+            (round_2[0] - round_1[0]).abs() > 1e-3,
+            "round 2 repeated round 1 — the reference is not persisting"
+        );
+        assert_eq!(agg.reference(), Some(round_2.clone()));
+    }
+
+    #[test]
+    fn centered_clipping_degenerates_to_the_plain_mean_when_the_radius_never_binds() {
+        // tau far larger than any deviation -> every scale is 1 ->
+        // v + mean(u_i - v) = mean(u_i), for any v. So an unclipped
+        // round is exactly an unweighted mean: [0+2+10]/3 = 4.
+        let agg = CenteredClippingAggregator::new(1_000.0);
+        let out = agg
+            .aggregate(&[
+                client_delta("a", &[0.0, 0.0]),
+                client_delta("b", &[2.0, 0.0]),
+                client_delta("c", &[10.0, 0.0]),
+            ])
+            .unwrap();
+
+        assert!((out[0] - 4.0).abs() < 1e-5, "got {out:?}");
+    }
+
+    #[test]
+    fn centered_clipping_walks_away_from_an_outlier_over_successive_rounds() {
+        // Two honest clients at the origin, one attacker at [1000, 0].
+        // Round 1 seeds v from the mean, which the attacker has already
+        // dragged to [1000/3, 0] — the documented cost of warm-starting
+        // from the batch mean. What the method guarantees is what
+        // happens next: each round moves the reference back toward the
+        // honest cluster by a bounded step, and never lets the attacker
+        // pull it further out.
+        let agg = CenteredClippingAggregator::new(1.0);
+        let batch = [
+            client_delta("honest-1", &[0.0]),
+            client_delta("honest-2", &[0.0]),
+            client_delta("attacker", &[1000.0]),
+        ];
+
+        let mut previous = f32::INFINITY;
+        for round in 0..5 {
+            let out = agg.aggregate(&batch).unwrap()[0];
+            assert!(
+                out < previous,
+                "round {round} moved toward the attacker: {out} !< {previous}"
+            );
+            previous = out;
+        }
+        // Each round nets exactly (-1 - 1 + 1)/3 = -1/3 of movement,
+        // whatever the attacker submits.
+        assert!(
+            (1000.0 / 3.0 - 5.0 / 3.0 - previous).abs() < 1e-3,
+            "expected five bounded steps down from the seeded mean, got {previous}"
+        );
+    }
+
+    #[test]
+    fn centered_clipping_returns_a_lone_clients_update_unchanged_on_a_fresh_aggregator() {
+        // Not a special case in the code — it falls out of the math. The
+        // seeded reference *is* the single client's own vector, so its
+        // deviation is zero and nothing is clipped.
+        let agg = CenteredClippingAggregator::new(0.5);
+        let out = agg.aggregate(&[client_delta("solo", &[5.0, 7.0])]).unwrap();
+
+        assert_eq!(out, vec![5.0, 7.0]);
+    }
+
+    #[test]
+    fn centered_clipping_clips_a_lone_client_once_a_reference_exists() {
+        // The flip side of the test above, and the reason no `n == 1`
+        // early return exists: after round one there *is* a reference,
+        // so a single client cannot move the model arbitrarily either.
+        let agg = CenteredClippingAggregator::new(1.0);
+        agg.aggregate(&[client_delta("solo", &[0.0])]).unwrap();
+
+        // v = [0]; a lone client at [50] deviates by 50, clipped to 1,
+        // averaged over n=1 -> v_1 = [1].
+        let out = agg.aggregate(&[client_delta("solo", &[50.0])]).unwrap();
+        assert!((out[0] - 1.0).abs() < 1e-6, "got {out:?}");
+    }
+
+    #[test]
+    fn centered_clipping_rejects_an_empty_batch() {
+        let agg = CenteredClippingAggregator::new(1.0);
+        assert!(matches!(
+            agg.aggregate(&[]),
+            Err(AggregatorError::EmptyBatch)
+        ));
     }
 }

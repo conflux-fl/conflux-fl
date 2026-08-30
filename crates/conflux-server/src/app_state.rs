@@ -10,6 +10,7 @@
 //! see `backend_selection.rs` for how a caller picks which backend each
 //! resolves to.
 
+use conflux_net::jwt::JwtKeyMaterial;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -83,6 +84,16 @@ pub struct AppState {
     /// task broadcast to them; pull-mode clients just see it on their next
     /// `fetch_task`.
     pub push_sender: broadcast::Sender<TaskResponse>,
+    /// Phase 16: the public key `register()` verifies `auth_token`
+    /// against when `config.auth.value == AuthMode::Jwt`. `None` means
+    /// none was supplied — which `verify_jwt_if_required` treats as
+    /// permitted in research and refused in production, the same
+    /// asymmetry `resolve_server_tls` applies to missing TLS material.
+    ///
+    /// Set through [`AppState::with_jwt_key`] rather than a constructor
+    /// parameter, so every existing `AppState::new*` call site — and
+    /// every test that uses one — is unaffected.
+    pub jwt_key: Option<JwtKeyMaterial>,
 }
 
 impl AppState {
@@ -238,7 +249,10 @@ impl AppState {
             .expect("unknown selector in resolved config");
         let aggregator = conflux_core::build_aggregator(
             &config.aggregator.value,
-            config.robust_byzantine_fraction.value,
+            conflux_core::AggregatorParams {
+                byzantine_fraction: config.robust_byzantine_fraction.value,
+                clip_radius: config.clip_radius.value,
+            },
         )
         .expect("unknown aggregator in resolved config");
         let privacy = conflux_privacy::build_privacy_mechanism(
@@ -261,8 +275,22 @@ impl AppState {
             round: AtomicU64::new(1),
             current_buffer: Mutex::new(None),
             push_sender,
+            jwt_key: None,
             config,
         }
+    }
+
+    /// Attaches the JWT public key `register()` verifies against.
+    ///
+    /// A consuming builder rather than another `new*` parameter: there
+    /// are already three constructors, all of which every existing
+    /// caller and test uses unchanged, and threading an
+    /// `Option<JwtKeyMaterial>` through all of them would churn every
+    /// one of those call sites to express something only `main.rs`
+    /// ever has.
+    pub fn with_jwt_key(mut self, jwt_key: Option<JwtKeyMaterial>) -> Self {
+        self.jwt_key = jwt_key;
+        self
     }
 }
 

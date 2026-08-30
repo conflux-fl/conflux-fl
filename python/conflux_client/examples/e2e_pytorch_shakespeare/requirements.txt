@@ -1,0 +1,6 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+# No torchvision: this harness's dataset is a 1 MB text file fetched over
+# plain HTTP, not a torchvision dataset.
+torch
+numpy

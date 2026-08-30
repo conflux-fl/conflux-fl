@@ -181,28 +181,77 @@ section.
 Everything resolves through `conflux-config`'s six-tier precedence chain
 and is logged at startup (ADR 0007). `main.rs` reads a focused subset of
 `Overrides` fields from their own env vars — enough to run
-`docs/E2E_TESTING.md`'s harness without any code changes — the rest
-still need a code change to `main.rs`'s `Overrides::default()` calls
-(spec §11 Open Item 2 stays open for the remaining fields; no config-file
-loader exists yet either).
+`docs/E2E_TESTING.md`'s harness without any code changes. Any field
+without an env var below can now be set from an experiment config file
+instead (see the next subsection); spec §11 Open Item 2's remaining
+half is profile files, not experiment files.
 
 | Variable | Overrides field |
 |---|---|
-| `CONFLUX_AGGREGATOR` | `aggregator` — `fedavg`, `krum`, `multi_krum`, `trimmed_mean`, `median` (Phase 11a) |
+| `CONFLUX_AGGREGATOR` | `aggregator` — `fedavg`, `krum`, `multi_krum`, `trimmed_mean`, `median`, `faba`, `bulyan`, `geometric_median`, `median_of_means`, `divide_and_conquer`, `foolsgold`, `centered_clipping` |
 | `CONFLUX_SELECTOR` | `selector` |
 | `CONFLUX_PRIVACY_MECHANISM` | `privacy_mechanism` (Phase 11b) |
 | `CONFLUX_ROBUST_BYZANTINE_FRACTION` | `robust_byzantine_fraction` — only read by `robust`-family aggregators |
+| `CONFLUX_CLIP_RADIUS` | `clip_radius` — Centered Clipping's `τ`, only read by `centered_clipping` (Phase 15) |
 | `CONFLUX_MIN_REPUTATION_SCORE` | `min_reputation_score` — see `docs/E2E_TESTING.md`'s "Real findings" for why you might want this low when testing a `robust` aggregator specifically |
 | `CONFLUX_QUORUM` | `quorum` |
 | `CONFLUX_ROUND_TIMEOUT_SECS` | `round_timeout_secs` |
 | `CONFLUX_CLIP_NORM` | `clip_norm` |
 | `CONFLUX_NOISE_MULTIPLIER` | `noise_multiplier` |
 | `CONFLUX_INITIAL_WEIGHTS_DIM` | not an `Overrides` field — the dimension of the server's placeholder initial checkpoint (`vec![0.0f32; N]`), which has to match whatever real model a deployment trains (default `4`) |
+| `CONFLUX_JWT_PUBLIC_KEY_PATH` | not an `Overrides` field — a PEM public key (RSA → RS256, ECDSA → ES256) that `register()` verifies `auth_token` against when `auth = jwt` (Phase 16). Required in production for the three topologies that default to `jwt`; research warns and skips verification without it |
+| `CONFLUX_EXPERIMENT_CONFIG_PATH` | not an `Overrides` field — a TOML file of experiment-level overrides (see below) |
 | `CONFLUX_GRPC_ADDR` / `CONFLUX_HTTP_ADDR` | not `Overrides` fields — override the `FlTransport` gRPC and HTTP admin listen addresses (default `127.0.0.1:50051` / `127.0.0.1:8080`). Needed to reach the admin API from a different container — see `docs/WEB_APP_INTEGRATION.md`. Defaults stay loopback-only since the admin API has no auth of its own; bind wider deliberately, not by habit |
 
 Everything else (`require_node_auth`, `target_epsilon`, `seed_mode`,
 ...) still resolves correctly from topology/mode profiles and builtin
-fallbacks, just isn't overridable from an env var yet.
+fallbacks, and can be set from an experiment config file.
+
+### Experiment config file (Phase 20)
+
+Set `CONFLUX_EXPERIMENT_CONFIG_PATH` to a TOML file and every
+`Overrides` field becomes settable, not just the subset with env vars:
+
+```toml
+# experiment.toml — flat keys named exactly like Overrides' fields.
+# Any subset; anything absent falls through to the mode profile,
+# topology profile, or builtin fallback exactly as before.
+aggregator = "centered_clipping"
+clip_radius = 4.0
+round_timeout_secs = 120
+auth = "mtls"
+accounting_scope = "per_client"
+```
+
+```bash
+CONFLUX_EXPERIMENT_CONFIG_PATH=./experiment.toml cargo run -p conflux-server
+```
+
+Startup then logs each of those values with the file's real path as its
+source:
+
+```
+[config] aggregator = centered_clipping  (source: experiment file "./experiment.toml")
+```
+
+Three things worth knowing:
+
+- **Precedence is unchanged.** The file sits in the tier it always has:
+  below env vars and CLI, above the mode and topology profiles. An env
+  var still wins over the same key in the file.
+- **Enum-valued keys use the same spelling the startup log prints** —
+  `auth = "mtls"`, `connection_mode = "push"`, `accounting_scope =
+  "per_client"`. There is no second vocabulary to learn, and a test
+  enforces that there never will be.
+- **A typo is an error, not a shrug.** An unrecognized key refuses the
+  file and lists the valid ones, rather than being silently ignored and
+  leaving you with a run that quietly used defaults. So is a missing
+  file, or a value of the wrong type.
+
+Profile files — topology/mode profiles themselves defined in TOML with
+`inherits`-based extension (spec §4.1) — are deliberately **not** part
+of this; they remain hardcoded Rust. See
+`docs/phases/phase-20-config-file-parsing.md`'s "out of scope" section.
 
 Example: run the server as a `cross_silo` production deployment with
 verbose logging:

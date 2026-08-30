@@ -30,7 +30,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+# Phase 17: seeding the client-side transform in the composition test.
+rand = "0.10"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 rcgen = "0.14"
 sha2 = "0.10"
+# Phase 16: signing real JWTs in tests. The server itself only ever
+# verifies — an `EncodingKey` exists nowhere outside these tests.
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+serde = { version = "1", features = ["derive"] }

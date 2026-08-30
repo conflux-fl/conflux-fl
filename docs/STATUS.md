@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-08-26, Phase 14 (`PerClient` epsilon accounting) shipped — first of the seven ready-to-build Part B items; `docs/CLI_DESIGN.md` (a `cflux`/`cflux-dev` CLI proposal, full comparison against `flwr`) added as a new planning doc
+Last updated: 2026-08-31 — **Part B complete (all six phase briefs) and Part A complete (all four research items)**. 260 → 343 tests. Four new experiments (2.7–2.9, 3.1/3.2), a new attack, a new aggregator, a new dataset harness; three of this document's own prior conclusions revised by measurement.
 
 ## Done
 - [x] Git repo initialized
@@ -860,6 +860,28 @@ Last updated: 2026-08-26, Phase 14 (`PerClient` epsilon accounting) shipped — 
   (11 new); `cargo fmt` and `cargo clippy --workspace --all-targets`
   both clean.
 
+## Research-line entry point
+
+The DSS research now has its own harness (scaffolded 2026-08-31 with the
+`research-harness` skill, `.claude/skills/research-harness/`):
+
+- [`docs/research/AGENT.md`](research/AGENT.md) — entry point: what the
+  project is, where each kind of context actually lives, how to run an
+  experiment, the constraints, and a self-check protocol.
+- [`docs/research/PROGRESS.json`](research/PROGRESS.json) — session
+  handoff state, including a `conclusions_overturned_by_measurement`
+  list.
+- [`docs/research/tasks.json`](research/tasks.json) — 10 atomic tasks,
+  each with a `done_when`.
+- [`docs/research/BASELINES.md`](research/BASELINES.md) — every reference
+  number consolidated, each copied from a named `results/*.summary.csv`.
+
+Deliberately *not* created: `EXPERIMENT_LOG.md`, `LITERATURE.md`,
+`DECISIONS.md`, `RESEARCH_PLAN.md`, `ARCHITECTURE.md`. All five already
+exist as sections of `temporal-consistency-aggregation.md`, the ADRs, or
+`docs/ARCHITECTURE.md`; duplicating them into thinner files would
+produce drift, not clarity. `AGENT.md` maps each one to where it lives.
+
 ## In progress
 (none)
 
@@ -871,31 +893,77 @@ temporal-fairness-under-attack experiment. What remains, per the user's
 own combined task list plus the 2026-08-24 novelty-positioning follow-up:
 
 **Research (Part A)**
-1. **Fix §5.8's numerical bug** (route to the unweighted-mean fallback
-   when `weight_sum` is below a small epsilon, e.g. `1e-4 * n`, not only
-   exactly `0.0`) and re-run Experiments 2.6 (§5.7) and the joint
-   diagnostics (§5.9) to see whether it shortens or removes the
-   transient false-positive window both share a root cause with —
-   priority order per the doc's own "Recommended order" (§8): cheap,
-   mechanical, and worth doing before more design work sits on top of a
-   known bug.
-2. **Fix DSS's Finding 3** (combine step should blend the base method's
-   own selection into the final weights, not just measure deviation
-   against its output) and re-run Experiments 2.4/2.6 to confirm — OR
-   scope DSS to `fedavg`-only use until that redesign happens (now
-   confirmed in two independent scenarios, §5.5 and §5.7).
-3. **A harder synthetic collusion model** (correlated but non-identical
-   Sybils) — §5.6's ablation used identical-submission Sybils, which
-   can't test whether the collusion signal adds independent value beyond
-   stability alone; a harder model could.
-4. **CIFAR-10 / FEMNIST / Shakespeare dataset harnesses** — not started.
-   Deliberately last per the original plan (expensive relative to what
-   they'd add), and now more valuable once 1–3 narrow DSS's remaining
-   open questions first.
+1. ~~**Fix §5.8's numerical bug**~~ — **done (§5.8.1)**, with a
+   different fix than the one prescribed and the opposite conclusion.
+   The suggested `1e-4 * n` epsilon fallback is *measurably wrong*: it
+   fires on a case with clean, correct discrimination (an existing unit
+   test's `weight_sum` is `1.38e-4` at `n = 4`) and replaces the honest
+   consensus with the sybil-dominated mean. The real defect was
+   catastrophic cancellation in `1 − collusion` computed in `f32`, fixed
+   by computing the collusion score in `f64`. **Fixing it did not fix
+   the symptom**: cross-seed variance halved (CV 1.03 → 0.43) so results
+   are now reproducible, but the solo-attacker failure remains and the
+   §5.9 joint transient window is *byte-identical*. The two did not
+   share a root cause after all. The real cause is §5.8's own point 1 —
+   an unstable shared reference — which is a design problem, not
+   arithmetic.
+2. ~~**Fix DSS's Finding 3**~~ — **done (§5.11, Experiment 2.8, 3,600
+   rows)**. DSS now applies its judgment *through* the base method
+   (drop fully-distrusted clients, scale survivors' `num_samples`, call
+   `base.aggregate`) instead of combining the raw batch itself. All nine
+   robust-base cells fixed: `dss_krum` vs `persistent_sybil` 16.99 →
+   0.297, `dss_krum` vs `scaling` 171.47 → 0.297 (a 577× regression,
+   gone), `dss_multi_krum` 16.99 → 0.173. The one configuration DSS
+   genuinely helps is untouched (`dss_fedavg` 1.175 → 1.178). Experiments
+   2.4 and 2.6 re-run and confirm. **§5.5's "DSS-on-`fedavg` only"
+   recommendation is withdrawn** — that existed solely because of this
+   defect.
+3. ~~**A harder synthetic collusion model**~~ — **done (§5.12,
+   Experiment 2.9, 1,800 rows)**. `CorrelatedSybilAttack` — colluders
+   sharing an objective but each with its own fixed offset, so they are
+   correlated, non-identical, and temporally *stable*
+   (`divergence = 0` reproduces `persistent_sybil` exactly, so it is a
+   strict generalization). **§5.6's open question is answered: the
+   collusion signal is not redundant.** Collusion-only catches these
+   (1.09) where stability-only misses them entirely (17.13, no better
+   than undefended `fedavg`) — ~15× apart, so §5.6's "numerically
+   identical" was an artifact of its attack model. Separately and
+   unplanned: **FoolsGold degrades 5.6× against non-identical colluders**
+   (1.35 → 7.54 → 9.93), a real limitation of the published method under
+   a threat model its own paper doesn't test, while DSS's
+   deviation-trace collusion signal holds at 1.09 — turning §6.5's
+   architectural distinction between the two into a measured one.
+4. ~~**CIFAR-10 / FEMNIST / Shakespeare dataset harnesses**~~ — **mostly
+   done**. CIFAR-10 already existed. New: `e2e_pytorch_shakespeare` — a
+   character-level GRU with **one client per speaking role**, so the
+   non-IID-ness is natural rather than a Dirichlet knob, and the task is
+   sequence modelling rather than a fourth image classifier (verified
+   end-to-end: 0.017 → 0.171 held-out accuracy over 5 rounds against a
+   0.204 centralized baseline, chance 1/65). `benchmark.py` gained an
+   `--attacks` dimension — the gap that actually blocked using these
+   harnesses for §5's questions rather than convergence demos.
+   **FEMNIST deliberately deferred**: writer identity is absent from
+   torchvision's EMNIST distribution, so building it from there would
+   produce another synthetic partition, defeating the point; a faithful
+   version needs LEAF's preprocessing over raw NIST SD19 (several GB).
 
-**Planning/design (Part B) — scoped 2026-08-23, all 10 topics have a
-planning document; implementation started 2026-08-26 (1 of 7 ready-to-build
-phase briefs shipped so far)**:
+   **The first real-data run already found something (§5.13).** On real
+   MNIST with a real 50,890-parameter MLP: `krum` (0.844) and
+   `trimmed_mean` (0.875) hold under attack where `fedavg` collapses
+   (0.884 → 0.163) — §5's central synthetic finding, reproduced. But
+   **Centered Clipping at its default `τ = 1.0` scores 0.078, worse than
+   no defense**, and a τ sweep (1 → 5 → 20 → 100) rises monotonically
+   toward FedAvg's own number with no optimum anywhere. §5.10 found a
+   genuine τ optimum at `dim = 3`; τ bounds an L2 norm in parameter
+   space, so it does not transfer across model sizes at all. The builtin
+   `clip_radius = 1.0` is a placeholder, not a shippable default.
+
+**Planning/design (Part B) — scoped 2026-08-23; implementation started
+2026-08-26 and completed 2026-08-30. All seven ready-to-build phase
+briefs are shipped.** What remains under Part B are the three items that
+never had a buildable brief — ADR 0005's Python SDK interface question,
+ADR 0011's trusted-reference sidecar, and ADR 0012's stateful-aggregator
+proto extension:
 - ~~[`docs/phases/phase-14-perclient-accounting.md`](phases/phase-14-perclient-accounting.md)~~
   — **shipped**, see the "Done" entry above.
   [`docs/adr/0006-global-epsilon-accounting.md`](adr/0006-global-epsilon-accounting.md)
@@ -909,30 +977,37 @@ phase briefs shipped so far)**:
   (new) — FLTrust/Zeno's server-training requirement vs. ADR 0004;
   recommends an optional sidecar process rather than a server-binary
   training dependency.
-- [`docs/phases/phase-15-centered-clipping.md`](phases/phase-15-centered-clipping.md)
-  — buildable now, no proto change needed, `temporal.rs`'s `Mutex`
-  pattern is the precedent.
+- ~~[`docs/phases/phase-15-centered-clipping.md`](phases/phase-15-centered-clipping.md)~~
+  — **shipped**. `centered_clipping` in the catalog; Experiment 2.7
+  (3,000 rows) placed it against the other cross-round methods and
+  measured its `τ` sensitivity.
 - [`docs/adr/0012-stateful-aggregator-and-proto-extension.md`](adr/0012-stateful-aggregator-and-proto-extension.md)
   (new) — the shared plumbing FedNova/SCAFFOLD/FedOpt all need: keeps
   `Aggregator::aggregate`'s `&self` signature, adds two `optional`
   `ClientDelta` fields additively.
-- [`docs/phases/phase-16-jwt-auth-verification.md`](phases/phase-16-jwt-auth-verification.md)
-  — mirrors Phase 9a's `resolve_server_tls` pattern; RS256/ES256 via
-  `jsonwebtoken`, orthogonal to Phase 8c's `SharedToken` allow-list check.
-- [`docs/phases/phase-17-client-side-privacy-transform.md`](phases/phase-17-client-side-privacy-transform.md)
-  — reuses `GaussianClippingPrivacy::transform` unchanged from
-  `conflux-node`, gated by a new `client_side_privacy_transform` toggle.
-- [`docs/phases/phase-18-push-mode-node.md`](phases/phase-18-push-mode-node.md)
-  — closes the gap where `cross_silo`'s own default configuration
-  (`push` + mTLS) can't currently run end-to-end.
-- [`docs/phases/phase-19-simd-aggregation.md`](phases/phase-19-simd-aggregation.md)
-  — the `wide` crate, one shared `accumulate_weighted` helper covering
-  every family member's combine step, with a criterion benchmark to
-  actually measure the claimed speedup rather than assume it.
-- [`docs/phases/phase-20-config-file-parsing.md`](phases/phase-20-config-file-parsing.md)
-  — the experiment-level half only (`resolve()`'s `file` parameter is
-  already fully plumbed and tested, just never fed a real parsed file);
-  profile-file `inherits` semantics explicitly deferred to a future
+- ~~[`docs/phases/phase-16-jwt-auth-verification.md`](phases/phase-16-jwt-auth-verification.md)~~
+  — **shipped**. RS256/ES256, algorithm pinned to the key (never the
+  token header), `sub` bound to the registering client, and a new
+  `DispatchError::Unauthenticated` so a bad credential is
+  distinguishable from an uninvited one.
+- ~~[`docs/phases/phase-17-client-side-privacy-transform.md`](phases/phase-17-client-side-privacy-transform.md)~~
+  — **shipped**, off by default. Chunks are reassembled before clipping
+  (clipping per chunk would make the guarantee depend on fragmentation)
+  and the transform runs once before the retry loop, not per attempt.
+- ~~[`docs/phases/phase-18-push-mode-node.md`](phases/phase-18-push-mode-node.md)~~
+  — **shipped**. `cross_silo`'s own default posture (`push` + mTLS) now
+  runs end to end, tested together for the first time.
+- ~~[`docs/phases/phase-19-simd-aggregation.md`](phases/phase-19-simd-aggregation.md)~~
+  — **shipped, with the opposite result to the one it assumed.** The
+  benchmark it insisted on is what killed it: explicit SIMD measured
+  *slower* at every realistic model dimension, because the loop is
+  memory-bandwidth-bound and LLVM already auto-vectorizes it. The
+  shared-helper refactor (8 duplicated loops → 1) shipped; the SIMD
+  didn't. The benchmark stays as the standing answer.
+- ~~[`docs/phases/phase-20-config-file-parsing.md`](phases/phase-20-config-file-parsing.md)~~
+  — **shipped** (experiment-file half). `CONFLUX_EXPERIMENT_CONFIG_PATH`,
+  flat TOML, `deny_unknown_fields` so a typo'd key is refused rather
+  than silently dropped. Profile-file `inherits` remains a future
   Phase 21.
 
 `docs/AGGREGATION_LANDSCAPE.md` gained a matching "Update (2026-08-23,
@@ -965,17 +1040,38 @@ phase-sized feature also listed in Part B above, not a small fix.
   than a single `tonic`+`prost` pairing — just tonic 0.14's naming.
 - Spec §3's promised per-topology numeric defaults (beyond
   `round_timeout_secs = 300` for `cross_device`) are Phase 1 placeholders.
-- Spec §11 Open Item 2: backend selection is now resolved (Phase 8a,
+- Spec §11 Open Item 2: backend selection is resolved (Phase 8a,
   env-var driven, deliberately outside `conflux-config`'s `Overrides` —
-  see that phase brief's scope note). Config-*file* parsing (vs. today's
-  env-var/CLI-only `Overrides` sources) is still unresolved.
+  see that phase brief's scope note). **Experiment-file** parsing is
+  now done too (Phase 20 — `CONFLUX_EXPERIMENT_CONFIG_PATH`, flat TOML
+  into the `file` tier `resolve()` always had). **Profile-file**
+  parsing — topology/mode profiles themselves defined in TOML with
+  `inherits` extension, spec §4.1 — remains open, tracked as a future
+  Phase 21.
 - `auth`'s values are lowercase `mtls`/`jwt`.
 - `conflux-privacy`'s `RdpAccountant` computes non-subsampled RDP — a
   conservative upper bound.
-- `conflux-net`/`conflux-node` don't implement JWT auth (mTLS now done,
-  7e), client-side privacy transform, or push mode in `conflux-node`.
+- `conflux-net`/`conflux-node`'s auth and privacy gaps are closed: mTLS
+  (7e), JWT verification (Phase 16 — RS256/ES256, `sub` bound to the
+  registering client), push mode in `conflux-node` (Phase 18 —
+  `cross_silo`'s own default posture, `push` + mTLS, now runs end to
+  end), and the client-side privacy transform (Phase 17 —
+  `client_side_privacy_transform`, off by default).
+- **New deviation (Phase 17)**: `conflux-node` now depends on
+  `conflux-privacy` (and transitively `conflux-config`), not just
+  `conflux-proto`/`conflux-net` as spec §2 describes. Deliberate —
+  spec §8's sequence diagram requires the node to apply the mechanism,
+  which is impossible without reaching it. `conflux-node` still calls
+  no `conflux-config` API directly.
 - `conflux-core`'s weighted-sum accumulation is a plain loop, not SIMD
-  intrinsics.
+  intrinsics — and this is now a **measured decision**, not an
+  outstanding gap (Phase 19). Explicit `wide`-based `f32x8` SIMD was
+  built and benchmarked against it: slower at every realistic model
+  dimension (1.21 µs vs 1.35 µs at dim=10k; 145 µs vs 154 µs at
+  dim=1M), because the loop is memory-bandwidth-bound and LLVM
+  already auto-vectorizes it. The eight duplicated inline loops were
+  still consolidated into one shared helper. `cargo bench -p
+  conflux-core` reproduces the comparison.
 - The `RoundBuffer` lost-update race is closed (Phase 10a).
 - `conflux-config`'s `inventory` registry is wired for `aggregator`
   (`fedavg`/`krum`/`multi_krum`/`trimmed_mean`/`median`, Phase 10b/11a),

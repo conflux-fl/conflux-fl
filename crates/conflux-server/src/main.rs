@@ -48,6 +48,7 @@
 //! `CONFLUX_MIN_REPUTATION_SCORE` still controls the threshold used
 //! *when* this is explicitly turned on.
 
+use conflux_net::jwt::JwtKeyMaterial;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -56,7 +57,7 @@ use conflux_net::FlTransportService;
 use conflux_proto::fl_transport_server::FlTransportServer;
 use conflux_server::{
     AccountingBackend, AppState, BackendSelection, RegistryBackend, StoreBackend, TlsMaterial,
-    resolve_server_tls, run_round,
+    resolve_server_tls, run_round, validate_jwt_startup,
 };
 
 #[tokio::main]
@@ -76,10 +77,26 @@ async fn main() {
         _ => Mode::Research,
     };
 
+    // Phase 20: an optional experiment-level config file. Unset behaves
+    // exactly as before — `None` into the tier that has always been
+    // there. Set, it is a hard failure if unreadable: an operator who
+    // named a config file meant it, and silently continuing with
+    // defaults would produce a run whose logged provenance is correct
+    // and whose configuration is not what anyone asked for.
+    let experiment_file = std::env::var("CONFLUX_EXPERIMENT_CONFIG_PATH").ok();
+    let file_overrides = experiment_file.as_ref().map(|path| {
+        conflux_config::load_experiment_file(std::path::Path::new(path))
+            .unwrap_or_else(|e| panic!("{e}"))
+    });
+    let file_tier = match (&experiment_file, &file_overrides) {
+        (Some(path), Some(overrides)) => Some((path.as_str(), overrides)),
+        _ => None,
+    };
+
     let config = conflux_config::resolve(
         topology,
         mode,
-        None,
+        file_tier,
         &overrides_from_env(),
         &Overrides::default(),
     )
@@ -119,12 +136,45 @@ async fn main() {
                 .expect("CONFLUX_INITIAL_WEIGHTS_DIM must be a positive integer")
         })
         .unwrap_or(4);
+    // Phase 16: the `auth = jwt` counterpart to the mTLS check above.
+    // Loaded and validated *before* binding, so a production JWT
+    // deployment with no key to verify against never starts — the same
+    // fail-fast discipline, for the other three topologies' default
+    // auth mode.
+    let jwt_key = jwt_key_from_env();
+    validate_jwt_startup(mode, config.auth.value, jwt_key.as_ref())
+        .expect("auth enforcement failed");
+    match (&jwt_key, config.auth.value) {
+        (Some(key), conflux_config::AuthMode::Jwt) => {
+            tracing::info!(
+                algorithm = key.algorithm(),
+                "auth = jwt; every register() will be verified against the configured public key"
+            );
+        }
+        (None, conflux_config::AuthMode::Jwt) => {
+            tracing::warn!(
+                "auth resolved to jwt but no CONFLUX_JWT_PUBLIC_KEY_PATH was configured; \
+                 auth_token will not be verified (research mode only — production would \
+                 have refused to start)"
+            );
+        }
+        // A key supplied under `auth = mtls` is configuration that does
+        // nothing. Said out loud rather than ignored (ADR 0007): the
+        // operator plainly intended it to be used.
+        (Some(_), _) => tracing::warn!(
+            "CONFLUX_JWT_PUBLIC_KEY_PATH is set but auth resolved to mtls; \
+             no token will be verified"
+        ),
+        (None, _) => {}
+    }
+
     let initial_weights = vec![0.0f32; initial_weights_dim];
     let backends = backend_selection_from_env();
     let state = Arc::new(
         AppState::connect(config, mode, initial_weights, backends)
             .await
-            .expect("backend connection failed"),
+            .expect("backend connection failed")
+            .with_jwt_key(jwt_key),
     );
 
     let grpc_addr: SocketAddr = std::env::var("CONFLUX_GRPC_ADDR")
@@ -209,6 +259,7 @@ fn overrides_from_env() -> Overrides {
         selector: std::env::var("CONFLUX_SELECTOR").ok(),
         privacy_mechanism: std::env::var("CONFLUX_PRIVACY_MECHANISM").ok(),
         robust_byzantine_fraction: var("CONFLUX_ROBUST_BYZANTINE_FRACTION"),
+        clip_radius: var("CONFLUX_CLIP_RADIUS"),
         min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
         reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),
         quorum: var("CONFLUX_QUORUM"),
@@ -287,4 +338,24 @@ fn tls_material_from_env() -> Option<TlsMaterial> {
             panic!("failed to read CONFLUX_TLS_CLIENT_CA_PATH ({client_ca_path}): {e}")
         }),
     })
+}
+
+/// Reads `CONFLUX_JWT_PUBLIC_KEY_PATH` (a PEM public key) into
+/// `JwtKeyMaterial`. `None` when unset — `validate_jwt_startup` is what
+/// turns that into a startup failure when it matters (`auth = jwt` and
+/// `mode = production`), the same division of labor
+/// `tls_material_from_env` has with `resolve_server_tls`.
+///
+/// A path that is set but unreadable, or readable but not a usable key,
+/// panics here rather than degrading to `None`: an operator who named a
+/// key file meant it, and silently continuing unauthenticated is the one
+/// outcome nobody wants from a misconfigured auth setting.
+fn jwt_key_from_env() -> Option<JwtKeyMaterial> {
+    let path = std::env::var("CONFLUX_JWT_PUBLIC_KEY_PATH").ok()?;
+    let pem = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("failed to read CONFLUX_JWT_PUBLIC_KEY_PATH ({path}): {e}"));
+    Some(
+        JwtKeyMaterial::from_public_key_pem(&pem)
+            .unwrap_or_else(|e| panic!("CONFLUX_JWT_PUBLIC_KEY_PATH ({path}) is unusable: {e}")),
+    )
 }

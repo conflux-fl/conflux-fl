@@ -67,7 +67,7 @@ was pointing at.
 | **FABA** | Xia, Zhang, Yang, Shao & Yin, 2019 | `UpdateFilter` — iteratively drops the update farthest from the running mean, like a simpler Krum | Not built |
 | **Divide-and-Conquer (DnC)** | Shejwalkar & Houmansadr, 2021 | `UpdateFilter`, but the filtering *logic* (random coordinate subsampling + top-singular-eigenvector outlier scoring) is spectral, not distance-based — the trait shape fits, the internals are a genuinely different algorithm family from Krum's pairwise distances | Not built |
 | **Geometric Median / RFA** | Pillutla, Kakade & Harchaoui, 2019/2022 | **Doesn't cleanly fit either existing trait.** It's a *whole-vector* robust statistic (Weiszfeld's algorithm, jointly over all coordinates) — `CoordinateWiseRobustStatistic` is explicitly per-coordinate-independent, which loses the cross-coordinate structure geometric median preserves. Needs a third trait shape, e.g. `RobustVectorStatistic: fn combine(&self, updates: &[Vec<f32>]) -> Vec<f32>` | Not built — flagged as a real gap in the current two-trait design |
-| **Centered Clipping (CClip)** | Karimireddy, He & Jaggi, 2021 | Doesn't fit either trait either — clips each update around a **server-held reference vector that persists and updates across rounds** (not recomputed fresh from each round's batch alone). Closer in shape to a stateful transform than either existing family member | Not built — needs cross-round state, see Category 4 |
+| **Centered Clipping (CClip)** | Karimireddy, He & Jaggi, 2021 | Doesn't fit either trait either — clips each update around a **server-held reference vector that persists and updates across rounds** (not recomputed fresh from each round's batch alone). Closer in shape to a stateful transform than either existing family member | **Shipped** (Phase 15) — `CenteredClippingAggregator` in `temporal.rs`, config name `centered_clipping`; used `temporal.rs`'s cross-round state pattern, no new trait needed |
 
 All nine assume the batch handed to them is representative. Pre-filtering
 that batch with a scorer whose own reference can be skewed by the same
@@ -346,3 +346,38 @@ None of these four are implemented yet — each remains a proposal
 awaiting project-owner review, per those documents' own "Status" lines —
 but the analysis-to-scoping gap this table's rows described is now
 closed for every entry that had one.
+
+## Update (2026-08-30, fifth) — Centered Clipping shipped
+
+Row 10 is no longer a gap. `CenteredClippingAggregator`
+(`crates/conflux-core/src/temporal.rs`, Phase 15) is registered as
+`centered_clipping` and selectable from config like every other shipped
+method.
+
+Two things this row's original analysis got right, confirmed by
+building it:
+
+- **It needed no new trait.** The row predicted CClip "doesn't fit
+  either trait" and would need a shape of its own. In the event, it
+  needed *no* family trait at all — it implements `Aggregator` directly,
+  the way `FoolsGoldAggregator` and `DssAggregator` already do. The
+  `temporal` family is not a trait, it is a place where methods that
+  own cross-round state live; that was the right precedent to point at.
+- **It needed no `conflux-proto` change**, as the phase brief predicted,
+  so it landed independently of ADR 0012.
+
+One thing worth adding to the row's characterization, learned from
+measuring it (`docs/research/temporal-consistency-aggregation.md`
+§5.10): CClip is the only method in this table whose single tunable
+bounds the **attack** and the **convergence rate** with the same
+number. Every selection-based method's parameter (`byzantine_fraction`)
+trades false positives against false negatives; `τ` instead trades
+safety against speed, which is a different kind of knob and behaves
+differently under mis-tuning — mis-tuned low it does not become
+*wrong*, it becomes *slow*. That is a genuine robustness property (its
+worst case is bounded by construction rather than by an assumed
+attacker count) and a genuine operational cost, and it is not visible
+from the taxonomy alone.
+
+Remaining "Not built" rows are unchanged: FLTrust/Zeno (ADR 0011) and
+FedNova/FedOpt/SCAFFOLD (ADR 0012).

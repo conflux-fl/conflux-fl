@@ -1,19 +1,33 @@
-//! Contribution scoring, Byzantine detection.
+//! Contribution scoring for federated learning updates: measures how well
+//! each client's submitted update agrees with a reference direction, and
+//! filters out submissions that fall below a configured similarity
+//! threshold before aggregation.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §8.
+//! This crate is entirely opt-in and has no side effects of its own — a
+//! caller decides whether to build a reference vector and call
+//! [`filter_by_threshold`] at all, or to hand every submitted update
+//! straight to the aggregator unfiltered. When it is used, it sits between
+//! a privacy transform (if any) and aggregation: a caller scores and
+//! filters the already-decoded, already-privatized updates, then passes
+//! only the surviving client ids' updates on to the aggregator.
 
-/// Scores one client's update against a reference direction — the input to
-/// Byzantine-resilience filtering. Spec §8: this sits between
-/// `conflux-privacy`'s server-side transform and `conflux-core`'s
-/// aggregation.
+/// Scores one client's update against a reference direction (typically the
+/// mean, or some other consensus signal, computed across the round's
+/// submissions). Higher means more similar to that reference; the exact
+/// scale and sign depend on the implementation. Scoring alone rejects
+/// nothing — it's the input to threshold-based filtering, below.
 pub trait ContributionScorer: Send + Sync {
     fn score(&self, update: &[f32], reference: &[f32]) -> f32;
 }
 
-/// Cosine similarity between an update and the round's reference direction
-/// (e.g. the mean of all updates) — plan §10's Phase 2 member. An update
-/// pointing in a very different direction from consensus scores low;
-/// that's the Byzantine/outlier signal.
+/// Cosine similarity between an update and the reference direction: `1.0`
+/// for identical direction, `0.0` for orthogonal, `-1.0` for opposite —
+/// the full range for any two non-zero vectors whose entries are all
+/// finite. An update pointing in a very different direction from the
+/// reference scores low, which is the signal a caller can use to catch
+/// outlier or adversarial submissions. Returns `0.0` rather than
+/// dividing by zero if either vector is the zero vector, since cosine
+/// similarity is undefined there.
 pub struct CosineScorer;
 
 impl ContributionScorer for CosineScorer {
@@ -32,10 +46,25 @@ fn l2_norm(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 
-/// Filters `updates` against `reference` using `scorer`, keeping only ids
-/// whose score is `>= min_score`. Logs every rejection — ADR 0007:
-/// "`conflux-reputation` logs every rejected update with its score and
-/// threshold."
+/// Filters `updates` against `reference` using `scorer`, keeping only the
+/// ids whose score is `>= min_score`. Every rejected update is logged
+/// (client id, score, and the threshold it missed) via `tracing::warn!`,
+/// so a rejection is always visible in the server's logs rather than
+/// silently dropped.
+///
+/// This function trusts `reference` and every entry in `updates` to
+/// already be well-formed — it only compares scores against a threshold,
+/// it doesn't validate its inputs. That matters for `NaN`: if `reference`
+/// or an update contains one, the resulting score is `NaN`, and `NaN >=
+/// min_score` is `false` for every `min_score`, including `-1.0` (cosine
+/// similarity's theoretical floor) — so a single `NaN` score can never
+/// pass this filter, no matter how permissive the threshold. That's a
+/// safe outcome for one corrupted score, but it does not protect a
+/// `reference` vector that is already `NaN` in some coordinate before it
+/// gets here: every update scored against a `NaN` reference comes back
+/// `NaN` too, which rejects every client that round, not just whichever
+/// one produced the bad value originally. Keeping `reference` itself
+/// built from already-finite inputs is what avoids that failure mode.
 pub fn filter_by_threshold(
     updates: &[(String, Vec<f32>)],
     reference: &[f32],
@@ -126,5 +155,51 @@ mod tests {
         let passed = filter_by_threshold(&updates, &reference, &CosineScorer, 1.0);
 
         assert_eq!(passed, vec!["aligned".to_string()]);
+    }
+
+    #[test]
+    fn filter_with_empty_updates_returns_empty_without_panicking() {
+        let reference = vec![1.0, 0.0];
+        let updates: Vec<(String, Vec<f32>)> = Vec::new();
+
+        let passed = filter_by_threshold(&updates, &reference, &CosineScorer, -1.0);
+
+        assert!(passed.is_empty());
+    }
+
+    #[test]
+    fn a_nan_update_scores_nan_and_is_rejected_even_at_the_lowest_threshold() {
+        // -1.0 is cosine similarity's theoretical floor -- the most
+        // permissive threshold a caller could configure. A NaN score must
+        // still fail `score >= min_score` here, since a comparison against
+        // NaN is always false, regardless of which operand is NaN or what
+        // the threshold is.
+        let reference = vec![1.0, 0.0];
+        let updates = vec![("broken".to_string(), vec![f32::NAN, 0.0])];
+
+        let score = CosineScorer.score(&updates[0].1, &reference);
+        assert!(score.is_nan());
+
+        let passed = filter_by_threshold(&updates, &reference, &CosineScorer, -1.0);
+        assert!(passed.is_empty());
+    }
+
+    #[test]
+    fn a_nan_reference_poisons_every_update_scored_against_it() {
+        // `filter_by_threshold` trusts its `reference` argument -- it
+        // doesn't validate it. If a caller builds `reference` from
+        // unvalidated inputs (e.g. an unfiltered batch mean) and one
+        // client's submission was non-finite, every other client's
+        // otherwise-honest update now scores NaN too, and all of them are
+        // rejected together. This documents that real failure mode rather
+        // than asserting it away: the fix belongs upstream, in how the
+        // caller builds `reference` in the first place, not in this
+        // function.
+        let poisoned_reference = vec![f32::NAN, 0.0];
+        let updates = vec![("honest".to_string(), vec![1.0, 0.0])];
+
+        let passed = filter_by_threshold(&updates, &poisoned_reference, &CosineScorer, -1.0);
+
+        assert!(passed.is_empty());
     }
 }

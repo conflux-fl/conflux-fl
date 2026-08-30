@@ -1,6 +1,14 @@
 //! Client lifecycle (register/heartbeat/evict).
 //!
-//! See `docs/spec/conflux-spec-v1.md` §8.
+//! Before a round can pick clients to train on, the server needs to know
+//! which clients currently exist and are still alive. This crate is the
+//! source of truth for that: a client calls `register` once, then
+//! `heartbeat` periodically to prove it's still around; anything that
+//! stops heartbeating past a TTL drops out of `active_clients` on the
+//! next sweep. Two backends ship behind the same `Registry` trait —
+//! `InMemoryRegistry` for a single process, `RedisRegistry` for a
+//! deployment that needs the registry durable across restarts and shared
+//! across multiple server processes.
 
 mod any_node_allowlist;
 mod any_registry;
@@ -46,11 +54,11 @@ pub enum RegistryError {
     AlreadyRegistered(ClientId),
     #[error("client {0} is not registered")]
     NotRegistered(ClientId),
-    /// Phase 1's `InMemoryRegistry` never needed this — an in-process
-    /// `HashMap` doesn't fail. `RedisRegistry` (Phase 7) is the first
-    /// backend to actually do I/O, so the trait needed a variant for "the
-    /// backend itself is unreachable/erroring," distinct from the two
-    /// business-logic errors above.
+    /// An in-process `HashMap` (`InMemoryRegistry`) never fails, but a
+    /// backend that does real I/O (`RedisRegistry`) can — a connection
+    /// drop, a timeout, a Redis error reply. This variant is how a caller
+    /// tells "the backend itself is unreachable/erroring" apart from the
+    /// two business-logic errors above.
     #[error("registry backend error: {0}")]
     Backend(String),
 }
@@ -66,13 +74,12 @@ pub struct ClientInfo {
 ///
 /// A `trait` (rather than a concrete struct) so `conflux-server` can depend
 /// on client-lifecycle behavior without committing to a storage backend:
-/// `InMemoryRegistry` here, `RedisRegistry` in Phase 7
-/// (`docs/spec/conflux-spec-v1.md` §10) — same interface, different
-/// durability/scaling tradeoffs.
+/// `InMemoryRegistry` here, `RedisRegistry` for a durable, multi-process
+/// deployment — same interface, different durability/scaling tradeoffs.
 ///
 /// `Send + Sync` because `conflux-server` shares one registry across
-/// concurrently handled requests (Phase 5) — every implementation must be
-/// safe to call from multiple threads/tasks at once.
+/// concurrently handled requests — every implementation must be safe to
+/// call from multiple threads/tasks at once.
 ///
 /// Methods are `async fn` (stable native syntax, no `async-trait` needed)
 /// because a real backend does network I/O — `InMemoryRegistry`'s bodies
@@ -98,9 +105,9 @@ pub trait Registry: Send + Sync {
     fn active_clients(&self) -> impl Future<Output = Result<Vec<ClientId>, RegistryError>> + Send;
 }
 
-/// The only `Registry` this phase ships — a mutex-guarded in-memory map.
-/// `RedisRegistry` (durable across restarts, shared across processes) is
-/// Phase 7.
+/// The simplest `Registry` implementation — a mutex-guarded in-memory map.
+/// Everything is lost on restart and nothing is shared across processes;
+/// `RedisRegistry` is the backend for when either of those matters.
 ///
 /// `Mutex` rather than `RwLock`: every operation here, including
 /// `active_clients`, is a quick map scan/mutation — there's no read-heavy
@@ -224,6 +231,45 @@ mod tests {
         registry.register(id("c1")).await.unwrap();
 
         registry.evict_expired(Duration::from_secs(60)).await;
+
+        assert_eq!(registry.active_clients().await.unwrap(), vec![id("c1")]);
+    }
+
+    /// A client evicted for going stale isn't permanently blocked from
+    /// this id — `AlreadyRegistered` should only fire while the id is
+    /// still tracked. If eviction only cleared some side table and left
+    /// the id "reserved," a client that dropped off and came back would
+    /// be locked out under its own name forever.
+    #[tokio::test]
+    async fn client_can_re_register_after_being_evicted() {
+        let registry = InMemoryRegistry::new();
+        registry.register(id("c1")).await.unwrap();
+
+        registry.evict_expired(Duration::from_millis(0)).await;
+        assert_eq!(
+            registry.active_clients().await.unwrap(),
+            Vec::<ClientId>::new()
+        );
+
+        registry.register(id("c1")).await.unwrap();
+        assert_eq!(registry.active_clients().await.unwrap(), vec![id("c1")]);
+    }
+
+    /// A heartbeat sent right before a sweep must actually postpone
+    /// eviction, not just get recorded and ignored — otherwise a client
+    /// heartbeating on schedule could still get evicted out from under it
+    /// by a sweep that raced ahead of the liveness update reaching it.
+    #[tokio::test]
+    async fn heartbeat_resets_the_eviction_clock() {
+        let registry = InMemoryRegistry::new();
+        registry.register(id("c1")).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        registry.heartbeat(&id("c1")).await.unwrap();
+
+        // Without the heartbeat above, 30ms of age would already exceed
+        // this 20ms TTL and the sweep below would evict it.
+        registry.evict_expired(Duration::from_millis(20)).await;
 
         assert_eq!(registry.active_clients().await.unwrap(), vec![id("c1")]);
     }

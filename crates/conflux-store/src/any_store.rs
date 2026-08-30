@@ -1,15 +1,21 @@
 //! `AnyStore` — picks between `Store` backends at runtime.
 //!
-//! An enum, not `Arc<dyn Store>`, for the same reason
-//! `conflux-registry::AnyRegistry` is: `Store`'s methods are native
-//! `async fn` in a trait, not dyn-compatible without extra boxing. See
-//! `docs/phases/phase-8a-backend-selection.md`.
+//! An enum, not `Arc<dyn Store>` — for the same reason
+//! `conflux-registry::AnyRegistry` is an enum too: `Store`'s methods are
+//! native `async fn` in a trait, which isn't object-safe without extra
+//! boxing, so `dyn Store` isn't the easy option here. Wrapping each
+//! concrete backend in an enum variant and matching on `self` in every
+//! trait method gives the same "one type, several possible backends,
+//! chosen at runtime" behavior a `Box<dyn Store>` would, without needing
+//! object safety at all — the cost is one match arm per variant per
+//! method, which stays manageable at three backends.
 //!
-//! `FileStore` (Phase 2a) deliberately isn't a variant here —
-//! `conflux-server`'s `AppState` has never wired it up as a runtime
-//! backend choice (it predates `AppState` needing more than one), so
-//! there's nothing selecting it to unify. It stays available as a plain
-//! `Store` impl for standalone use.
+//! `FileStore` deliberately isn't a variant here — `conflux-server`'s
+//! `AppState` only ever selects between in-memory, Postgres, and S3 as
+//! its runtime store backend, so there's nothing selecting `FileStore`
+//! to unify. It stays available as a plain `Store` impl for standalone
+//! use (e.g. a local research run that wants durability across restarts
+//! without a database).
 
 use crate::{InMemoryStore, PostgresStore, S3Store, Store, StoreError};
 

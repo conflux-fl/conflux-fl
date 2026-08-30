@@ -1,7 +1,7 @@
 //! `AnyNodeAllowlist` — picks between `NodeAllowlist` backends at runtime,
-//! same delegation pattern as `AnyRegistry`/`AnyStore` (Phase 8a) and for
-//! the same reason: `NodeAllowlist`'s methods are native `async fn` in a
-//! trait, not dyn-compatible without extra boxing.
+//! same delegation pattern as `AnyRegistry` (and `conflux-store`'s
+//! `AnyStore`) and for the same reason: `NodeAllowlist`'s methods are
+//! native `async fn` in a trait, not dyn-compatible without extra boxing.
 
 use crate::{
     ClientId, InMemoryNodeAllowlist, NodeAllowlist, NodeAuthError, NodeIdentity, RedisNodeAllowlist,

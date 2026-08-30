@@ -1,11 +1,9 @@
 //! `PostgresStore` — a `Store` backend durable across restarts, without
-//! `FileStore`'s one-file-per-round sprawl. Also implements
-//! `PrivacyRoundLog` (Phase 7d) — the actual fix for the gap Phase 7b
-//! flagged and didn't close: `RdpAccountant`'s cumulative epsilon used to
-//! live only in `conflux-server`'s in-process state and reset on restart.
-//!
-//! See `docs/phases/phase-7b-postgres-store.md` and
-//! `docs/phases/phase-7d-accountant-persistence.md`.
+//! `FileStore`'s one-file-per-round sprawl on local disk. Also implements
+//! `PrivacyRoundLog`: without it, an `RdpAccountant`'s cumulative epsilon
+//! lives only in `conflux-server`'s in-process state and silently resets
+//! to zero on restart, which is a real problem for the "how much privacy
+//! budget is left" guarantee the accountant exists to enforce.
 
 use tokio_postgres::{Client, NoTls};
 
@@ -17,29 +15,30 @@ pub struct PostgresStore {
     client: Client,
     table: String,
     /// Derived from `table`, not a second constructor parameter — this
-    /// way the same per-test-unique table name Phase 7b's tests already
-    /// pass gives both tables the same isolation for free.
+    /// way, callers that already pass a per-test or per-deployment unique
+    /// `table` name get the same isolation for the privacy-round table
+    /// for free, with nothing extra to plumb through.
     privacy_rounds_table: String,
-    /// Phase 14: same derivation pattern as `privacy_rounds_table`, one
-    /// more table for per-client history.
+    /// Same derivation pattern as `privacy_rounds_table`, one more table
+    /// for per-client round history (used by `PerClient` privacy
+    /// accounting).
     client_privacy_rounds_table: String,
 }
 
 impl PostgresStore {
     /// `postgres_url` is a plain `postgres://user:pass@host:port/db`
-    /// string — stays argument-based rather than `conflux-config`-driven,
-    /// matching `RedisRegistry`/`main.rs`'s precedent (spec §11 Open Item
-    /// 2 is still unresolved).
+    /// string, passed directly by whatever constructs this store (an env
+    /// var read by `conflux-server`'s startup code, typically) — this
+    /// crate does not itself resolve config or parse env vars.
     pub async fn connect(postgres_url: &str) -> Result<Self, StoreError> {
         Self::connect_with_table(postgres_url, DEFAULT_TABLE).await
     }
 
     /// Lets multiple independent stores share one Postgres under
     /// different tables — this module's own tests use it so `cargo
-    /// test`'s parallel execution doesn't have them racing on shared rows
-    /// (the same class of problem `conflux-registry`'s Redis tests hit in
-    /// this same phase, fixed the same way: give each test its own
-    /// namespace instead of hoping disjoint value ranges never collide).
+    /// test`'s parallel execution doesn't have them racing on shared rows:
+    /// each test gets its own table name instead of hoping disjoint value
+    /// ranges never collide.
     pub async fn connect_with_table(
         postgres_url: &str,
         table: impl Into<String>,
@@ -59,14 +58,15 @@ impl PostgresStore {
         });
 
         // One row per round: `round BIGINT PRIMARY KEY, weights BYTEA`.
-        // ADR 0003 (no multi-tenancy) is why there's no experiment-scoping
-        // column — one process, one experiment, one table.
+        // No experiment-scoping column — one `conflux-server` process runs
+        // exactly one experiment, so one table is always one experiment's
+        // checkpoints; running a second experiment means running a second
+        // process against its own table/database.
         let privacy_rounds_table = format!("{table}_privacy_rounds");
-        // Phase 14: one row per (client, round) — `client_id` alongside
-        // the same `noise_multiplier`/`sample_rate` shape the
-        // experiment-wide table already uses, per `PrivacyRoundLog`'s own
-        // doc comment on why raw rounds (not a precomputed epsilon) are
-        // what gets persisted.
+        // One row per (client, round) — `client_id` alongside the same
+        // `noise_multiplier`/`sample_rate` shape the experiment-wide table
+        // already uses, per `PrivacyRoundLog`'s own doc comment on why raw
+        // rounds (not a precomputed epsilon) are what gets persisted.
         let client_privacy_rounds_table = format!("{table}_client_privacy_rounds");
         let create_tables = format!(
             "CREATE TABLE IF NOT EXISTS {table} (
@@ -208,9 +208,10 @@ impl Store for PostgresStore {
         for w in weights {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
-        // ON CONFLICT DO UPDATE: a retried round (the documented
-        // `RoundBuffer` race from Phase 6) shouldn't fail to checkpoint
-        // just because that round number was already written once.
+        // ON CONFLICT DO UPDATE: a retried round (e.g. a round buffer
+        // that flushes the same round number twice under a race) shouldn't
+        // fail to checkpoint just because that round number was already
+        // written once — the later write should simply win.
         let query = format!(
             "INSERT INTO {} (round, weights) VALUES ($1, $2)
              ON CONFLICT (round) DO UPDATE SET weights = EXCLUDED.weights",
@@ -231,8 +232,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-postgres -e POSTGRES_PASSWORD=conflux
-    /// -e POSTGRES_DB=conflux -p 15432:5432 postgres:16-alpine` — see
-    /// `docs/phases/phase-7b-postgres-store.md`.
+    /// -e POSTGRES_DB=conflux -p 15432:5432 postgres:16-alpine`
     const TEST_POSTGRES_URL: &str = "postgres://postgres:conflux@127.0.0.1:15432/conflux";
 
     fn unique_table(test_name: &str) -> String {
@@ -313,7 +313,7 @@ mod tests {
         );
     }
 
-    // Phase 14: PerClient accounting persistence.
+    // PerClient accounting persistence.
 
     #[tokio::test]
     async fn load_client_rounds_is_empty_before_any_append() {
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(loaded.get("client-b").unwrap(), &vec![(2.0, 0.2)]);
     }
 
-    /// The real "restart recovery" property this whole phase exists
+    /// The real "restart recovery" property `PrivacyRoundLog` exists
     /// for: a fresh `PostgresStore` instance against the *same* table
     /// (simulating a server restart) recovers every client's exact
     /// history — mirrors `appended_rounds_replay_in_recording_order`'s

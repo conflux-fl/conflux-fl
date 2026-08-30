@@ -191,9 +191,18 @@ material (`CONFLUX_TLS_CERT_PATH`/`CONFLUX_TLS_KEY_PATH`/
 `CONFLUX_TLS_CLIENT_CA_PATH`), fails fast in production if `auth = mtls`
 and no material is configured (mirroring `validate_production_backends`'s
 and `require_node_auth`'s shape), and falls back to plaintext with a
-logged warning only in research mode. JWT verification itself stays a
-separate, still-open deviation — this closes only the "is the resolved
-decision actually enforced" gap, not JWT auth's absence.
+logged warning only in research mode.
+
+JWT verification — the other half, and the one that matters for the
+three topologies whose default `auth` is `jwt` rather than `mtls` — is
+now closed too (Phase 16). `register()` verifies `auth_token` as a real
+RS256/ES256-signed JWT whose `sub` is the client actually registering,
+with the same production-fails-fast / research-warns asymmetry. The two
+are independent gates: a valid token doesn't put a client on the
+`require_node_auth` allow-list, and being allow-listed doesn't excuse an
+expired token — and they fail as different gRPC statuses
+(`Unauthenticated` vs. `PermissionDenied`) so an operator can tell
+"refresh your token" from "ask to be added".
 
 ### 5. The production stub-client guard isn't implemented — CLOSED (Phase 9b)
 

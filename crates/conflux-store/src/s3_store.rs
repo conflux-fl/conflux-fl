@@ -1,10 +1,10 @@
-//! `S3Store` — a `Store` backend against object storage. See
-//! `docs/phases/phase-7f-s3-store.md`.
+//! `S3Store` — a `Store` backend against object storage.
 //!
-//! Configured against a custom endpoint (MinIO in this session's tests,
+//! Configured against a custom endpoint (MinIO in this crate's own tests,
 //! but any S3-compatible service works the same way) rather than assuming
-//! real AWS — the same "argument-based, not `conflux-config`-driven"
-//! precedent every other Phase 7 backend follows.
+//! real AWS — connection details are passed directly as arguments by
+//! whatever constructs this store, the same as `PostgresStore`'s
+//! `postgres_url`; this crate does not itself read config or env vars.
 
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
@@ -139,8 +139,9 @@ impl Store for S3Store {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
         // S3's PutObject is natively overwrite-if-exists — a retried
-        // round (the Phase 6 buffer race) just overwrites, no explicit
-        // upsert logic needed (unlike PostgresStore's ON CONFLICT).
+        // round (the same "flushed twice under a race" case
+        // `PostgresStore` handles with `ON CONFLICT`) just overwrites the
+        // existing object, no explicit upsert logic needed here.
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -160,8 +161,7 @@ mod tests {
 
     /// `docker run -d --name conflux-dev-minio -p 19000:9000 -p 19001:9001
     /// -e MINIO_ROOT_USER=confluxadmin -e MINIO_ROOT_PASSWORD=confluxsecret
-    /// minio/minio server /data --console-address ":9001"` — see
-    /// `docs/phases/phase-7f-s3-store.md`.
+    /// minio/minio server /data --console-address ":9001"`
     const TEST_ENDPOINT: &str = "http://127.0.0.1:19000";
     const TEST_BUCKET: &str = "conflux-test-bucket";
     const TEST_ACCESS_KEY: &str = "confluxadmin";

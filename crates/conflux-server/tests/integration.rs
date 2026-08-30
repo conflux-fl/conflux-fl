@@ -125,6 +125,74 @@ async fn end_to_end_single_round_pull_mode() {
 }
 
 #[tokio::test]
+async fn a_round_completes_when_the_client_already_applied_its_own_privacy_transform() {
+    // Phase 17's composition check. `conflux-node` can now clip and noise
+    // an update before it leaves the node, and the server-side transform
+    // still runs on top of whatever arrives. The claim under test is
+    // narrow and deliberately so: the two stages compose without the
+    // round erroring or producing a degenerate checkpoint. Whether
+    // transforming twice is a *good* privacy/utility tradeoff is a
+    // research question, not a correctness bar.
+    let config = deterministic_config(&Overrides {
+        privacy_mechanism: Some("gaussian_clipping".to_string()),
+        clip_norm: Some(1.0),
+        noise_multiplier: Some(0.01),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState::new(config, vec![1.0, 2.0]));
+    state
+        .registry
+        .register(ClientId("client-1".to_string()))
+        .await
+        .unwrap();
+
+    let addr = spawn_grpc(Arc::clone(&state)).await;
+    let round_state = Arc::clone(&state);
+    let round_handle = tokio::spawn(async move { run_round(&round_state).await });
+    wait_until_buffer_open(&state).await;
+
+    let mut transport = PullTransport::connect(addr).await.unwrap();
+    transport.register("client-1", "token").await.unwrap();
+    transport.fetch_task("client-1").await.unwrap();
+
+    // Stands in for what `NodeBridge::with_local_privacy` now does before
+    // submitting — the same mechanism, applied client-side first.
+    let mut weights = vec![10.0f32, 20.0];
+    let client_side = conflux_privacy::GaussianClippingPrivacy {
+        clip_norm: 1.0,
+        noise_multiplier: 0.01,
+    };
+    let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(11);
+    client_side.transform(&mut weights, &mut rng);
+
+    let ack = transport
+        .submit_delta(vec![DeltaChunk {
+            client_id: "client-1".to_string(),
+            round: 1,
+            chunk_index: 0,
+            total_chunks: 1,
+            data: encode_weights(&weights),
+            num_samples: 5,
+        }])
+        .await
+        .unwrap();
+    assert!(ack.accepted);
+
+    let summary = round_handle.await.unwrap().unwrap();
+    assert_eq!(summary.round, 1);
+    assert_eq!(summary.num_submitted, 1);
+    assert_eq!(summary.num_passed, 1);
+
+    let checkpoint = state.store.load_latest_weights().await.unwrap();
+    assert_eq!(checkpoint.len(), 2);
+    assert!(
+        checkpoint.iter().all(|w| w.is_finite()),
+        "twice-transformed weights must stay finite, got {checkpoint:?}"
+    );
+    assert_eq!(state.round.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn health_endpoint_returns_ok() {
     let config = deterministic_config(&Overrides::default());
     let state = Arc::new(AppState::new(config, vec![0.0]));

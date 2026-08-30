@@ -3,8 +3,9 @@
 //! An enum, not `Arc<dyn Registry>`: `Registry`'s methods are native
 //! `async fn` in a trait, which isn't dyn-compatible without extra boxing
 //! machinery. For a small, closed set of backends, a `match`-delegating
-//! enum gets the same "pick one at runtime" result without that cost.
-//! See `docs/phases/phase-8a-backend-selection.md`.
+//! enum gets the same "pick one at runtime" result without that cost —
+//! `conflux-server` reads `CONFLUX_REGISTRY_BACKEND` at startup and
+//! constructs the matching variant once.
 
 use std::time::Duration;
 

@@ -1,6 +1,6 @@
-# Phase 19 (draft) — SIMD aggregation
+# Phase 19 — SIMD aggregation
 
-**Status: scoping draft, not started.**
+**Status: shipped 2026-08-30 — with the opposite result to the one it assumed. The shared-helper refactor landed; the SIMD did not, because it measured slower. See Outcome.**
 
 ## Scope
 
@@ -125,11 +125,98 @@ implementation on every input shape, not just multiples of 8).
 
 ## Definition of done
 
-- [ ] `cargo test -p conflux-core` passes, including the new differential
+- [x] `cargo test -p conflux-core` passes, including the new differential
       tests.
-- [ ] `cargo bench -p conflux-core` runs and produces a real before/after
+- [x] `cargo bench -p conflux-core` runs and produces a real before/after
       comparison, recorded in this brief.
-- [ ] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+- [x] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
       stay clean.
-- [ ] `docs/STATUS.md`'s SIMD deviation bullet updated with the measured
+- [x] `docs/STATUS.md`'s SIMD deviation bullet updated with the measured
       result.
+
+## Outcome
+
+**The premise did not survive measurement.** This brief assumed
+vectorizing the combine step would make it faster. It was built with
+`wide` exactly as scoped, benchmarked against the scalar loop it
+replaced, and found to be *slower* at every model dimension that matters.
+The refactor was kept; the SIMD was removed.
+
+### What was measured
+
+`benches/accumulate.rs` (criterion), single `accumulate_weighted` call,
+default target (SSE2 baseline):
+
+| dim | scalar | explicit SIMD | `chunks_exact` SIMD |
+|---|---|---|---|
+| 8 | 10.1 ns | 5.2 ns | **3.6 ns** |
+| 10,000 | **1.21 µs** | 1.35 µs | 1.23 µs |
+| 1,000,000 | **145 µs** | 153 µs | 154 µs |
+
+A whole round's combine (10 clients accumulated into one vector):
+
+| dim | scalar | explicit SIMD |
+|---|---|---|
+| 10,000 | **10.37 µs** | 12.25 µs |
+| 1,000,000 | 2.93 ms | 2.82 ms (overlapping intervals) |
+
+SIMD wins only at `dim = 8`, which is not a size any model has. At
+10,000 (a logistic-regression-scale model) it is a wash at best; at
+1,000,000 (a small CNN) scalar is ~6% ahead.
+
+### Why
+
+Two reasons, both checked rather than assumed:
+
+1. **The loop is memory-bandwidth-bound, not compute-bound.** At
+   `dim = 1M` it moves ~12 MB (two reads, one write of 4 MB each) in
+   ~145 µs — around 83 GB/s, already at the memory subsystem's limit.
+   No amount of arithmetic width helps a loop that is waiting on memory.
+2. **LLVM already auto-vectorizes the scalar loop.** Rebuilding with
+   `-C target-cpu=native` (AVX2 *and* AVX-512 available on the test
+   machine) made the **scalar** loop 2.5× faster at `dim = 8`
+   (10.1 ns → 4.1 ns) while leaving the large-`dim` comparison
+   unchanged. If explicit SIMD were adding width the compiler wasn't
+   already using, that is not the pattern the numbers would show.
+
+The first `wide` implementation was also genuinely inefficient
+(`copy_from_slice` into stack arrays per chunk); a `chunks_exact`
+rewrite recovered most of that gap. It still did not beat scalar at
+realistic sizes, which is what ruled out "the implementation was just
+bad" as the explanation.
+
+### What shipped
+
+- **The shared-helper refactor, which was always the other half of this
+  phase's value.** `accumulate_weighted(acc, src, weight)` and
+  `accumulate_scaled_difference(acc, src, reference, scale)` now live
+  once in `weights.rs`, replacing **eight** near-identical inline loops
+  across `averaging.rs` (1), `robust.rs` (2), and `temporal.rs` (5).
+  That is ADR 0002's "common accumulation logic written once" applied to
+  the one thing every family member's combine step shares, and it stands
+  on its own regardless of how the loop body is implemented.
+- **The benchmark**, kept along with its explicit-SIMD variants — as the
+  standing answer to "should we SIMD this?", so the next person to ask
+  can run `cargo bench -p conflux-core` instead of re-deriving it.
+  `wide` moved from a dependency to a dev-dependency; nothing in `src/`
+  uses it.
+
+### Scope correction
+
+The brief listed `robust.rs`'s `CoordinateWiseAggregator` as a call site.
+It isn't one: Trimmed Mean, Median, and Median-of-Means gather each
+coordinate's values across clients and apply a statistic (a sort, a
+selection) per coordinate. That is not a weighted-sum shape and
+`accumulate_weighted` does not apply to it. Its two *other* accumulation
+loops (FABA's running mean, Divide-and-Conquer's centering mean) are
+real call sites and were converted.
+
+### Correctness
+
+The refactor's bar was that no aggregator's output changed. All 62
+`conflux-core` tests pass **unmodified**, and `weights.rs` carries
+differential tests asserting each helper is *bit-identical* (compared via
+`to_bits`, so `+0.0`/`-0.0` and NaN are not glossed over) to the exact
+loop it replaced, across lengths 0–1023 and a range of weights. 335 →
+338 workspace-wide; `cargo fmt` and `cargo clippy --workspace
+--all-targets` clean.

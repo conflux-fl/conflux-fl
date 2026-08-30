@@ -1,7 +1,12 @@
-//! The seam between conflux-net's transport mechanics and whatever crate
-//! answers each RPC for real — `conflux-server` in Phase 5, wiring in
-//! `conflux-registry`/`conflux-selector`/`conflux-buffer`. Phase 3 only
-//! ships a trivial in-memory dispatcher, in this crate's own tests.
+//! The seam between conflux-net's transport/wire mechanics and whatever
+//! decides how to actually answer each RPC. `conflux-net` only knows how to
+//! move bytes over gRPC; it has no opinion on client registries, buffering,
+//! or aggregation. `conflux-server`'s `AppState` implements
+//! [`RoundDispatcher`] for real, wiring in `conflux-registry` (client
+//! lifecycle), `conflux-buffer` (round staging), and `conflux-store` (model
+//! checkpoints); this crate's own tests implement a trivial in-memory
+//! dispatcher instead, so the transport layer can be tested without any of
+//! that machinery.
 
 use std::pin::Pin;
 
@@ -23,18 +28,29 @@ pub type TaskStream = Pin<Box<dyn Stream<Item = Result<TaskResponse, Status>> + 
 pub enum DispatchError {
     #[error("client {0} is not registered")]
     UnknownClient(String),
-    /// Phase 8c: `require_node_auth` rejected this registration attempt —
-    /// the presented identity (cert fingerprint or shared token) either
-    /// isn't on the allow-list at all, or doesn't match what `client_id`
-    /// was allowed with.
+    /// Returned when node-auth enforcement (`require_node_auth`) is on and
+    /// this registration's presented identity — an mTLS peer cert
+    /// fingerprint if the connection used TLS, otherwise the request's
+    /// shared token — either isn't on the allow-list at all, or doesn't
+    /// match what `client_id` was allowed to present.
     #[error("client {0} is not on the node allow-list")]
     NotAllowed(String),
-    /// Phase 10a: the round this submission targeted already flushed its
-    /// buffer (`conflux-buffer::BufferError::Closed`) — the caller should
-    /// re-`fetch_task` and resubmit against the current round, not treat
-    /// this as a permanent failure. Distinct from `Other` so a client can
-    /// actually tell the two apart instead of both showing up as
-    /// `Status::internal`.
+    /// The caller's credential itself didn't check out — an invalid,
+    /// expired, or wrong-subject JWT (Phase 16). Kept distinct from
+    /// [`DispatchError::NotAllowed`] because the two mean opposite
+    /// things about the caller: `NotAllowed` says "we know who you are
+    /// and you aren't invited," this says "we couldn't establish who you
+    /// are at all." They also map to different gRPC statuses, which is
+    /// what lets a client tell "refresh your token" apart from "ask an
+    /// operator to add you."
+    #[error("authentication failed: {0}")]
+    Unauthenticated(String),
+    /// The round this submission targeted already flushed its buffer
+    /// (`conflux-buffer`'s buffer closes once it hits quorum or times out)
+    /// — the caller should re-`fetch_task` and resubmit against whatever
+    /// round is current now, not treat this as a permanent failure. Kept
+    /// distinct from `Other` so a client can actually tell the two apart
+    /// instead of both showing up as `Status::internal`.
     #[error("this round already closed; fetch the current task and resubmit")]
     RoundClosed,
     #[error("dispatch failed: {0}")]
@@ -48,6 +64,11 @@ impl From<DispatchError> for Status {
             DispatchError::NotAllowed(id) => {
                 Status::permission_denied(format!("client {id} is not on the node allow-list"))
             }
+            // `unauthenticated`, not `permission_denied`: gRPC draws
+            // exactly the distinction above — 16 means the credential
+            // was missing or bad, 7 means the credential was fine and
+            // the caller still isn't authorized.
+            DispatchError::Unauthenticated(msg) => Status::unauthenticated(msg),
             DispatchError::RoundClosed => Status::failed_precondition(
                 "this round already closed; fetch the current task and resubmit",
             ),
@@ -73,7 +94,8 @@ pub trait RoundDispatcher: Send + Sync + 'static {
     /// mTLS and the server verified a client cert (see
     /// `peer_cert_fingerprint` in this crate) — `None` is the normal case
     /// for a `SharedToken`-based deployment or a non-TLS hop (e.g. the
-    /// node↔`ClientApp` loopback, ADR 0004), not an error.
+    /// local loopback connection between `conflux-node` and the Python
+    /// `ClientApp`, which never uses TLS), not an error.
     async fn register(
         &self,
         client_id: &str,

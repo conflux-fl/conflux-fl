@@ -275,6 +275,106 @@ impl Attack for PersistentSybilAttack {
     }
 }
 
+/// Colluding Sybils that pull in the **same direction without submitting
+/// the same thing** — a deliberately harder collusion model than
+/// [`PersistentSybilAttack`]'s identical submissions.
+///
+/// This exists to answer a question the identical-Sybil model
+/// structurally cannot. `docs/research/temporal-consistency-aggregation.md`
+/// §5.6's mechanism ablation found DSS's "unstable AND colluding" gate to
+/// be numerically identical to stability-alone — but that was measured
+/// against Sybils submitting byte-identical updates, where *every*
+/// client's collusion score saturates and the signal carries no
+/// information for anyone. That result is about the *model*, not about
+/// the mechanism: it could not distinguish "the collusion signal adds
+/// nothing" from "this attack makes the collusion signal unmeasurable."
+///
+/// Each attacker here submits `shared_update + offset_i`, where
+/// `offset_i` is drawn per attacker from `N(0, divergence²)`. The
+/// attackers are therefore correlated (a common target dominates) but
+/// individually distinguishable, which is both more realistic — real
+/// colluders coordinate on an objective, not on a byte stream, and
+/// identical submissions are trivially detectable by simple
+/// deduplication — and, for this document's purposes, *measurable*.
+///
+/// `resample_each_round` selects the case:
+///
+/// - `false` (the interesting one): each attacker's offset is fixed for
+///   the whole run. The group is non-identical, correlated, and
+///   **temporally stable** — so a stability-only detector must miss it
+///   by construction, and anything that catches it is catching collusion
+///   specifically.
+/// - `true`: offsets are redrawn every round, making the group unstable
+///   as well. Included as the contrast case, not the primary one.
+///
+/// This is *this work*, not a published attack — the same status as
+/// [`AdaptiveEvasionAttack`]. It is a measurement instrument for §5.6's
+/// open question, not a claim about how real adversaries behave.
+pub struct CorrelatedSybilAttack {
+    /// The common objective every colluder pulls toward.
+    pub shared_update: Vec<f32>,
+    /// Standard deviation of each attacker's individual offset from that
+    /// objective. `0.0` reproduces [`PersistentSybilAttack`] exactly,
+    /// which makes this a strict generalization and lets a sweep vary
+    /// "how identical" the colluders are as a continuous parameter.
+    pub divergence: f32,
+    /// Whether each attacker's offset is redrawn every round (unstable)
+    /// or fixed for the run (stable). See the type-level docs.
+    pub resample_each_round: bool,
+    pub seed: u64,
+}
+
+impl Attack for CorrelatedSybilAttack {
+    fn craft(&self, honest_updates: &[ClientDelta], num_attackers: usize) -> Vec<ClientDelta> {
+        if num_attackers == 0 {
+            return Vec::new();
+        }
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        use rand_distr::{Distribution, Normal};
+
+        let (round, num_samples) = round_and_samples(honest_updates);
+        let normal = Normal::new(0.0f32, self.divergence.max(0.0))
+            .expect("divergence is clamped non-negative, so this is always a valid Normal");
+
+        (0..num_attackers)
+            .map(|i| {
+                // Seeded per (attacker, run) or per (attacker, round)
+                // rather than from one shared stream, so an attacker's
+                // offset doesn't depend on how many attackers precede it
+                // — which would make `num_attackers` silently change
+                // every attacker's behavior and confound any sweep over
+                // collusion-group size.
+                let stream = self.seed.wrapping_mul(1_000_003).wrapping_add(i as u64);
+                let mut rng = StdRng::seed_from_u64(if self.resample_each_round {
+                    stream.wrapping_add(round.wrapping_mul(7_919))
+                } else {
+                    stream
+                });
+
+                let update: Vec<f32> = self
+                    .shared_update
+                    .iter()
+                    .map(|x| {
+                        if self.divergence > 0.0 {
+                            x + normal.sample(&mut rng)
+                        } else {
+                            *x
+                        }
+                    })
+                    .collect();
+
+                make_delta(
+                    format!("correlated-attacker-{i}"),
+                    round,
+                    num_samples,
+                    &update,
+                )
+            })
+            .collect()
+    }
+}
+
 /// A reactive attacker that observes how the *previous* round actually
 /// went and adapts its magnitude accordingly — escalating when its
 /// updates seem to be getting through largely unresisted, retreating
@@ -452,6 +552,18 @@ impl Attack for AdaptiveEvasionAttack {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Like `honest_delta`, but with an explicit round — the
+    /// correlated-Sybil tests need to vary it to check temporal
+    /// stability.
+    fn delta(client_id: &str, round: u64, num_samples: u64, weights: &[f32]) -> ClientDelta {
+        ClientDelta {
+            client_id: client_id.to_string(),
+            round,
+            weights: conflux_proto::encode_weights(weights),
+            num_samples,
+        }
+    }
 
     fn honest_delta(client_id: &str, weights: &[f32]) -> ClientDelta {
         ClientDelta {
@@ -778,5 +890,116 @@ mod tests {
         let crafted = attack.craft_adaptive(&honest, 0, None);
 
         assert!(crafted.is_empty());
+    }
+
+    // --- CorrelatedSybilAttack -------------------------------------
+
+    #[test]
+    fn correlated_sybils_are_distinct_from_each_other_but_cluster_together() {
+        let attack = CorrelatedSybilAttack {
+            shared_update: vec![50.0, 50.0, 50.0],
+            divergence: 2.0,
+            resample_each_round: false,
+            seed: 7,
+        };
+        let honest = vec![delta("h0", 1, 10, &[1.0, 1.0, 1.0])];
+        let crafted = attack.craft(&honest, 3);
+        assert_eq!(crafted.len(), 3);
+
+        let decoded: Vec<Vec<f32>> = crafted
+            .iter()
+            .map(|c| conflux_proto::decode_weights(&c.weights).unwrap())
+            .collect();
+
+        // Non-identical: this is the whole point — identical submissions
+        // are what `PersistentSybilAttack` already models, and what makes
+        // the collusion signal unmeasurable.
+        assert_ne!(decoded[0], decoded[1]);
+        assert_ne!(decoded[1], decoded[2]);
+
+        // But still clustered around the shared objective: each stays far
+        // closer to the target than the target is to the honest batch.
+        for d in &decoded {
+            let from_target: f32 = d.iter().map(|x| (x - 50.0).powi(2)).sum::<f32>().sqrt();
+            assert!(
+                from_target < 15.0,
+                "an offset of sigma=2 over 3 dims should stay near the target, got {from_target}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_divergence_reproduces_the_identical_sybil_model_exactly() {
+        // The generalization claim: `divergence = 0` must be
+        // `PersistentSybilAttack`, so a sweep can treat "how identical
+        // are the colluders" as one continuous parameter rather than two
+        // separate attacks.
+        let shared = vec![50.0, 50.0];
+        let correlated = CorrelatedSybilAttack {
+            shared_update: shared.clone(),
+            divergence: 0.0,
+            resample_each_round: true,
+            seed: 1,
+        };
+        let persistent = PersistentSybilAttack {
+            fixed_update: shared,
+        };
+        let honest = vec![delta("h0", 3, 10, &[1.0, 1.0])];
+
+        let a = correlated.craft(&honest, 4);
+        let b = persistent.craft(&honest, 4);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!(x.weights, y.weights, "zero divergence must be identical");
+            assert_eq!(x.round, y.round);
+            assert_eq!(x.num_samples, y.num_samples);
+        }
+    }
+
+    #[test]
+    fn fixed_offsets_are_stable_across_rounds_and_resampled_ones_are_not() {
+        let make = |resample| CorrelatedSybilAttack {
+            shared_update: vec![50.0, 50.0],
+            divergence: 3.0,
+            resample_each_round: resample,
+            seed: 11,
+        };
+        let round_1 = vec![delta("h0", 1, 10, &[1.0, 1.0])];
+        let round_2 = vec![delta("h0", 2, 10, &[1.0, 1.0])];
+
+        // Fixed: the same attacker submits the same thing every round —
+        // temporally stable, so a stability-only detector must miss it.
+        let stable = make(false);
+        assert_eq!(
+            stable.craft(&round_1, 2)[0].weights,
+            stable.craft(&round_2, 2)[0].weights
+        );
+
+        // Resampled: the contrast case.
+        let unstable = make(true);
+        assert_ne!(
+            unstable.craft(&round_1, 2)[0].weights,
+            unstable.craft(&round_2, 2)[0].weights
+        );
+    }
+
+    #[test]
+    fn an_attackers_offset_does_not_depend_on_how_many_attackers_there_are() {
+        // Guards the per-attacker seeding: if offsets came from one
+        // shared stream, growing the collusion group would silently
+        // change every existing attacker's behavior, confounding any
+        // sweep over group size.
+        let attack = CorrelatedSybilAttack {
+            shared_update: vec![50.0, 50.0],
+            divergence: 2.0,
+            resample_each_round: false,
+            seed: 5,
+        };
+        let honest = vec![delta("h0", 1, 10, &[1.0, 1.0])];
+        let two = attack.craft(&honest, 2);
+        let five = attack.craft(&honest, 5);
+        for i in 0..2 {
+            assert_eq!(two[i].weights, five[i].weights, "attacker {i} changed");
+        }
     }
 }

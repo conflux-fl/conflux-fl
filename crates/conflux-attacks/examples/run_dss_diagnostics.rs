@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use conflux_attacks::{AdaptiveEvasionAttack, Attack, PersistentSybilAttack, RoundFeedback};
-use conflux_core::{Aggregator, DssAggregator, build_aggregator};
+use conflux_core::{Aggregator, AggregatorParams, DssAggregator, build_aggregator};
 use conflux_proto::{ClientDelta, decode_weights, encode_weights};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -195,7 +195,8 @@ fn main() {
     let args = parse_args();
     let true_value = vec![1.0f32; args.dim];
 
-    let base = build_aggregator(&args.base_aggregator, 0.2).unwrap_or_else(|e| panic!("{e}"));
+    let base = build_aggregator(&args.base_aggregator, AggregatorParams::default())
+        .unwrap_or_else(|e| panic!("{e}"));
     let dss = DssAggregator::new(base);
     let attack = build_attack(&args.attack, args.dim, args.attack_magnitude);
     let last_feedback: Mutex<Option<RoundFeedback>> = Mutex::new(None);

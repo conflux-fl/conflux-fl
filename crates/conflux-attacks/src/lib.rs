@@ -13,8 +13,8 @@ mod attacks;
 mod stats;
 
 pub use attacks::{
-    AdaptiveEvasionAttack, AlieAttack, GaussianAttack, PersistentSybilAttack, ScalingAttack,
-    SignFlippingAttack,
+    AdaptiveEvasionAttack, AlieAttack, CorrelatedSybilAttack, GaussianAttack,
+    PersistentSybilAttack, ScalingAttack, SignFlippingAttack,
 };
 
 use conflux_proto::ClientDelta;

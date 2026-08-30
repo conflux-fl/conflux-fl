@@ -1,10 +1,11 @@
-//! Mutual TLS config for the gRPC transport — spec §3 ties `cross_silo`'s
-//! push mode to mTLS. See `docs/phases/phase-7e-mtls.md`.
+//! Mutual TLS config for the gRPC transport — `cross_silo`'s push mode
+//! defaults to mTLS, since its participants are few, trusted institutions
+//! that can each hold a long-lived, mutually-authenticated connection.
 //!
-//! Takes PEM bytes from wherever the caller sourced them; real
-//! certificate provisioning/rotation is out of scope for this phase, same
-//! as every other Phase 7 backend's "argument-based, not
-//! `conflux-config`-driven" precedent.
+//! Takes PEM bytes from wherever the caller sourced them (a file, a secrets
+//! manager, ...); this crate has no opinion on where certificates come from
+//! or how they're rotated — that stays the caller's responsibility, not
+//! something resolved through `conflux-config`.
 
 use tonic::transport::{Certificate, ClientTlsConfig, Identity, ServerTlsConfig};
 

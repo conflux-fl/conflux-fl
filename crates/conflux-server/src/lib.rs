@@ -13,7 +13,10 @@ mod http;
 mod round;
 
 pub use app_state::{AppState, AppStateError};
-pub use auth_enforcement::{AuthEnforcementError, TlsMaterial, resolve_server_tls};
+pub use auth_enforcement::{
+    AuthEnforcementError, TlsMaterial, resolve_server_tls, validate_jwt_startup,
+    verify_jwt_if_required,
+};
 pub use backend_selection::{
     AccountingBackend, BackendSelection, BackendSelectionError, RegistryBackend, StoreBackend,
     validate_production_backends,

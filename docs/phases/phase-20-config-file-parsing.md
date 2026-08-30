@@ -1,6 +1,6 @@
-# Phase 20 (draft) — Config-file parsing
+# Phase 20 — Config-file parsing
 
-**Status: scoping draft, not started.**
+**Status: shipped 2026-08-30 (experiment-file half; profile files still out of scope).**
 
 ## Scope
 
@@ -122,10 +122,68 @@ experiment's worth of overrides) blocked on a much bigger design.
 
 ## Definition of done
 
-- [ ] `cargo test -p conflux-config` passes, including the new
+- [x] `cargo test -p conflux-config` passes, including the new
       `load_experiment_file` unit tests and the `resolve()` parity test.
-- [ ] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+- [x] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
       stay clean.
-- [ ] `docs/STATUS.md`'s config-file-parsing deviation bullet updated;
+- [x] `docs/STATUS.md`'s config-file-parsing deviation bullet updated;
       spec §11 Open Item 2 annotated as "experiment-file half closed,
       profile-file half tracked separately."
+
+## Outcome
+
+Shipped as scoped, including the deliberate non-scope: profile files
+with `inherits` remain unbuilt, and `Mode`/`Topology` defaults remain
+hardcoded Rust.
+
+The brief's central claim held up exactly — the work was "read a TOML
+file into an `Overrides`," and **nothing in the resolution or layering
+logic changed at all**. `resolve()`, the precedence order, and
+`ConfigSource::ExperimentFile` are untouched; a test asserts a
+parsed-from-file `Overrides` resolves identically to the hand-built one
+lib.rs's own tests have always used, so the new path demonstrably feeds
+the old logic rather than paralleling it.
+
+Three decisions worth recording:
+
+1. **`deny_unknown_fields`, not serde's permissive default.** A typo'd
+   key (`agregator = "krum"`) would otherwise parse cleanly, be
+   discarded, and resolve to the builtin fallback — producing a run
+   whose ADR 0007 provenance log is *correct* and whose configuration is
+   not what was asked for. That is the one failure mode explainable
+   config cannot explain, so the file is refused instead, with the valid
+   keys listed in the message.
+
+2. **Two-stage parse, for two genuinely different errors.** Text →
+   `toml::Table` catches syntax; `Table` → `Overrides` catches schema
+   (wrong type, unknown key, bad enum value). A single
+   `toml::from_str::<Overrides>` collapses both into one error type, and
+   "your config is broken" is not an actionable message. `Syntax` and
+   `Schema` are separate `ConfigFileError` variants for that reason, and
+   separate tests assert a malformed file and a mistyped field don't
+   land in the same one.
+
+   (Implementation note: stage one uses `toml::Table`, not
+   `str::parse::<toml::Value>()` — in toml 0.9 the latter parses a bare
+   *value* and rejects a whole document.)
+
+3. **Enum spellings are derived, not duplicated.** Every config enum's
+   `as_str()` already returns exactly snake_case of its variant name, so
+   `#[serde(rename_all = "snake_case")]` makes the TOML vocabulary and
+   the startup-log vocabulary the same strings by construction.
+   `every_enums_toml_spelling_matches_its_as_str` asserts the coupling
+   so a future variant rename can't silently split them into two
+   vocabularies.
+
+`main.rs` fails hard when `CONFLUX_EXPERIMENT_CONFIG_PATH` names a file
+it cannot load — an operator who named a config file meant it. Unset is
+byte-for-byte the previous behavior.
+
+Verified against the real binary, not only in unit tests: with a file
+set, four values resolve with the file's actual path as their source and
+everything else falls through to its normal tier; unset, `aggregator`
+resolves to `fedavg` from builtin fallback exactly as before; a typo'd
+key and a missing file each abort startup with their own message.
+
+11 new tests in `conflux-config` (25 → 36); 298 → 309 workspace-wide.
+`cargo fmt` and `cargo clippy --workspace --all-targets` clean.

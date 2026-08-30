@@ -20,7 +20,7 @@
 
 use conflux_proto::ClientDelta;
 
-use crate::weights::decode_and_validate;
+use crate::weights::{accumulate_weighted, decode_and_validate};
 use crate::{Aggregator, AggregatorError};
 
 /// Pairwise L2 distances between a batch's decoded weight vectors — the
@@ -365,9 +365,7 @@ impl UpdateFilter for FabaFilter {
             let dim = decoded[remaining[0]].len();
             let mut mean = vec![0.0f32; dim];
             for &i in &remaining {
-                for (m, w) in mean.iter_mut().zip(&decoded[i]) {
-                    *m += w;
-                }
+                accumulate_weighted(&mut mean, &decoded[i], 1.0);
             }
             let rn = remaining.len() as f32;
             for m in &mut mean {
@@ -534,9 +532,7 @@ impl UpdateFilter for DivideAndConquerFilter {
         let dim = decoded[0].len();
         let mut mean = vec![0.0f32; dim];
         for row in &decoded {
-            for (m, x) in mean.iter_mut().zip(row) {
-                *m += x;
-            }
+            accumulate_weighted(&mut mean, row, 1.0);
         }
         for m in &mut mean {
             *m /= n as f32;

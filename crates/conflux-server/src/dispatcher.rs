@@ -90,6 +90,27 @@ impl RoundDispatcher for AppState {
         auth_token: &str,
         peer_cert_fingerprint: Option<&str>,
     ) -> Result<RegisterResponse, DispatchError> {
+        // Phase 16. Two independent gates, in this order:
+        //
+        //   1. Is this token genuine, and is it *yours*? (`auth = jwt`)
+        //   2. Is this client on the allow-list? (`require_node_auth`)
+        //
+        // Neither subsumes the other, and a deployment can run either,
+        // both, or neither. A valid JWT does not put a client on the
+        // allow-list; being on the allow-list does not excuse an expired
+        // token. They also fail as *different* `DispatchError` variants
+        // — `Unauthenticated` vs. `NotAllowed` — because "your
+        // credential is bad" and "your credential is fine but you aren't
+        // invited" send an operator to two different places.
+        crate::auth_enforcement::verify_jwt_if_required(
+            self.config.mode,
+            self.config.auth.value,
+            self.jwt_key.as_ref(),
+            auth_token,
+            client_id,
+        )
+        .map_err(|e| DispatchError::Unauthenticated(e.to_string()))?;
+
         if self.config.require_node_auth.value {
             // The presented identity is whichever proof this connection
             // actually carries: an mTLS peer cert fingerprint if present,

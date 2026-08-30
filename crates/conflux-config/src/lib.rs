@@ -1,11 +1,40 @@
-//! Layered config, topology/mode profiles, strategy registry.
+//! Resolves every Conflux FL configuration parameter — which aggregator,
+//! which topology, how long a round waits for quorum, and so on — against
+//! a fixed six-tier precedence chain, and remembers *which* tier produced
+//! each value:
 //!
-//! See `docs/spec/conflux-spec-v1.md` §4.
+//! ```text
+//! builtin fallback -> topology profile -> mode profile
+//!   -> experiment file -> env var -> CLI flag -> resolved value
+//! ```
+//!
+//! Later tiers win. A topology (`cross_silo`, `cross_device`,
+//! `crowdsource`, `edge`) answers "what kind of participants and
+//! network?" and owns a handful of connection-shaped parameters; a mode
+//! (`research` or `production`) answers "am I iterating, or running a
+//! live deployment?" and owns a disjoint set of safety-posture
+//! parameters — the two axes never fight over the same field. Above
+//! that, an experiment file, environment variables (`CONFLUX_*`), and
+//! CLI flags let a specific run override either axis's defaults, in that
+//! order of precedence.
+//!
+//! Tracking *where* a value came from (see [`Resolved`]) is what turns
+//! "why is this deployment behaving strangely?" into a startup-log lookup
+//! instead of a source-reading exercise — [`ResolvedConfig::to_log_lines`]
+//! is what a caller (`conflux-server`) prints at startup, one line per
+//! parameter, before doing anything else.
+//!
+//! This crate also hosts the compile-time strategy registry (see
+//! [`registry`]) that lets an aggregator/selector/privacy-mechanism
+//! implementation in another crate become selectable by name from
+//! config, without this crate ever importing that other crate.
 
+mod file;
 mod registry;
 mod source;
 mod types;
 
+pub use file::{ConfigFileError, load_experiment_file};
 pub use registry::{StrategyEntry, StrategyKind, lookup};
 pub use source::ConfigSource;
 pub use types::{
@@ -27,10 +56,30 @@ pub struct Resolved<T> {
     pub source: ConfigSource,
 }
 
-/// One override tier's worth of parameters (spec §9's full parameter list).
-/// `file`, `env`, and `cli` in [`resolve`] are each an `Overrides` — same
-/// shape, different precedence.
-#[derive(Debug, Default, Clone)]
+/// One override tier's worth of parameters — every field is `Option<T>`:
+/// `None` means "this tier has no opinion," `Some(v)` means "this tier
+/// says `v`." `file`, `env`, and `cli` in [`resolve`] are each an
+/// `Overrides` — same shape, different precedence. Field names match
+/// their `CONFLUX_<NAME>` environment variable (uppercased) and their
+/// `[experiment]` TOML key (as-is); allowed values come from each field's
+/// own type (an enum for closed-set choices like [`AuthMode`], a bare
+/// numeric type where any value in range is accepted).
+///
+/// `#[serde(default)]` is what makes a *partial* file work: most
+/// experiments override a handful of parameters, and every key absent
+/// from the file must resolve to `None` ("this tier has no opinion")
+/// rather than failing to deserialize.
+///
+/// `deny_unknown_fields` is the deliberate counterpart. Serde's default
+/// is to ignore keys it doesn't recognize, which would mean a typo —
+/// `agregator = "krum"` — parses cleanly, resolves to the default
+/// aggregator, and logs its source as a builtin fallback, with nothing
+/// anywhere reporting that the file's instruction was dropped. ADR
+/// 0007's principle is that a config value should always say where it
+/// came from; a silently discarded key is the one case that can't. Better
+/// to refuse the file and name the key.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Overrides {
     pub connection_mode: Option<ConnectionMode>,
     pub auth: Option<AuthMode>,
@@ -42,22 +91,47 @@ pub struct Overrides {
     pub seed_mode: Option<SeedMode>,
     pub seed_value: Option<u64>,
     pub aggregator: Option<String>,
-    /// Phase 11a: the assumed fraction of Byzantine clients in a round's
-    /// batch — feeds `robust` family members (Krum's *f*, Multi-Krum's
-    /// *m*, Trimmed Mean's trim count). An algorithm-tuning value, same
-    /// category as `clip_norm`/`noise_multiplier`, not a
-    /// research-vs-production posture.
+    /// The assumed fraction of Byzantine (malicious or faulty) clients in
+    /// a round's batch, `0.0..1.0`. Feeds the `robust` aggregator
+    /// family's own math: Krum's *f* (how many updates it assumes could
+    /// be attackers), Multi-Krum's *m* (how many it keeps), Trimmed
+    /// Mean's trim count. Builtin fallback `0.2`. This is a per-algorithm
+    /// tuning value, the same category as `clip_norm`/`noise_multiplier`
+    /// below — not something a topology or mode should own an opinion
+    /// on, since it depends on the deployment's actual threat model, not
+    /// on whether participants are silos or phones.
     pub robust_byzantine_fraction: Option<f32>,
-    /// Phase 13: whether `conflux-reputation`'s pre-aggregation filter
-    /// runs at all. `Overrides`-only, no topology/mode ownership — like
-    /// `robust_byzantine_fraction`, this is a deployment policy choice
-    /// about whether to layer an extra, uncited filter in front of
-    /// whichever aggregator is configured, not a research-vs-production
-    /// posture. Builtin fallback `false`: every aggregator's default
-    /// behavior should match its cited paper with zero framework-imposed
-    /// interference — see `docs/phases/
-    /// phase-13-reputation-reference-fix.md`.
+    /// Centered Clipping's clip radius `τ` — how far any one client's
+    /// deviation from the running reference may pull the model in a
+    /// round. Builtin fallback `1.0`. Read only by the
+    /// `centered_clipping` aggregator, and, like
+    /// `robust_byzantine_fraction`, an algorithm-tuning value rather
+    /// than a topology/mode posture: the right radius depends on the
+    /// model's own weight scale, which no deployment profile knows.
+    pub clip_radius: Option<f32>,
+    /// Whether `conflux-reputation`'s pre-aggregation contribution filter
+    /// runs at all, independent of which aggregator is selected. Builtin
+    /// fallback `false`: every shipped aggregator's default behavior
+    /// matches its cited paper exactly, with no framework-imposed
+    /// filtering layered in front of it unless a deployment explicitly
+    /// opts in. Like `robust_byzantine_fraction`, this is a deployment
+    /// policy choice, not something topology/mode profiles set a default
+    /// for.
     pub reputation_filter_enabled: Option<bool>,
+    /// Whether `conflux-node` applies the configured privacy mechanism
+    /// to a client's own update *before* it leaves the node, in addition
+    /// to the server-side transform that always runs. Builtin fallback
+    /// `false`, matching every other opt-in privacy/security posture
+    /// here (`reputation_filter_enabled`, `require_node_auth`).
+    ///
+    /// The two application points answer different threat models rather
+    /// than duplicating each other: client-side keeps a raw update from
+    /// ever being observable in the clear by the network or the server
+    /// (the `crowdsource`/`edge` case, where the server isn't fully
+    /// trusted), server-side bounds the aggregate's exposure once
+    /// batched. Turning this on adds a stage in front of the existing
+    /// pipeline; it does not disable the server-side one.
+    pub client_side_privacy_transform: Option<bool>,
     pub privacy_mechanism: Option<String>,
     pub clip_norm: Option<f32>,
     pub noise_multiplier: Option<f32>,
@@ -70,28 +144,50 @@ pub struct Overrides {
     pub config_log_format: Option<LogFormat>,
 }
 
-/// Every parameter from spec §9, resolved against a topology + mode, with
-/// its `ConfigSource` attached (ADR 0007 — this is what makes resolution
-/// explainable rather than just a merged bag of values).
+/// Every configuration parameter, resolved against a topology + mode and
+/// any overrides, with a [`ConfigSource`] attached to each one — this is
+/// what makes resolution explainable rather than just a merged bag of
+/// values: a caller can log or print exactly which tier produced each
+/// field, not only its final value.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
+    /// The two axes this configuration was resolved *from*, carried on
+    /// the result so a component holding a `ResolvedConfig` can answer
+    /// "which deployment shape am I?" without the axes being passed
+    /// alongside it everywhere.
+    ///
+    /// Not `Resolved<T>` like every field below, deliberately: these
+    /// aren't layered values with a provenance, they're the inputs that
+    /// *give* the other fields their provenance. Asking where `mode`
+    /// came from is a question about the process's own arguments, not
+    /// about config resolution.
+    pub topology: Topology,
+    pub mode: Mode,
     pub connection_mode: Resolved<ConnectionMode>,
     pub auth: Resolved<AuthMode>,
     pub round_timeout_secs: Resolved<u64>,
     pub min_reputation_score: Resolved<f32>,
     pub client_registry_ttl: Resolved<u64>,
-    /// No universal default exists (spec §9) — `None` means genuinely
-    /// unset, not "fell back to a built-in value".
+    /// How many client updates a round needs before it closes. No
+    /// built-in default exists for this one — `None` here means
+    /// genuinely unset (no tier configured it), not "fell back to a
+    /// built-in value"; a deployment must set it explicitly via a
+    /// topology-appropriate value, an experiment file, `CONFLUX_QUORUM`,
+    /// or `--quorum`.
     pub quorum: Option<Resolved<u32>>,
     pub selector: Resolved<String>,
     pub seed_mode: Resolved<SeedMode>,
-    /// `None` when the resolved mode profile doesn't use a fixed seed
-    /// (production's "n/a", spec §4.1) — the `source` still names which
-    /// tier produced that `None`.
+    /// The fixed seed used for reproducible client sampling when
+    /// `seed_mode` is `Fixed`. `None` when the resolved mode profile uses
+    /// OS randomness instead (production's default) — the `source` still
+    /// names which tier produced that `None`, same as any other resolved
+    /// value.
     pub seed_value: Resolved<Option<u64>>,
     pub aggregator: Resolved<String>,
     pub robust_byzantine_fraction: Resolved<f32>,
+    pub clip_radius: Resolved<f32>,
     pub reputation_filter_enabled: Resolved<bool>,
+    pub client_side_privacy_transform: Resolved<bool>,
     pub privacy_mechanism: Resolved<String>,
     pub clip_norm: Resolved<f32>,
     pub noise_multiplier: Resolved<f32>,
@@ -104,24 +200,27 @@ pub struct ResolvedConfig {
     pub config_log_format: Resolved<LogFormat>,
 }
 
-/// No variants today — `AccountingScope::PerClient` was the one
-/// resolve-time fail-fast case this enum existed for (ADR 0006), and
-/// Phase 14 closed it. Kept as a type (not removed) so `resolve()`'s
-/// `Result<ResolvedConfig, ConfigError>` signature doesn't need to
-/// change here and at every call site for what would otherwise be a
-/// purely cosmetic reason — the next genuinely-not-implemented-yet
-/// resolved value gets a variant added here, same as this one was.
+/// No variants today — every parameter [`resolve`] currently knows about
+/// resolves unconditionally, so there's nothing left to fail on. Kept as
+/// a real (if empty) type rather than removed, so `resolve()`'s
+/// `Result<ResolvedConfig, ConfigError>` signature doesn't need to change
+/// at every call site the moment a *future* parameter needs a genuine
+/// resolve-time failure — a not-yet-implemented enum variant, an invalid
+/// combination of two overrides, and so on. An empty enum is
+/// uninstantiable, so a `Result<_, ConfigError>` is a compile-time
+/// promise that resolution can't fail, until the day a variant is added
+/// here and it can.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {}
 
-/// Resolves one parameter against the precedence chain from spec §4.1:
+/// Resolves one parameter against the six-tier precedence chain:
 /// builtin fallback < topology profile < mode profile < file < env < cli.
 /// The first tier (checked highest-precedence first) that set a value
 /// wins.
 ///
 /// This one generic function backs every field in [`resolve`] below,
-/// rather than each of the 19 parameters re-implementing the same
-/// six-way precedence check.
+/// rather than each of the ~20 parameters re-implementing the same
+/// six-way precedence check by hand.
 ///
 /// Ten arguments because there are genuinely six precedence tiers (each
 /// needing a value) plus four of their sources — bundling them into a
@@ -175,13 +274,16 @@ fn layer<T: Clone>(
     }
 }
 
-/// Resolves every parameter in spec §9 against `topology` and `mode`, then
-/// layers `file` (an experiment file's overrides, if any), `env`, and
-/// `cli` on top — highest precedence last, per spec §4.1.
+/// Resolves every parameter against `topology` and `mode`'s defaults,
+/// then layers `file` (an experiment file's overrides, if any), `env`,
+/// and `cli` on top — highest precedence last.
 ///
-/// The ordering *within* the "explicit override" tier (cli beats env beats
-/// file) is a Phase 1 decision, not something the spec pins down — see
-/// spec §11 Open Item 2 and `docs/phases/phase-1-config-registry.md`.
+/// Within that top "explicit override" tier, `cli` beats `env` beats
+/// `file`: the most specific, most deliberately-typed-for-this-one-run
+/// source wins over broader ones. A CLI flag is something you typed for
+/// this exact invocation; an env var might be set globally in a shell
+/// profile; a file's overrides might be checked into version control and
+/// shared across many runs. Narrower scope, higher precedence.
 pub fn resolve(
     topology: Topology,
     mode: Mode,
@@ -270,8 +372,11 @@ pub fn resolve(
         &env_var!("CLIENT_REGISTRY_TTL"),
     );
 
-    // `quorum` has no builtin fallback (spec §9) — `None` here means no
-    // tier set it at all, not "fell back to a default".
+    // `quorum` has no builtin fallback, unlike every other parameter
+    // above — handled separately from `layer` for exactly that reason.
+    // `None` here means no tier set it at all, not "fell back to a
+    // default"; the caller must supply it explicitly for a round to
+    // ever close.
     let quorum = match (
         cli.quorum,
         env.quorum,
@@ -352,6 +457,18 @@ pub fn resolve(
         &file_source,
         &env_var!("ROBUST_BYZANTINE_FRACTION"),
     );
+    let clip_radius = layer(
+        1.0_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.clip_radius),
+        env.clip_radius,
+        cli.clip_radius,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("CLIP_RADIUS"),
+    );
     let reputation_filter_enabled = layer(
         false,
         None,
@@ -375,6 +492,18 @@ pub fn resolve(
         &mode_source,
         &file_source,
         &env_var!("PRIVACY_MECHANISM"),
+    );
+    let client_side_privacy_transform = layer(
+        false,
+        None,
+        None,
+        file_overrides.and_then(|o| o.client_side_privacy_transform),
+        env.client_side_privacy_transform,
+        cli.client_side_privacy_transform,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("CLIENT_SIDE_PRIVACY_TRANSFORM"),
     );
     let clip_norm = layer(
         1.0_f32,
@@ -485,11 +614,9 @@ pub fn resolve(
         &env_var!("CONFIG_LOG_FORMAT"),
     );
 
-    // Phase 14: `AccountingScope::PerClient` used to fail fast here
-    // (ADR 0006) — now a real, implemented scope, resolved the same way
-    // as any other value.
-
     Ok(ResolvedConfig {
+        topology,
+        mode,
         connection_mode,
         auth,
         round_timeout_secs,
@@ -501,7 +628,9 @@ pub fn resolve(
         seed_value,
         aggregator,
         robust_byzantine_fraction,
+        clip_radius,
         reputation_filter_enabled,
+        client_side_privacy_transform,
         privacy_mechanism,
         clip_norm,
         noise_multiplier,
@@ -518,10 +647,13 @@ pub fn resolve(
 impl ResolvedConfig {
     /// Every resolved parameter, one log line each, in `format` — this is
     /// what makes resolution explainable "out loud" rather than just
-    /// internally consistent (ADR 0007). `conflux-server` must emit these
-    /// at startup before reaching "ready".
+    /// internally consistent. `conflux-server` emits these at startup,
+    /// before reaching "ready", so a misconfigured deployment can be
+    /// debugged from its own log rather than by reading source: each
+    /// line names the parameter, its resolved value, and which of the
+    /// six tiers produced it.
     // Sequential pushes read more clearly here than one giant `vec![]`
-    // literal spanning 19 multi-line, heterogeneously-typed `log_line`
+    // literal spanning ~20 multi-line, heterogeneously-typed `log_line`
     // calls.
     #[allow(clippy::vec_init_then_push)]
     pub fn to_log_lines(&self, format: LogFormat) -> Vec<String> {
@@ -600,9 +732,21 @@ impl ResolvedConfig {
         ));
         lines.push(log_line(
             format,
+            "clip_radius",
+            LoggedValue::Number(self.clip_radius.value.to_string()),
+            &self.clip_radius.source,
+        ));
+        lines.push(log_line(
+            format,
             "reputation_filter_enabled",
             LoggedValue::Number(self.reputation_filter_enabled.value.to_string()),
             &self.reputation_filter_enabled.source,
+        ));
+        lines.push(log_line(
+            format,
+            "client_side_privacy_transform",
+            LoggedValue::Number(self.client_side_privacy_transform.value.to_string()),
+            &self.client_side_privacy_transform.source,
         ));
         lines.push(log_line(
             format,
@@ -814,9 +958,110 @@ mod tests {
     }
 
     #[test]
+    fn client_side_privacy_transform_defaults_off_everywhere() {
+        // Opt-in, like every other privacy/security posture here. No
+        // topology or mode turns it on for you: transforming an update
+        // twice is a deployment's deliberate choice about its own trust
+        // boundaries, not something a profile should assume.
+        for topology in [
+            Topology::CrossSilo,
+            Topology::CrossDevice,
+            Topology::Crowdsource,
+            Topology::Edge,
+        ] {
+            for mode in [Mode::Research, Mode::Production] {
+                let resolved = resolve(
+                    topology,
+                    mode,
+                    None,
+                    &Overrides::default(),
+                    &Overrides::default(),
+                )
+                .unwrap();
+
+                assert!(!resolved.client_side_privacy_transform.value);
+                assert_eq!(
+                    resolved.client_side_privacy_transform.source,
+                    ConfigSource::BuiltinFallback
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn client_side_privacy_transform_explicit_override_wins() {
+        let cli_overrides = Overrides {
+            client_side_privacy_transform: Some(true),
+            ..Default::default()
+        };
+        let resolved = resolve(
+            Topology::Crowdsource,
+            Mode::Production,
+            None,
+            &Overrides::default(),
+            &cli_overrides,
+        )
+        .unwrap();
+
+        assert!(resolved.client_side_privacy_transform.value);
+        assert_eq!(
+            resolved.client_side_privacy_transform.source,
+            ConfigSource::Cli
+        );
+    }
+
+    #[test]
+    fn clip_radius_defaults_to_builtin_fallback() {
+        // No topology or mode owns an opinion on it — the right radius
+        // depends on the model's weight scale, not the deployment shape
+        // — so every topology/mode pair must land on the same fallback.
+        for topology in [
+            Topology::CrossSilo,
+            Topology::CrossDevice,
+            Topology::Crowdsource,
+            Topology::Edge,
+        ] {
+            for mode in [Mode::Research, Mode::Production] {
+                let resolved = resolve(
+                    topology,
+                    mode,
+                    None,
+                    &Overrides::default(),
+                    &Overrides::default(),
+                )
+                .unwrap();
+
+                assert_eq!(resolved.clip_radius.value, 1.0);
+                assert_eq!(resolved.clip_radius.source, ConfigSource::BuiltinFallback);
+            }
+        }
+    }
+
+    #[test]
+    fn clip_radius_explicit_override_wins() {
+        let cli_overrides = Overrides {
+            clip_radius: Some(2.5),
+            ..Default::default()
+        };
+
+        let resolved = resolve(
+            Topology::CrossSilo,
+            Mode::Research,
+            None,
+            &Overrides::default(),
+            &cli_overrides,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.clip_radius.value, 2.5);
+        assert_eq!(resolved.clip_radius.source, ConfigSource::Cli);
+    }
+
+    #[test]
     fn reputation_filter_enabled_defaults_off() {
-        // Phase 13: every aggregator's default behavior should match its
-        // cited paper with zero framework-imposed interference.
+        // Every aggregator's default behavior should match its cited
+        // paper, with zero framework-imposed interference unless a
+        // deployment explicitly opts in.
         let resolved = resolve(
             Topology::CrossSilo,
             Mode::Research,
@@ -980,11 +1225,8 @@ mod tests {
 
     #[test]
     fn per_client_accounting_resolves_successfully() {
-        // Phase 14: inverted from this test's original assertion — see
-        // this test's own former name (`per_client_accounting_fails_fast`)
-        // in git history. `PerClient` is now a real, implemented scope;
-        // resolving it should succeed like any other `AccountingScope`
-        // value, not fail fast the way ADR 0006 originally required.
+        // AccountingScope::PerClient is a real, implemented scope —
+        // resolves the same way as Global, with no special-case failure.
         let cli_overrides = Overrides {
             accounting_scope: Some(AccountingScope::PerClient),
             ..Default::default()
@@ -997,7 +1239,7 @@ mod tests {
             &Overrides::default(),
             &cli_overrides,
         )
-        .expect("PerClient must resolve successfully now that Phase 14 has implemented it");
+        .expect("PerClient must resolve successfully");
 
         assert_eq!(resolved.accounting_scope.value, AccountingScope::PerClient);
     }
@@ -1044,5 +1286,63 @@ mod tests {
 
         assert!(clip_norm_line.contains("= 1"));
         assert!(clip_norm_line.contains("(source: built-in fallback)"));
+    }
+
+    #[test]
+    fn empty_string_aggregator_override_resolves_without_error() {
+        // conflux-config resolves whatever String it's given for
+        // `aggregator`/`selector` — it doesn't validate the name against
+        // the strategy registry itself. That check happens downstream,
+        // in whichever crate (conflux-core, conflux-selector) actually
+        // constructs the implementation by calling `registry::lookup`.
+        // An empty string is accepted here, and only fails later, at
+        // construction time — worth confirming explicitly, since it's a
+        // real boundary a reader could otherwise assume conflux-config
+        // enforces.
+        let cli_overrides = Overrides {
+            aggregator: Some(String::new()),
+            ..Default::default()
+        };
+
+        let resolved = resolve(
+            Topology::CrossSilo,
+            Mode::Research,
+            None,
+            &Overrides::default(),
+            &cli_overrides,
+        )
+        .expect("resolve() does not validate strategy names");
+
+        assert_eq!(resolved.aggregator.value, "");
+        assert_eq!(resolved.aggregator.source, ConfigSource::Cli);
+    }
+
+    #[test]
+    fn out_of_range_numeric_overrides_are_not_rejected_by_resolve() {
+        // Same boundary as the test above, for numeric parameters:
+        // resolve() carries whatever value it's given through to
+        // ResolvedConfig without range-checking it. A negative
+        // target_epsilon or a huge clip_norm is nonsensical for the
+        // privacy/DP math that consumes these values downstream
+        // (conflux-privacy), but that validation — if it exists — lives
+        // there, not here. Documenting the absence, not asserting it's
+        // correct.
+        let cli_overrides = Overrides {
+            target_epsilon: Some(-1.0),
+            clip_norm: Some(f32::MAX),
+            ..Default::default()
+        };
+
+        let resolved = resolve(
+            Topology::CrossSilo,
+            Mode::Research,
+            None,
+            &Overrides::default(),
+            &cli_overrides,
+        )
+        .expect("resolve() does not range-check numeric overrides");
+
+        assert_eq!(resolved.target_epsilon.value, -1.0);
+        assert_eq!(resolved.clip_norm.value, f32::MAX);
     }
 }

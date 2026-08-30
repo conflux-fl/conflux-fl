@@ -1,6 +1,13 @@
 //! Model checkpoint + experiment metadata persistence.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §8.
+//! This crate owns two related but separate jobs: saving/loading the
+//! global model's weights across rounds (the `Store` trait), and
+//! persisting the raw history a differential-privacy accountant needs to
+//! survive a restart without its epsilon budget silently resetting (the
+//! `PrivacyRoundLog` trait). Four concrete backends ship today —
+//! `InMemoryStore`, `FileStore`, `PostgresStore`, `S3Store` — unified at
+//! runtime by the `AnyStore` enum so a caller can pick a backend by
+//! config without needing `Box<dyn Store>`.
 
 mod any_store;
 mod postgres_store;
@@ -13,23 +20,23 @@ pub use s3_store::S3Store;
 /// Persists the sequence of `(noise_multiplier, sample_rate)` pairs an
 /// `RdpAccountant` (`conflux-privacy`) has recorded, so a restarted
 /// `conflux-server` can replay them into a fresh accountant instead of
-/// silently resetting cumulative epsilon to zero. Spec §10 names this the
-/// reason `ExperimentStore`/Postgres exists at all — see
-/// `docs/phases/phase-7d-accountant-persistence.md`.
+/// silently resetting cumulative epsilon to zero.
 ///
 /// Only `PostgresStore` implements this — `InMemoryStore`/`FileStore` have
 /// no restart-durability story to extend, and a no-op impl for them would
 /// give a misleading "yes, persisted" answer for a backend that isn't.
 ///
-/// Phase 14 (`AccountingScope::PerClient`): `append_round_for_client`/
-/// `load_client_rounds` are the per-client counterparts, persisting the
-/// same raw `(noise_multiplier, sample_rate)` shape — deliberately *not*
-/// a precomputed cumulative-epsilon number, even though that's smaller
-/// to store. A precomputed epsilon is only valid for whatever `delta` it
-/// was computed with; persisting raw rounds and recomputing on load
-/// (exactly like the experiment-wide history already does) stays correct
-/// under any `delta` a future run resolves, not just the one in effect
-/// when a round was recorded.
+/// `append_round_for_client`/`load_client_rounds` are the per-client
+/// counterparts, used when privacy accounting is scoped `PerClient` rather
+/// than `Global` — one running epsilon per client instead of one for the
+/// whole experiment. They persist the same raw `(noise_multiplier,
+/// sample_rate)` shape per client, deliberately *not* a precomputed
+/// cumulative-epsilon number, even though that's smaller to store. A
+/// precomputed epsilon is only valid for whatever `delta` it was computed
+/// with; persisting raw rounds and recomputing on load (exactly like the
+/// experiment-wide history already does) stays correct under any `delta`
+/// a future run resolves, not just the one in effect when a round was
+/// recorded.
 pub trait PrivacyRoundLog: Send + Sync {
     fn append_round(
         &self,
@@ -73,25 +80,31 @@ pub enum StoreError {
          ({len} bytes, not a multiple of 4)"
     )]
     MalformedCheckpoint { path: String, len: usize },
-    /// Neither `InMemoryStore` nor `FileStore` (Phase 2a) needed this — a
-    /// `HashMap`/local filesystem doesn't fail this way. `PostgresStore`
-    /// (Phase 7b) is the first backend to talk to a separate service, so
-    /// the trait needed a variant for "the backend itself is
-    /// unreachable/erroring" — same reasoning as `conflux-registry`'s
-    /// `RegistryError::Backend`, added for `RedisRegistry` in this same
-    /// phase.
+    /// Wraps an error from a backend that talks to a separate service —
+    /// `PostgresStore`'s SQL driver, `S3Store`'s HTTP client — where the
+    /// request itself failed (connection refused, auth rejected, query
+    /// error). Neither `InMemoryStore` (a `HashMap`) nor `FileStore` (the
+    /// local filesystem) can fail this way, so only the network-backed
+    /// backends ever construct this variant. The wrapped `String` is the
+    /// underlying driver's own error message — enough to diagnose an
+    /// outage from a log line without this crate needing to model every
+    /// possible Postgres/S3 failure mode as its own variant.
     #[error("store backend error: {0}")]
     Backend(String),
 }
 
-/// Load the round's starting weights, save a new checkpoint after each
-/// round. Spec §8's Step 0 (`load_latest_weights`) and Step 4
-/// (`save_checkpoint`).
+/// Loads the weights a new round starts from, and saves a checkpoint after
+/// each round completes — the two persistence calls every backend must
+/// answer, regardless of where the bytes actually live.
 ///
-/// `async fn` (native syntax, no `async-trait` needed): `PostgresStore`
-/// does real network I/O, so this can't stay synchronous. Not
-/// dyn-compatible without extra work, but nothing in this codebase needs
-/// `dyn Store` — every caller holds a concrete type.
+/// The methods are `async fn` directly in the trait (native syntax, no
+/// `async-trait` crate needed): `PostgresStore` and `S3Store` do real
+/// network I/O to answer either call, so this can't stay synchronous.
+/// The tradeoff is that a trait with native `async fn` methods isn't
+/// object-safe without extra boxing, so `dyn Store` doesn't work out of
+/// the box. Nothing in this codebase needs it to — every caller holds a
+/// concrete type, and `AnyStore` (below) is how a caller picks between
+/// backends at runtime without needing dynamic dispatch at all.
 pub trait Store: Send + Sync {
     fn load_latest_weights(&self) -> impl Future<Output = Result<Vec<f32>, StoreError>> + Send;
     fn save_checkpoint(
@@ -129,8 +142,10 @@ impl Store for InMemoryStore {
 }
 
 /// One flat file per round under `dir` (`checkpoint-<round>.bin`, a raw
-/// little-endian `f32` array — no header, no metadata). `S3Store` (Phase 7)
-/// will implement the same `Store` trait against object storage instead.
+/// little-endian `f32` array — no header, no metadata). `PostgresStore` and
+/// `S3Store` implement the same `Store` trait against a database and
+/// object storage respectively, for deployments that need a shared,
+/// durable backend instead of the local disk this one writes to.
 pub struct FileStore {
     dir: PathBuf,
 }
@@ -176,14 +191,13 @@ impl FileStore {
 }
 
 impl Store for FileStore {
-    // Still plain `std::fs` calls under the hood — this crate has no
-    // async runtime dependency of its own, and `InMemoryStore` needs
-    // none either. That means a `FileStore` call briefly blocks whatever
-    // thread polls it; fine for `InMemoryStore`-scale I/O but a real
-    // cleanup candidate (`tokio::task::spawn_blocking`) if `FileStore`
-    // ever needs to stop blocking the executor under load — out of scope
-    // for this phase, which is about adding `PostgresStore`, not
-    // revisiting Phase 2a's backends.
+    // Still plain `std::fs` calls under the hood, wrapped in an `async fn`
+    // only to satisfy the `Store` trait's signature — `InMemoryStore`
+    // needs no async runtime either. That means a `FileStore` call
+    // briefly blocks whatever thread polls it; fine at the scale a local
+    // research run writes checkpoints, but a real candidate for
+    // `tokio::task::spawn_blocking` if `FileStore` ever needs to stop
+    // blocking the executor under sustained load.
     async fn load_latest_weights(&self) -> Result<Vec<f32>, StoreError> {
         let round = self.latest_round()?.ok_or(StoreError::NoCheckpoint)?;
         read_weights(&self.checkpoint_path(round))
@@ -288,5 +302,81 @@ mod tests {
 
         assert!(matches!(err, StoreError::NoCheckpoint));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A checkpoint file is just raw bytes on disk — nothing stops it from
+    /// being truncated mid-write by a crash, or corrupted by a bad disk.
+    /// `read_weights` checks the buffer's *length* (a multiple of 4 bytes,
+    /// one `f32` each) before trusting any of it; a file that fails that
+    /// check must come back as a clean `MalformedCheckpoint` error, never
+    /// a wrong-but-successful parse of partial float data.
+    #[tokio::test]
+    async fn file_store_errors_on_truncated_checkpoint_bytes() {
+        let dir = temp_dir("malformed");
+        let store = FileStore::new(&dir).unwrap();
+
+        // 6 bytes: a valid f32 (4 bytes) plus 2 leftover bytes that can't
+        // form a whole f32 — as if a crash cut the write short.
+        std::fs::write(dir.join("checkpoint-1.bin"), [0u8, 1, 2, 3, 4, 5]).unwrap();
+
+        let err = store.load_latest_weights().await.unwrap_err();
+
+        match err {
+            StoreError::MalformedCheckpoint { len, .. } => assert_eq!(len, 6),
+            other => panic!("expected MalformedCheckpoint, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `latest_round` scans every entry in `dir` looking for the
+    /// `checkpoint-<round>.bin` naming convention. A directory is not a
+    /// namespace this crate controls exclusively — an editor swap file, a
+    /// `.gitkeep`, or any other stray entry must be silently skipped
+    /// rather than crashing the scan or being mistaken for a checkpoint.
+    #[tokio::test]
+    async fn file_store_ignores_files_that_do_not_match_the_checkpoint_naming_convention() {
+        let dir = temp_dir("stray_files");
+        let store = FileStore::new(&dir).unwrap();
+        store.save_checkpoint(1, &[1.0]).await.unwrap();
+
+        std::fs::write(dir.join(".gitkeep"), b"").unwrap();
+        std::fs::write(dir.join("checkpoint-not-a-number.bin"), b"junk").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"unrelated file").unwrap();
+
+        assert_eq!(store.load_latest_weights().await.unwrap(), vec![1.0]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `InMemoryStore` guards its state with a `Mutex` specifically because
+    /// nothing else about it is thread-safe — this drives many concurrent
+    /// `save_checkpoint` calls at once and checks that every reader
+    /// afterwards sees one complete, non-garbled write (a fully-formed
+    /// `Vec<f32>` from exactly one of the concurrent calls) rather than
+    /// bytes torn between two writers.
+    #[tokio::test]
+    async fn concurrent_saves_to_in_memory_store_never_produce_a_torn_write() {
+        use std::sync::Arc;
+
+        let store = Arc::new(InMemoryStore::new(vec![0.0]));
+        let mut handles = Vec::new();
+        for i in 1..=20u64 {
+            let store = Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                store
+                    .save_checkpoint(i, &[i as f32, i as f32 * 2.0])
+                    .await
+                    .unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let latest = store.load_latest_weights().await.unwrap();
+        // Whichever round happened to write last, its two values must be
+        // internally consistent (the second is always double the first) —
+        // proof no two concurrent writers' bytes got interleaved.
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest[1], latest[0] * 2.0);
     }
 }

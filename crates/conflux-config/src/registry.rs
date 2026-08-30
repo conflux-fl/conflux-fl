@@ -1,13 +1,19 @@
-//! Compile-time strategy registry (ADR 0002, spec §5). An algorithm
-//! implementation in another crate — a new `AveragingWeighting`, a new
-//! `RobustSelection` member — submits one [`StrategyEntry`] via
-//! `inventory::submit!` to become selectable by name from config
-//! (`aggregator = "fedavg"`) without `conflux-server` needing to know
-//! about it at compile time.
+//! A compile-time strategy registry: lets an algorithm implementation in
+//! another crate become selectable by name from config
+//! (`aggregator = "fedavg"`) without `conflux-config` — or
+//! `conflux-server`, which reads it — ever needing to import that other
+//! crate. Each implementation submits one [`StrategyEntry`] via
+//! `inventory::submit!` at the top level of its own file; nothing has to
+//! collect these into a central list by hand.
 //!
-//! No real crate submits an entry yet — that starts in Phase 2, when
-//! `conflux-selector`/`conflux-privacy`/`conflux-core` ship their first
-//! family members. This phase only builds and tests the mechanism itself.
+//! `conflux-core`, `conflux-selector`, and `conflux-privacy` each submit
+//! one entry per algorithm they ship — `conflux-core` alone currently
+//! registers every member of its `averaging` and `robust` aggregator
+//! families this way. Each of those crates also calls [`lookup`]
+//! themselves, in their own "construct the implementation for this
+//! configured name" dispatch function, to check a name against every
+//! entry submitted anywhere in the final binary before building the
+//! corresponding implementation.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrategyKind {

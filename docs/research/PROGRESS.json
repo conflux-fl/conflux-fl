@@ -1,0 +1,54 @@
+{
+  "project": "dss-temporal-consistency-aggregation",
+  "one_sentence_goal": "Determine whether cross-round temporal signals (deviation-trace stability and inter-client correlation) can distinguish colluding Sybils from a legitimate non-IID majority, which no single-round aggregation rule can do.",
+  "status": "active",
+  "last_updated": "2026-08-31",
+  "last_session_summary": "Completed the original 4-item validation plan. Fixed the §5.8 numerical defect (f32 catastrophic cancellation in `1 - collusion`, now f64) and found the fix does NOT resolve the failure it was blamed for. Fixed Finding 3 (DSS now combines through the base method, so wrapping a robust method can no longer regress it) — all 9 robust-base cells repaired. Built a harder collusion model (correlated, non-identical Sybils) which answered §5.6's open question and incidentally found FoolsGold degrades 5.6x against it. Ran the first real-data validation, which found Centered Clipping's default clip radius loses to no defense at all.",
+
+  "phase": "post-validation; hypothesis partially supported, three open design questions",
+
+  "hypothesis_status": {
+    "claim_1_sybil_blind_spot": "demonstrated empirically (§5.1, §5.2)",
+    "claim_2_non_iid_conflation": "demonstrated empirically (§5.4), with a structural split between method families",
+    "dss_core_hypothesis": "supported on ONE attack shape only (temporally unstable colluders, §5.5: fedavg 161.3 -> 1.18). Does not catch stable colluders, by its own design.",
+    "dss_safety_as_a_wrapper": "resolved 2026-08-31 (§5.11). Was the most serious problem found; wrapping a robust base could regress it up to 577x. Now cannot do materially worse than what it wraps.",
+    "dss_under_solo_attacker": "OPEN. Still fails with a fragile base. Cause isolated (§5.8.1): the shared deviation reference is itself unstable when the base method is. Design problem, not arithmetic."
+  },
+
+  "what_changed_this_session": [
+    "conflux-core/src/temporal.rs: collusion score computed in f64 (fixes catastrophic cancellation); DssAggregator gained `combine_through_base` (default true) which routes the combine through the wrapped base method",
+    "conflux-attacks: new CorrelatedSybilAttack (divergence=0 reproduces PersistentSybilAttack exactly)",
+    "run_experiment.rs: new `dssraw_` prefix (pre-Finding-3 combine, for A/B), `--clip-radius` flag, `correlated_sybil` and `correlated_sybil_unstable` attacks",
+    "New experiments 2.7 (Centered Clipping), 2.8 (Finding 3 fix), 2.9 (correlated Sybils), 3.1/3.2 (real-data MNIST)",
+    "python/conflux_client/examples/benchmark.py: new --attacks dimension; new e2e_pytorch_shakespeare harness",
+    "Research doc gained sections 5.8.1, 5.10, 5.11, 5.12, 5.13"
+  ],
+
+  "conclusions_overturned_by_measurement": [
+    "§5.8 predicted a mechanical epsilon fix would replace the chaotic regime with a predictable one. It did not: it made results reproducible (cross-seed CV 1.03 -> 0.43) but not better, and the §5.9 joint transient window came back byte-identical. The two did not share a root cause.",
+    "§5.8's specific prescribed fix (epsilon fallback at 1e-4*n) is measurably wrong -- it fires on a unit test with clean correct discrimination and returns the sybil-dominated mean.",
+    "§5.6 concluded the AND-gate was numerically identical to stability-only. That was an artifact of its identical-Sybil attack model. Against non-identical colluders, collusion-only scores 1.09 where stability-only scores 17.13.",
+    "§5.10 found a genuine clip-radius optimum at dim=3. It does not transfer: on a 50,890-parameter model the curve is monotonic toward FedAvg with no optimum anywhere."
+  ],
+
+  "reproducibility": {
+    "total_result_rows": 28331,
+    "seeds_per_synthetic_cell": 5,
+    "seeds_per_real_data_cell": 1,
+    "known_gap": "Real-data runs (3.1/3.2) are single-seed. Adequate for the negative result about clip_radius; not adequate for anything comparative."
+  },
+
+  "environment": {
+    "compute": "local CPU only",
+    "rust": "cargo workspace, edition 2024; experiments are conflux-attacks examples",
+    "python": "python/conflux_client/.venv, torch 2.13.0+cpu, torchvision 0.28.0+cpu",
+    "cost": "none -- no API-based models involved"
+  },
+
+  "next_action": "Task r1 in tasks.json: make DSS's deviation reference robust. It is the last unresolved cause of a measured DSS failure, and §5.8.1 already isolated it.",
+
+  "blocked_on_user": [
+    "Whether to change the AND-gate's combination rule (task r2). §5.12 shows it discards real signal, but flipping it risks reopening Claim 2 against honest non-IID clients -- a research judgment, not a code change.",
+    "Whether DSS is being taken toward publication. If so, tasks p1-p3 matter; if it stays an internal research line, they don't."
+  ]
+}

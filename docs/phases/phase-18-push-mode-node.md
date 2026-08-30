@@ -1,6 +1,6 @@
-# Phase 18 (draft) — Push mode in `conflux-node`
+# Phase 18 — Push mode in `conflux-node`
 
-**Status: scoping draft, not started.**
+**Status: shipped 2026-08-30.**
 
 ## Scope
 
@@ -109,10 +109,69 @@ naming, is to hand back *a stream handle*, which is exactly what today's
 
 ## Definition of done
 
-- [ ] `cargo test -p conflux-net -p conflux-node` passes, including the
+- [x] `cargo test -p conflux-net -p conflux-node` passes, including the
       real push-mode E2E and reconnect tests.
-- [ ] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+- [x] `cargo build --workspace` and `cargo clippy --workspace --all-targets`
       stay clean.
-- [ ] `docs/STATUS.md`'s "Known deviations from spec" bullet updated;
+- [x] `docs/STATUS.md`'s "Known deviations from spec" bullet updated;
       `cross_silo`'s default configuration is now fully functional
       end-to-end for the first time.
+
+## Outcome
+
+Shipped to this brief's intent, with one structural deviation from its
+literal recommendation — because the brief described a `conflux-node`
+that doesn't exist yet.
+
+1. **No `PullTaskSource`/`PushTaskSource`, and no "main loop".** The
+   brief recommended an internal task-source abstraction selected at
+   startup, feeding "the same downstream training loop". `conflux-node`
+   has no such loop: it is a *proxy*, not a driver. It opens an upstream
+   connection, then serves its own local gRPC listener and waits — the
+   Python `ClientApp` is what drives the round, by calling `fetch_task`
+   on the local hop. There is no Rust-side cadence to branch on, so a
+   task-source abstraction would have had no consumer.
+
+   What the two modes actually differ in is *which upstream transport
+   the bridge holds*, so that is what the mode selects:
+   `Upstream::Pull(PullTransport) | Upstream::Push(PushTransport)`,
+   exactly as the brief's Deliverables section (as opposed to its
+   Recommendation) described. Push mode then proxies the *subscription*
+   the same way pull mode proxies a request: `NodeBridge::
+   subscribe_tasks` opens one upstream stream and relays it to whatever
+   subscribed on the local hop — one `.proto`, two hops, in streaming
+   form (ADR 0004).
+
+2. **What resets the reconnect backoff is a delivered task, not an
+   accepted subscription.** The brief said to reuse `fetch_task`'s
+   `MAX_ATTEMPTS`/`INITIAL_BACKOFF` constants, which this does. But the
+   counter they drive can't be the same one: a failed `fetch_task` is a
+   call to retry, whereas a server can accept a push subscription and
+   immediately close it, forever. Counting only *subscribe errors* would
+   spin hot against exactly that server, since every subscribe
+   "succeeds". So a subscription that closes without delivering anything
+   counts as a failure, and only a task actually arriving resets the
+   count. This was not in the brief; it is the failure mode push mode
+   has and pull mode structurally cannot.
+
+3. **`PushTransport` gained `#[derive(Clone)]`.** A long-lived
+   subscription and ordinary `submit_delta` calls share one connection.
+   Holding the bridge's mutex for the subscription's lifetime would make
+   submits wait on re-subscribe attempts; cloning gives each its own
+   handle over the same multiplexed HTTP/2 channel — the standard tonic
+   pattern.
+
+`NodeBridge::new` kept its name for the pull-mode constructor (rather
+than becoming `new_pull`), so every pre-existing call site and both
+Phase 6 tests compile and pass **completely unmodified**, as this brief's
+test plan required.
+
+Five new tests in `crates/conflux-node/tests/push_mode.rs`: the two-hop
+push E2E (asserting `fetch_task` is never called, so delivery is proven
+to be by push); reconnect-after-drop; the give-up-with-an-error path,
+asserting the 50ms-doubling backoff shape is genuinely shared with
+`fetch_task`'s; the two mode-mismatch errors; and `cross_silo`'s real
+default posture — **push + mTLS together, end to end for the first
+time**, which is the gap this phase existed to close. 284 → 289 tests
+workspace-wide; `cargo fmt` and `cargo clippy --workspace --all-targets`
+clean.

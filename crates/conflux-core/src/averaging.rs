@@ -1,10 +1,10 @@
-//! The `averaging` aggregation family (spec §5): shared weighted-mean
-//! accumulation, written once, plus a small trait capturing what each
-//! member varies. `FedAvg` is the one member Phase 4 ships.
+//! The `averaging` aggregation family: shared weighted-mean accumulation,
+//! written once, plus a small trait capturing what each member varies.
+//! `FedAvg` is the one member currently shipped.
 
 use conflux_proto::ClientDelta;
 
-use crate::weights::decode_and_validate;
+use crate::weights::{accumulate_weighted, decode_and_validate};
 use crate::{Aggregator, AggregatorError};
 
 /// What a member of the `averaging` family varies: how much weight one
@@ -16,9 +16,9 @@ pub trait AveragingWeighting: Send + Sync {
     fn weight_for(&self, update: &ClientDelta, batch: &[ClientDelta]) -> f32;
 }
 
-/// Shared accumulation logic for the whole `averaging` family (ADR 0002):
-/// decode each update, ask `W` how much it counts, normalize, accumulate.
-/// A new family member — e.g. inverse-loss weighting — is a new
+/// Shared accumulation logic for the whole `averaging` family: decode
+/// each update, ask `W` how much it counts, normalize, accumulate. A new
+/// family member — e.g. inverse-loss weighting — is a new
 /// `AveragingWeighting` impl, not a new `Aggregator`.
 pub struct WeightedAverageAggregator<W: AveragingWeighting> {
     weighting: W,
@@ -51,9 +51,7 @@ impl<W: AveragingWeighting> Aggregator for WeightedAverageAggregator<W> {
         let mut accumulator = vec![0.0f32; dim];
         for (raw_weight, weights) in raw_weights.iter().zip(&decoded) {
             let normalized = raw_weight / total;
-            for (acc, w) in accumulator.iter_mut().zip(weights) {
-                *acc += normalized * w;
-            }
+            accumulate_weighted(&mut accumulator, weights, normalized);
         }
 
         Ok(accumulator)
@@ -63,7 +61,8 @@ impl<W: AveragingWeighting> Aggregator for WeightedAverageAggregator<W> {
 /// FedAvg's weighting rule (McMahan et al., 2017): weight each update by
 /// its sample count. `WeightedAverageAggregator::aggregate` does the
 /// normalization (`n_k / Σn_i`), so this impl only returns the raw count —
-/// the ~10-line trait impl ADR 0002 promises for a new family member.
+/// a family member is typically about this small, a short trait impl
+/// reusing the shared accumulation logic above.
 #[derive(Default)]
 pub struct SampleCountWeighting;
 
@@ -73,7 +72,8 @@ impl AveragingWeighting for SampleCountWeighting {
     }
 }
 
-/// The exact type alias from spec §5.
+/// FedAvg (McMahan et al., 2017) as a concrete type: `WeightedAverageAggregator`
+/// specialized with `SampleCountWeighting`.
 pub type FedAvg = WeightedAverageAggregator<SampleCountWeighting>;
 
 // `FedAvg` is a type alias, not a distinct type, so it can't carry its own

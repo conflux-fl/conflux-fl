@@ -1,12 +1,16 @@
-//! Node authentication core (Phase 8b) — closes gap 2 from
-//! `docs/FLOWER_COMPARISON.md`: registration previously had no check of
-//! *which* client is allowed to join, only whether it could complete a
-//! handshake at all.
+//! Node authentication: a check of *which* client is allowed to join, on
+//! top of whatever transport-level handshake already got it connected —
+//! a client that can open a connection isn't necessarily one the operator
+//! wants participating in an experiment.
 //!
 //! Gated by `conflux-config`'s `require_node_auth` (research default
-//! `false`, production default `true`) — this module builds the data
-//! model and storage backends; enforcement at the `register()` RPC and
-//! the admin surface to populate the allow-list are Phase 8c.
+//! `false`, production default `true`). This module builds the data model
+//! and storage backends (`NodeAllowlist`, `InMemoryNodeAllowlist`,
+//! `RedisNodeAllowlist`); `conflux-server` is what actually enforces it —
+//! `dispatcher.rs`'s `register()` checks the allow-list before touching
+//! the registry at all when `require_node_auth` is on, and `http.rs`
+//! exposes an admin endpoint (`allow_node`) an operator uses to populate
+//! it.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -15,14 +19,16 @@ use std::sync::Mutex;
 use crate::ClientId;
 
 /// Proof of identity a node presents at registration. Two independent
-/// mechanisms because node auth shouldn't force mTLS (Phase 7e) to also be
-/// turned on for a given deployment — a `SharedToken` deployment gets real
-/// node auth without a certificate authority to run.
+/// mechanisms because node auth shouldn't force mTLS to also be turned on
+/// for a given deployment — a `SharedToken` deployment gets real node auth
+/// without a certificate authority to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeIdentity {
     /// SHA-256 hex digest of the DER-encoded peer certificate, when mTLS
-    /// is in use (Phase 8c wires the actual extraction from
-    /// `conflux-net`'s TLS layer).
+    /// is in use. `conflux-net`'s TLS layer extracts this from the actual
+    /// peer certificate on the connection (see
+    /// `conflux-net::peer_cert_fingerprint`); `conflux-server` only falls
+    /// back to `SharedToken` when no peer certificate is present.
     CertFingerprint(String),
     /// A pre-shared secret, when mTLS isn't in use.
     SharedToken(String),
@@ -33,23 +39,23 @@ pub enum NodeIdentity {
 pub enum NodeAuthError {
     #[error("client {0} is not on the node allow-list")]
     NotAllowed(ClientId),
-    /// Mirrors `RegistryError::Backend` (Phase 7a) — `InMemoryNodeAllowlist`
-    /// never needs this, `RedisNodeAllowlist` does since it does real I/O.
+    /// Mirrors `RegistryError::Backend` — `InMemoryNodeAllowlist` never
+    /// needs this, `RedisNodeAllowlist` does since it does real I/O.
     #[error("node allow-list backend error: {0}")]
     Backend(String),
 }
 
 /// Who's allowed to register, and with which identity.
 ///
-/// A trait, not a concrete struct, for the same reason `Registry` (Phase 1)
-/// and `Store` (Phase 2a) are: `conflux-server` depends on allow-list
-/// behavior without committing to a storage backend —
+/// A trait, not a concrete struct, for the same reason `Registry` (in this
+/// crate) and `Store` (in `conflux-store`) are: `conflux-server` depends on
+/// allow-list behavior without committing to a storage backend —
 /// `InMemoryNodeAllowlist` here, `RedisNodeAllowlist` for a durable,
 /// multi-process deployment.
 ///
-/// `Send + Sync` (shared across concurrently handled `register()` calls,
-/// Phase 8c) and native `async fn` (a real backend does I/O) — same
-/// reasoning as `Registry`'s own doc comment.
+/// `Send + Sync` (shared across concurrently handled `register()` calls in
+/// `conflux-server`'s dispatcher) and native `async fn` (a real backend
+/// does I/O) — same reasoning as `Registry`'s own doc comment.
 pub trait NodeAllowlist: Send + Sync {
     /// Grants `id` access, remembering `identity` as the proof that must
     /// be presented later. Re-`allow`ing an already-allowed `id` replaces
@@ -185,6 +191,34 @@ mod tests {
         allowlist.revoke(&id("c1")).await.unwrap();
 
         assert_eq!(allowlist.list().await.unwrap(), vec![id("c2")]);
+    }
+
+    /// A credential that's genuinely valid — just for a *different*
+    /// client — must still be rejected. The whole point of node auth is
+    /// binding an identity to one specific client id; a check that only
+    /// asked "does this token exist anywhere on the allow-list" would let
+    /// one compromised or leaked node credential impersonate any other
+    /// allowed client.
+    #[tokio::test]
+    async fn credential_valid_for_one_client_is_rejected_for_another() {
+        let allowlist = InMemoryNodeAllowlist::new();
+        let token_for_c1 = NodeIdentity::SharedToken("c1-secret".to_string());
+        let token_for_c2 = NodeIdentity::SharedToken("c2-secret".to_string());
+        allowlist
+            .allow(id("c1"), token_for_c1.clone())
+            .await
+            .unwrap();
+        allowlist
+            .allow(id("c2"), token_for_c2.clone())
+            .await
+            .unwrap();
+
+        // c1's real token, presented while claiming to be c2, must fail —
+        // even though that exact token is valid for someone.
+        assert!(!allowlist.check(&id("c2"), &token_for_c1).await.unwrap());
+        // Each client's own token still works for itself.
+        assert!(allowlist.check(&id("c1"), &token_for_c1).await.unwrap());
+        assert!(allowlist.check(&id("c2"), &token_for_c2).await.unwrap());
     }
 
     #[tokio::test]

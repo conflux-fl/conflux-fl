@@ -5,5 +5,9 @@ __pycache__/
 .venv/
 python/conflux_client/*_pb2.py
 python/conflux_client/*_pb2_grpc.py
+python/conflux_client/examples/results_*.jsonl
+python/conflux_client/examples/results_*.csv
+python/conflux_client/examples/results_*.png
+python/conflux_client/examples/benchmark_*.log
 .claude/
 CLAUDE.md

@@ -1,25 +1,34 @@
-//! Local DP (clip + noise) + epsilon accounting.
-//!
-//! See `docs/spec/conflux-spec-v1.md` §5–§6.
+//! Local differential privacy for federated learning: clipping and noising
+//! a client's update before it leaves the client (or before the server
+//! aggregates it), plus an accountant that tracks how much cumulative
+//! privacy loss ("epsilon") has been spent across rounds so a caller can
+//! stop once a configured budget runs out.
 
 use conflux_config::{StrategyEntry, StrategyKind};
 use rand_distr::{Distribution, Normal};
 
 /// What varies about a privacy mechanism: how it transforms one client's
-/// update before it leaves the client. `Box<dyn PrivacyMechanism>`
-/// (Phase 11b) is why `transform`/`add_noise` take `&mut dyn rand::Rng`
-/// rather than a generic `impl rand::Rng` — a trait object can't have a
-/// generic method, and this is a zero-cost, automatic unsized coercion
-/// at every existing call site (passing `&mut StdRng` where `&mut dyn
-/// Rng` is expected needs no change from the caller).
+/// update in place before that update is used further (sent over the
+/// network, or aggregated). Implementations need to be usable as
+/// `Box<dyn PrivacyMechanism>` — constructed by name from configuration
+/// at startup, without the caller knowing the concrete type — so
+/// `transform` takes `rng: &mut dyn rand::Rng` rather than a generic
+/// `impl rand::Rng` or a generic type parameter: a trait with a generic
+/// method can't be made into a trait object, because the vtable needs one
+/// fixed function-pointer slot per method, and a generic method would
+/// need a different one per instantiation. Taking `&mut dyn Rng` instead
+/// keeps `transform` itself non-generic. Callers are unaffected — passing
+/// a concrete `&mut StdRng` (or any other `Rng` impl) where `&mut dyn Rng`
+/// is expected is an automatic, zero-effort unsized coercion.
 pub trait PrivacyMechanism: Send + Sync {
     fn transform(&self, weights: &mut [f32], rng: &mut dyn rand::Rng);
 }
 
-// Phase 11b: registers this family's one member into `conflux-config`'s
-// compile-time strategy registry (ADR 0002) — the third of the three
-// spec §5 families now wired the same way `aggregator`/`selector` were
-// in Phase 10b.
+// Registers this family's one member into `conflux-config`'s compile-time
+// strategy registry, so `config.privacy_mechanism = "gaussian_clipping"`
+// resolves to a concrete implementation without `conflux-server` needing
+// to name this type directly. See the `rust-compile-time-registries-inventory`
+// blog post for how the registry mechanism itself works.
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::PrivacyMechanism, name: "gaussian_clipping" }
 }
@@ -54,9 +63,9 @@ pub fn build_privacy_mechanism(
 }
 
 /// Local DP: clip an update's L2 norm, then add calibrated Gaussian noise.
-/// Spec §5. References: Abadi et al. (2016), *Deep Learning with
-/// Differential Privacy*, ACM CCS; Geyer, Klein & Nabi (2017),
-/// *Differentially Private Federated Learning: A Client Level Perspective*.
+/// References: Abadi et al. (2016), *Deep Learning with Differential
+/// Privacy*, ACM CCS; Geyer, Klein & Nabi (2017), *Differentially Private
+/// Federated Learning: A Client Level Perspective*.
 #[derive(Debug, Clone, Copy)]
 pub struct GaussianClippingPrivacy {
     pub clip_norm: f32,
@@ -65,7 +74,7 @@ pub struct GaussianClippingPrivacy {
 
 impl Default for GaussianClippingPrivacy {
     /// `clip_norm = 1.0`, `noise_multiplier = 1.0` — both widely used
-    /// DP-SGD starting points (spec §5).
+    /// DP-SGD starting points.
     fn default() -> Self {
         Self {
             clip_norm: 1.0,
@@ -90,12 +99,11 @@ impl GaussianClippingPrivacy {
     /// Adds i.i.d. Gaussian noise (mean 0, std = `noise_multiplier *
     /// clip_norm`) to each element, using `rng` — callers pass a seeded
     /// RNG for reproducible tests, or an OS-seeded one in production.
-    /// `&mut dyn Rng` rather than a generic `impl Rng` (Phase 11b): an
-    /// unsized trait-object parameter here is what lets
-    /// `PrivacyMechanism::transform` (object-safe, backing `Box<dyn
-    /// PrivacyMechanism>`) delegate straight to this method — a caller
-    /// passing a concrete `&mut StdRng` still just works, via automatic
-    /// unsized coercion.
+    /// Taking `&mut dyn Rng` here (rather than a generic `impl Rng`) is
+    /// what lets `PrivacyMechanism::transform` — which must stay
+    /// object-safe to back `Box<dyn PrivacyMechanism>` — delegate straight
+    /// to this method with no wrapping; a caller passing a concrete
+    /// `&mut StdRng` still just works, via automatic unsized coercion.
     pub fn add_noise(&self, weights: &mut [f32], rng: &mut dyn rand::Rng) {
         let std_dev = (self.noise_multiplier * self.clip_norm) as f64;
         if std_dev == 0.0 {
@@ -108,7 +116,7 @@ impl GaussianClippingPrivacy {
     }
 
     /// Clip then add noise — the full local-DP transform applied to one
-    /// client's update before it leaves the client (spec §7/§8).
+    /// client's update.
     pub fn transform(&self, weights: &mut [f32], rng: &mut dyn rand::Rng) {
         self.clip(weights);
         self.add_noise(weights, rng);
@@ -126,37 +134,37 @@ fn l2_norm(weights: &[f32]) -> f32 {
 }
 
 /// Tracks cumulative privacy loss across rounds and reports whether the
-/// experiment's epsilon budget is exhausted. Spec §6.
+/// experiment's epsilon budget is exhausted.
 pub trait PrivacyAccountant: Send + Sync {
     fn record_round(&mut self, noise_multiplier: f32, sample_rate: f32);
     fn current_epsilon(&self, delta: f64) -> f64;
     fn budget_exhausted(&self, target_epsilon: f64, delta: f64) -> bool;
 }
 
-/// The exact struct from spec §6. References: Mironov (2017), *Rényi
-/// Differential Privacy*, IEEE CSF; Wang, Balle & Kasiviswanathan (2019),
-/// *Subsampled Rényi Differential Privacy and Analytical Moments
-/// Accountant*, AISTATS.
+/// An epsilon accountant based on Rényi Differential Privacy (RDP)
+/// composition. References: Mironov (2017), *Rényi Differential
+/// Privacy*, IEEE CSF; Wang, Balle & Kasiviswanathan (2019), *Subsampled
+/// Rényi Differential Privacy and Analytical Moments Accountant*,
+/// AISTATS.
 ///
-/// **Documented simplification** (see
-/// `docs/phases/phase-2c-privacy.md`): per-round RDP is computed for the
+/// **Documented simplification**: per-round RDP is computed for the
 /// *non-subsampled* Gaussian mechanism, ignoring `sample_rate`'s
 /// privacy-amplification-by-subsampling effect. Subsampling only ever
 /// *tightens* (lowers) the true epsilon for `sample_rate < 1`, so this
 /// accountant reports a conservative upper bound, never an underestimate.
-/// Exact subsampled RDP needs numerical-integration machinery out of scope
-/// for Phase 2.
+/// Exact subsampled RDP needs numerical-integration machinery this
+/// accountant doesn't implement.
 ///
-/// Phase 14 (`AccountingScope::PerClient`, ADR 0006): `client_rounds`
-/// tracks each client's own round history *in addition to* the
-/// experiment-wide `rounds` above — both are always recorded,
-/// regardless of which scope is actually configured, so switching
-/// `accounting_scope` between restarts never silently loses history one
-/// scope was already accumulating. The RDP math itself
-/// (`epsilon_from_rounds`) is shared between the two — `PerClient`
-/// changes *which* history it's evaluated against, never the
-/// composition itself (out of scope for this phase, see the phase
-/// brief).
+/// Supports two accounting granularities, selected by
+/// `conflux_config::AccountingScope`: `Global` (one running epsilon for
+/// the whole experiment, tracked in `rounds`) and `PerClient` (one
+/// running epsilon per client, tracked in `client_rounds`). Both
+/// histories are always recorded on every call, regardless of which
+/// scope is actually configured — so switching `accounting_scope`
+/// between restarts never silently loses history the other scope was
+/// already accumulating. The RDP math itself (`epsilon_from_rounds`) is
+/// shared between the two — `PerClient` only changes *which* history
+/// it's evaluated against, never the composition math itself.
 pub struct RdpAccountant {
     rounds: Vec<(f32, f32)>,
     client_rounds: std::collections::HashMap<String, Vec<(f32, f32)>>,
@@ -235,11 +243,10 @@ const RDP_ORDERS: &[f64] = &[
 
 /// The RDP composition math itself (Mironov, 2017) — shared by
 /// `current_epsilon` (the experiment-wide total) and
-/// `current_epsilon_for_client` (Phase 14). Extracted once so
-/// `PerClient` accounting is guaranteed to use *exactly* the same
-/// composition as `Global`, just evaluated against a different history
-/// — the one thing this phase's brief explicitly keeps out of scope is
-/// touching this math at all.
+/// `current_epsilon_for_client` (the per-client total). Extracted into
+/// one function so `PerClient` accounting is guaranteed to use *exactly*
+/// the same composition as `Global`, just evaluated against a different
+/// history.
 fn epsilon_from_rounds(rounds: &[(f32, f32)], delta: f64) -> f64 {
     if rounds.is_empty() {
         return 0.0;
@@ -347,6 +354,33 @@ mod tests {
     }
 
     #[test]
+    fn clipping_a_zero_vector_never_divides_by_zero() {
+        // l2_norm is 0.0 here, so the `norm > 0.0` guard in `clip` must
+        // hold — without it, `clip_norm / norm` would be a division by
+        // zero and every element would become NaN.
+        let privacy = GaussianClippingPrivacy {
+            clip_norm: 1.0,
+            noise_multiplier: 1.0,
+        };
+        let mut weights = vec![0.0, 0.0, 0.0];
+
+        privacy.clip(&mut weights);
+
+        assert_eq!(weights, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn budget_is_never_exhausted_against_a_zero_target_epsilon_with_no_rounds() {
+        // A target_epsilon of 0.0 is a degenerate but not invalid config
+        // value; with zero rounds recorded, current_epsilon is exactly
+        // 0.0, and "0.0 >= 0.0" means budget_exhausted must already
+        // report true even before a single round runs.
+        let accountant = RdpAccountant::new();
+
+        assert!(accountant.budget_exhausted(0.0, 1e-5));
+    }
+
+    #[test]
     fn zero_noise_multiplier_is_deterministic_clip_only() {
         let privacy = GaussianClippingPrivacy {
             clip_norm: 1.0,
@@ -403,7 +437,7 @@ mod tests {
         assert!(accountant.budget_exhausted(0.5, 1e-5));
     }
 
-    // Phase 14: PerClient accounting.
+    // PerClient accounting.
 
     #[test]
     fn client_epsilon_is_zero_for_a_client_with_no_recorded_rounds() {

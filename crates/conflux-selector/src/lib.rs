@@ -1,24 +1,37 @@
-//! Client sampling strategies.
+//! Client sampling strategies: choosing which registered clients train
+//! in a given round.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §5.
+//! Training every registered client every round doesn't scale — at
+//! cross-device or crowdsource scale that's thousands of clients'
+//! bandwidth and compute spent for no accuracy benefit over training a
+//! random subset. This crate's whole job is picking that subset: given a
+//! pool of candidate client IDs, return up to `n` of them for round
+//! `round`.
 
 use conflux_config::{StrategyEntry, StrategyKind};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 
-/// How `UniformRandomSelector` seeds its RNG — mirrors `conflux-config`'s
-/// `SeedMode`, but this crate has no dependency on `conflux-config` (spec
-/// §2's dependency graph lists no such edge), so the caller translates
-/// `SeedMode`/`seed_value` into this enum.
+/// How a selector seeds its RNG for one `select` call.
+///
+/// This mirrors `conflux-config`'s resolved `seed_mode`/`seed_value`
+/// pair conceptually, but collapses the two into a single enum: `Fixed`
+/// always carries its seed, so there's no way to end up holding the
+/// illegal combination `seed_mode: Fixed, seed_value: None` that two
+/// independent `Option` fields would otherwise allow. The caller
+/// (typically `conflux-server`, right after resolving config) does the
+/// small translation from the resolved config into this enum.
 #[derive(Debug, Clone, Copy)]
 pub enum SelectionSeed {
     /// Deterministic, combined with the round number so consecutive
     /// rounds don't select an identical subset.
     Fixed(u64),
-    /// Seeded from OS entropy on every call; not reproducible. Spec §5:
-    /// matters specifically for crowdsourcing, where a predictable seed
-    /// could let an adversary anticipate client selection.
+    /// Seeded from OS entropy on every call; not reproducible run to
+    /// run. The right choice whenever a predictable selection pattern
+    /// would itself be a liability — e.g. a public/anonymous
+    /// crowdsourced deployment, where a fixed seed would let anyone who
+    /// knows it anticipate which clients get selected next.
     OsRandom,
 }
 
@@ -32,17 +45,23 @@ pub trait ClientSelector: Send + Sync {
     fn select(&self, candidates: &[String], n: usize, round: u64) -> Vec<String>;
 }
 
-/// The one shipped selector (spec §5), cited to McMahan, Moore, Ramage,
-/// Hampson & y Arcas (2017), *Communication-Efficient Learning of Deep
-/// Networks from Decentralized Data*, AISTATS — the client-sampling
-/// strategy from the original FedAvg algorithm.
+/// The one shipped selector, cited to McMahan, Moore, Ramage, Hampson &
+/// y Arcas (2017), *Communication-Efficient Learning of Deep Networks
+/// from Decentralized Data*, AISTATS — the client-sampling strategy from
+/// the original FedAvg algorithm: pick `n` of the candidates, uniformly
+/// at random.
 pub struct UniformRandomSelector {
     pub seed: SelectionSeed,
 }
 
-// Phase 10b: registers this family's one member into `conflux-config`'s
-// compile-time strategy registry (ADR 0002) — see `conflux-core`'s
-// analogous `inventory::submit!` for `Aggregator`s for the full reasoning.
+// Registers this family's one member into `conflux-config`'s
+// compile-time strategy registry — see `conflux-core`'s analogous
+// `inventory::submit!` for `Aggregator`s, or the registry's own doc
+// comment in `conflux-config::registry`, for how this lets any crate
+// linked into the final binary (this crate included, via
+// `build_selector` below) check a configured name like
+// `selector = "uniform_random"` against every submitted entry, without
+// `conflux-config` ever importing this crate.
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Selector, name: "uniform_random" }
 }
@@ -160,6 +179,38 @@ mod tests {
         let unique: std::collections::HashSet<_> = selected.iter().collect();
 
         assert_eq!(selected.len(), unique.len());
+    }
+
+    #[test]
+    fn empty_candidate_pool_returns_empty_selection() {
+        // A registry that's just evicted every client (or hasn't
+        // registered any yet) can hand this crate an empty pool — this
+        // isn't malicious input, but it's a real zero case that has to
+        // resolve to "nobody trains this round," not a panic.
+        let selector = UniformRandomSelector {
+            seed: SelectionSeed::Fixed(1),
+        };
+
+        assert!(selector.select(&[], 5, 0).is_empty());
+    }
+
+    #[test]
+    fn duplicate_ids_in_the_pool_are_not_deduplicated() {
+        // This crate trusts that `candidates` already contains distinct
+        // client IDs (that's `conflux-registry`'s job upstream, not
+        // this one's) — it doesn't itself detect or collapse repeats.
+        // Documented here so the assumption is explicit rather than
+        // silently relied on: a duplicated ID in the input can come back
+        // selected twice.
+        let selector = UniformRandomSelector {
+            seed: SelectionSeed::Fixed(3),
+        };
+        let pool = vec!["client-0".to_string(); 5];
+
+        let selected = selector.select(&pool, 3, 0);
+
+        assert_eq!(selected.len(), 3);
+        assert!(selected.iter().all(|c| c == "client-0"));
     }
 
     #[test]

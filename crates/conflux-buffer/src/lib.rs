@@ -1,6 +1,15 @@
-//! Async staging, quorum + timeout flush.
+//! Collects one round's incoming client updates and decides the instant
+//! the round is "done" — either a quorum of submissions has arrived, or a
+//! timeout has elapsed, whichever comes first — then hands the collected
+//! batch off to aggregation.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §8.
+//! A round's clients submit concurrently, from independent connections, at
+//! unpredictable times, so [`RoundBuffer`] has to stay correct under
+//! contention: many tasks pushing at once, and exactly one task waiting to
+//! close the batch and read it back out. It also has to make closing the
+//! batch airtight — once a snapshot has been handed to an `await_flush`
+//! caller, every later push must be rejected explicitly rather than
+//! silently landing in a batch nobody will ever read again.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -13,19 +22,23 @@ use tokio::time::Instant;
 pub enum BufferError {
     #[error("delta is for round {got}, but this buffer is collecting round {expected}")]
     WrongRound { expected: u64, got: u64 },
-    /// Phase 10a: closes the lost-update race `docs/phases/
-    /// phase-10a-roundbuffer-race.md` describes — a buffer whose
-    /// `await_flush` snapshot has already been taken (and handed off for
-    /// aggregation) can never accept another push, even if
-    /// `AppState.current_buffer` still points at it during a round retry.
-    /// The caller should re-`fetch_task` and resubmit against the
-    /// current round, not treat this as a permanent failure.
+    /// Returned when a push arrives after this buffer has already flushed
+    /// — whether because quorum was met or the timeout fired. A buffer
+    /// whose snapshot has already been taken and handed to aggregation can
+    /// never accept another push, even if a caller elsewhere still holds a
+    /// reference to it (for example, across a round retry that hasn't yet
+    /// swapped in a fresh buffer for the next attempt). The round itself
+    /// isn't necessarily over — the caller should re-fetch the current
+    /// task and resubmit against whatever buffer is live now, rather than
+    /// treating this as a permanent failure.
     #[error("this round's buffer already flushed; fetch the current task and resubmit")]
     Closed,
 }
 
-/// Why a round's batch closed — logged either way (ADR 0007: "conflux-buffer
-/// logs whether a round closed on quorum or timeout"), never silent.
+/// Why a round's batch closed. Worth logging either way — whether a round
+/// wrapped up because enough clients responded or because the wait ran out
+/// with a partial batch is operationally significant, not an implementation
+/// detail to discard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlushReason {
     Quorum,
@@ -40,13 +53,15 @@ pub struct FlushResult {
 }
 
 /// The mutex's contents: still collecting, or already handed a snapshot
-/// to some `await_flush` caller. Phase 10a: putting "closed" *inside* the
-/// same mutex as the deltas (rather than a separate `AtomicBool` beside
-/// it) is what makes closing atomic with taking the snapshot — a `push`
-/// that acquires the lock either lands before the snapshot (and is
-/// correctly included in it) or sees `Closed` already (and errors),
-/// with no window where a push can complete after the snapshot was taken
-/// but before "closed" became visible.
+/// to some `await_flush` caller. Putting "closed" *inside* the same mutex
+/// as the deltas — rather than tracking it with a separate flag next to
+/// the `Mutex` — is what makes closing atomic with taking the snapshot: a
+/// `push` that acquires the lock either lands before the snapshot (and is
+/// correctly included in it) or sees `Closed` already (and errors), with
+/// no window where a push can complete after the snapshot was taken but
+/// before "closed" became visible to it. A separate flag checked before
+/// the lock would leave exactly that window open — a push could pass the
+/// flag check, then still race the lock against the snapshot being taken.
 enum BufferState {
     Open(Vec<ClientDelta>),
     Closed,
@@ -265,9 +280,10 @@ mod tests {
         assert_eq!(result.reason, FlushReason::Quorum);
         assert_eq!(result.deltas.len(), 1);
 
-        // Phase 10a: this used to succeed silently — the delta would be
-        // appended to a buffer nobody reads again, and the caller would
-        // be told `accepted: true` for a submission that never counts.
+        // A push landing after the flush must be rejected explicitly —
+        // if it were appended to a buffer nobody reads again, the caller
+        // would be told `accepted: true` for a submission that silently
+        // never counts toward anything.
         let err = buffer.push(delta("late", 1)).unwrap_err();
         assert!(matches!(err, BufferError::Closed));
     }
@@ -282,16 +298,19 @@ mod tests {
         assert!(matches!(err, BufferError::Closed));
     }
 
-    /// Reproduces the actual race window `docs/phases/
-    /// phase-10a-roundbuffer-race.md` describes: a push racing against
-    /// the exact moment quorum is met and the snapshot is taken. Before
-    /// this phase, a push landing in that window could be silently
-    /// accepted into a buffer whose snapshot had already been handed off
-    /// — this test drives that interleaving directly (not just
-    /// "eventually, at load", which is what Phase 7g's test did and
-    /// which never happened to trigger it) and asserts every push either
-    /// lands in the batch or is explicitly rejected — never both silently
-    /// accepted AND absent from the batch.
+    /// Drives the exact race window that matters for this type: a push
+    /// racing against the precise moment quorum is met and the snapshot is
+    /// taken. An earlier, simpler design (a plain `AtomicBool` "closed"
+    /// flag checked before locking, rather than folding "closed" into the
+    /// same mutex as the deltas) could let a push in this window land
+    /// after the snapshot was already handed off — the client would be
+    /// told its submission was accepted, but it would never be read
+    /// again. Running many iterations under a real multi-threaded runtime
+    /// (rather than relying on load alone, which can pass by luck without
+    /// ever actually hitting the interleaving) directly forces that
+    /// window and asserts every push either lands in the batch or is
+    /// explicitly rejected — never both silently accepted AND absent from
+    /// the batch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn racing_push_against_quorum_flush_never_silently_loses_a_delta() {
         for _ in 0..200 {
@@ -343,5 +362,57 @@ mod tests {
 
         assert_eq!(result.reason, FlushReason::Quorum);
         assert_eq!(result.deltas.len(), 8);
+    }
+
+    /// `RoundBuffer` has no concept of "one submission per client" — it
+    /// only checks the round number. Documenting this honestly: a client
+    /// that submits twice in the same round (a buggy retry, a duplicate
+    /// network delivery, or a client deliberately trying to inflate its
+    /// influence over the aggregate) has both deltas land in the batch and
+    /// both count toward quorum. Nothing at this layer deduplicates by
+    /// `client_id` — a caller that needs "exactly one counted delta per
+    /// client" has to enforce that itself, one layer up.
+    #[tokio::test]
+    async fn push_does_not_deduplicate_repeated_submissions_from_the_same_client() {
+        let buffer = RoundBuffer::new(1, 2);
+
+        buffer.push(delta("a", 1)).unwrap();
+        buffer.push(delta("a", 1)).unwrap();
+
+        let result = buffer.await_flush(Duration::from_secs(30)).await;
+
+        assert_eq!(result.reason, FlushReason::Quorum);
+        assert_eq!(result.deltas.len(), 2);
+        assert!(result.deltas.iter().all(|d| d.client_id == "a"));
+    }
+
+    /// The same gap under real concurrency rather than sequential calls:
+    /// a single client racing itself (duplicate resubmission from two
+    /// concurrent tasks) can satisfy quorum entirely on its own, with no
+    /// other client ever participating. This isn't a torn read or a lost
+    /// update — the mutex is doing its job, every push lands cleanly — it's
+    /// the honest limit of what "quorum" means at this layer: a count of
+    /// pushes, not a count of distinct clients.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_duplicate_submissions_from_one_client_can_satisfy_quorum_alone() {
+        let buffer = Arc::new(RoundBuffer::new(1, 2));
+
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let buffer = Arc::clone(&buffer);
+            handles.push(tokio::spawn(async move {
+                buffer.push(delta("solo-client", 1)).unwrap();
+            }));
+        }
+
+        let result = buffer.await_flush(Duration::from_secs(10)).await;
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(result.reason, FlushReason::Quorum);
+        assert_eq!(result.deltas.len(), 2);
+        assert!(result.deltas.iter().all(|d| d.client_id == "solo-client"));
     }
 }

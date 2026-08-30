@@ -52,10 +52,10 @@ impl<D: RoundDispatcher> FlTransport for FlTransportService<D> {
         &self,
         request: Request<Streaming<DeltaChunk>>,
     ) -> Result<Response<SubmitAck>, Status> {
-        // Phase 3 collects the whole stream before handing it to the
-        // dispatcher — no incremental/backpressured delivery yet. Revisit
-        // if a future phase needs to start aggregating before a client's
-        // last chunk arrives.
+        // Collects the whole client stream before handing it to the
+        // dispatcher — no incremental/backpressured delivery yet. A future
+        // change could start aggregating before a client's last chunk
+        // arrives, but nothing here needs that today.
         let mut stream = request.into_inner();
         let mut chunks = Vec::new();
         while let Some(chunk) = stream.message().await? {

@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 
-use conflux_core::build_aggregator;
+use conflux_core::{AggregatorParams, build_aggregator};
 use conflux_proto::{ClientDelta, encode_weights};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -145,18 +145,30 @@ fn main() {
     // (matching Experiment 2.1's design), so FoolsGold's cross-round
     // history isn't exercised here; a temporal fairness measurement is
     // separate future work (see this file's own module doc comment).
-    let full_result = build_aggregator(&args.aggregator, args.byzantine_fraction)
-        .unwrap_or_else(|e| panic!("{e}"))
-        .aggregate(&batch)
-        .unwrap_or_else(|e| panic!("full-batch aggregation failed: {e}"));
+    let full_result = build_aggregator(
+        &args.aggregator,
+        AggregatorParams {
+            byzantine_fraction: args.byzantine_fraction,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+    .aggregate(&batch)
+    .unwrap_or_else(|e| panic!("full-batch aggregation failed: {e}"));
 
     for (idx, (group, group_idx)) in groups.iter().enumerate() {
         let mut without_i = batch.clone();
         without_i.remove(idx);
-        let result_without_i = build_aggregator(&args.aggregator, args.byzantine_fraction)
-            .unwrap_or_else(|e| panic!("{e}"))
-            .aggregate(&without_i)
-            .unwrap_or_else(|e| panic!("leave-one-out aggregation failed: {e}"));
+        let result_without_i = build_aggregator(
+            &args.aggregator,
+            AggregatorParams {
+                byzantine_fraction: args.byzantine_fraction,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+        .aggregate(&without_i)
+        .unwrap_or_else(|e| panic!("leave-one-out aggregation failed: {e}"));
 
         let row = ClientResult {
             aggregator: args.aggregator.clone(),

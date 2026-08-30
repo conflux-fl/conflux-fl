@@ -7,7 +7,7 @@
 //! 0010-attack-simulation-crate.md`.
 
 use conflux_attacks::{AlieAttack, Attack, GaussianAttack, ScalingAttack, SignFlippingAttack};
-use conflux_core::build_aggregator;
+use conflux_core::{AggregatorParams, build_aggregator};
 use conflux_proto::{ClientDelta, decode_weights, encode_weights};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -53,7 +53,14 @@ fn distance_from_true_value(result: &[f32]) -> f32 {
 }
 
 fn run(aggregator_name: &str, honest: &[ClientDelta], attackers: &[ClientDelta]) -> Vec<f32> {
-    let aggregator = build_aggregator(aggregator_name, BYZANTINE_FRACTION).unwrap();
+    let aggregator = build_aggregator(
+        aggregator_name,
+        AggregatorParams {
+            byzantine_fraction: BYZANTINE_FRACTION,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let mut batch = honest.to_vec();
     batch.extend(attackers.iter().cloned());
     aggregator.aggregate(&batch).unwrap()
@@ -217,13 +224,20 @@ fn alie_attack_against_defended_aggregators_at_high_attacker_fraction() {
 #[test]
 fn foolsgold_defends_against_persistent_sybil_collusion_across_rounds() {
     use conflux_attacks::PersistentSybilAttack;
-    use conflux_core::{Aggregator, FoolsGoldAggregator, build_aggregator};
+    use conflux_core::{Aggregator, AggregatorParams, FoolsGoldAggregator, build_aggregator};
 
     let attack = PersistentSybilAttack {
         fixed_update: vec![50.0, 50.0, 50.0],
     };
     let foolsgold = FoolsGoldAggregator::default();
-    let fedavg = build_aggregator("fedavg", 0.0).unwrap();
+    let fedavg = build_aggregator(
+        "fedavg",
+        AggregatorParams {
+            byzantine_fraction: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let mut foolsgold_distances = Vec::new();
     let mut fedavg_distances = Vec::new();

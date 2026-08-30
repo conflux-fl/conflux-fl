@@ -1,7 +1,8 @@
 //! Client-side transport wrappers around the generated
-//! `FlTransportClient<Channel>` — spec §10's `PullTransport`/`PushTransport`
-//! naming. `conflux-node` (Phase 6) will hold whichever one matches its
-//! resolved `connection_mode`.
+//! `FlTransportClient<Channel>`: [`PullTransport`] for pull-mode
+//! deployments, [`PushTransport`] for push-mode ones. `conflux-node` picks
+//! whichever one matches its resolved `connection_mode` at startup and
+//! holds onto it for the life of the process.
 
 use conflux_proto::fl_transport_client::FlTransportClient;
 use conflux_proto::{
@@ -24,8 +25,9 @@ async fn connect_channel(
     Ok(endpoint.connect().await?)
 }
 
-/// Pull mode (spec §3: `cross_device`, `crowdsource`, `edge`) — the client
-/// asks for its next task.
+/// Pull mode (the default for `cross_device`, `crowdsource`, and `edge`
+/// topologies — many, intermittently-connected participants that check in
+/// on their own schedule) — the client asks for its next task.
 pub struct PullTransport {
     client: FlTransportClient<Channel>,
 }
@@ -36,8 +38,9 @@ impl PullTransport {
         Ok(Self { client })
     }
 
-    /// Spec §3: `cross_silo` is push + mTLS, but nothing stops a pull-mode
-    /// deployment from wanting mTLS too — this isn't topology-gated.
+    /// `cross_silo` defaults to push + mTLS, but nothing here is
+    /// topology-gated — a pull-mode deployment can use mTLS too, it just
+    /// isn't `cross_silo`'s default posture.
     pub async fn connect_with_tls(
         addr: impl Into<String>,
         tls: ClientTlsConfig,
@@ -95,8 +98,21 @@ impl PullTransport {
     }
 }
 
-/// Push mode (spec §3: `cross_silo`) — the server streams tasks to a
-/// subscribed client.
+/// Push mode (the default for `cross_silo` — few, trusted, always-reachable
+/// institutional participants that can hold an open connection) — the
+/// server streams tasks to a subscribed client.
+///
+/// `Clone` matters here in a way it doesn't for [`PullTransport`]. Push
+/// mode holds one long-lived subscription open while ordinary
+/// request/response calls (`submit_delta`, `heartbeat`) still have to go
+/// out on the same connection. Sharing a single transport behind one lock
+/// would make those calls wait on the subscription's own re-subscribe
+/// attempts; cloning instead gives each concurrent user its own handle.
+/// That's cheap and safe because the underlying `Channel` is itself a
+/// cheaply-cloneable handle to one HTTP/2 connection, which multiplexes
+/// concurrent streams by design — a clone is another stream on the same
+/// connection, not another connection.
+#[derive(Clone)]
 pub struct PushTransport {
     client: FlTransportClient<Channel>,
 }
@@ -107,7 +123,8 @@ impl PushTransport {
         Ok(Self { client })
     }
 
-    /// Spec §3: `cross_silo` push mode is where mTLS actually applies.
+    /// `cross_silo` push mode is where mTLS is used by default, but this
+    /// constructor isn't restricted to that topology.
     pub async fn connect_with_tls(
         addr: impl Into<String>,
         tls: ClientTlsConfig,

@@ -638,7 +638,8 @@ reported as measured, not filtered for a clean story:
   temporally *unstable* adaptive attackers — this result shows that
   scope boundary is real, not just a caveat on paper.
 - **Finding 3 (negative, unexpected — a real cost of §6.2's
-  documented implementation simplification)**: wrapping a robust base
+  documented implementation simplification; **since fixed, see §5.11** —
+  the measurements below are what the defect produced)**: wrapping a robust base
   method in DSS can perform **worse than not wrapping it at all**.
   `dss_krum` against `persistent_sybil` (mean 16.99) is ~57× worse than
   plain `krum` (mean 0.297) — worse, in fact, than even plain `fedavg`'s
@@ -744,7 +745,8 @@ Three findings:
   §5.5's 2-attacker result (161.3 → 1.18, a >130× improvement). The CI is
   also much wider here (±8.48 vs. ±0.72) — genuinely more volatile
   across seeds, not just a smaller effect. §5.8 explains the mechanism.
-- **`dss_krum` is worse than plain `krum` again** (3.57 vs. 0.30) — a
+- **`dss_krum` is worse than plain `krum` again** (3.57 vs. 0.30; **since
+  fixed — 0.300 after §5.11's repair, exactly matching plain `krum`**) — a
   *second*, independent confirmation of §5.5's Finding 3 (wrapping an
   already-robust base can regress it), this time with a lone attacker
   rather than a Sybil pair. Strengthens that finding from "observed once
@@ -835,6 +837,90 @@ consistent across 3 additional seeds — see below):
    composability convenience (§6.3) — a materially stronger and more
    specific claim than §6.4 originally made.
 
+#### 5.8.1 Update (2026-08-31) — the bug was real, the diagnosis of its *consequences* was not
+
+§5.8 point 4 called the weight collapse "a real, fixable implementation
+bug" and predicted that a small mechanical fix "would replace this
+chaotic regime with the originally-intended, predictable one." That was
+implemented and measured. The bug was real. The prediction was wrong,
+and so was the specific fix §5.8 proposed.
+
+**The proposed fix is measurably incorrect.** §5.8 recommended routing to
+the unweighted-mean fallback "whenever `weight_sum` is below a small
+epsilon, e.g. `1e-4 * n`". Implemented exactly as written, it breaks a
+case where DSS is working perfectly. `conflux-core`'s existing unit test
+`dss_down_weights_a_pair_that_is_both_erratic_and_mutually_identical`
+has four clients where the two colluding sybils reach collusion exactly
+`1.0` (weight exactly `0.0`) and the two honest clients sit at
+`0.999931` (weight `6.9e-5`) — a clean, correct, 100%-separated trust
+judgment. Its `weight_sum` is `1.38e-4` against `n = 4`, so the proposed
+`1e-4 * n = 4e-4` threshold fires, discards that judgment, and returns
+the unweighted mean `[3.25, 3.25]` — the sybil-dominated answer — in
+place of the honest consensus `[0.50, 0.50]`. The threshold cannot
+separate "weights are noise" from "weights are small but right," because
+in this mechanism those two regimes overlap in magnitude.
+
+**What the actual defect was.** Catastrophic cancellation, one level
+below where §5.8 looked. `weight = 1 − collusion` was computed in `f32`;
+near `1.0`, `f32`'s ULP is `1.19e-7`, so `1.0 − 0.999998` retains barely
+one significant digit and that digit is rounding error. The fix is to
+compute the collusion score in `f64`
+(`cosine_similarity_traces_f64`), where the same subtraction keeps
+around ten significant digits. `FoolsGoldAggregator`'s own `f32`
+`cosine_similarity` is deliberately left untouched — it is a
+line-by-line translation of the FoolsGold authors' reference
+implementation (ADR 0008), and changing its arithmetic would make this
+codebase's FoolsGold something other than the published one.
+
+**What fixing it changed, measured.** Solo `adaptive_evasion`, base
+`fedavg`, 5 seeds, `dss_diagnostics_solo_attacker.jsonl` re-run:
+
+| | before (`f32`) | after (`f64`) |
+|---|---|---|
+| final-round distance, per seed | 110.5, 0.3, 0.1, 44.5, 82.6 | 165.9, 142.0, 64.4, 65.6, 97.7 |
+| cross-seed coefficient of variation | 1.03 | **0.43** |
+| mean final-round distance | 47.6 | **107.1** |
+| non-monotonic steps (of 19) | 6 | 5 |
+
+Half of all per-client weights changed, in the fourth significant digit
+— exactly the precision `f32` was losing. But the regime did not become
+"predictable" in the sense §5.8 meant. It became **reproducible**:
+cross-seed variance halved, and the trajectory stopped depending on
+which rounding errors a given seed happened to accumulate. It also got
+uniformly *worse*, and the reason is uncomfortable but worth stating
+plainly — **the floating-point noise was occasionally beneficial by
+accident.** Before the fix, two of five seeds happened to land near
+convergence (0.3 and 0.1); after it, none do. What looked like partial
+success was a lottery. Removing the noise removed the winning tickets
+along with the losing ones.
+
+**And the joint scenario is byte-identical.** §5.8 asserted the solo
+chaos and §5.9's transient false-positive window "share a root cause"
+with this bug. Re-running the joint diagnostics after the fix returns
+*exactly* the same numbers — the same per-seed window lengths (11, 8, 8,
+6, 6; mean 7.8) and the same final-round distances (1.21, 1.25, 1.27,
+1.18, 1.22) to every printed digit. They do not share a root cause. The
+joint scenario zeroes its minority via collusion reaching exactly `1.0`,
+where `1 − collusion` is `0.0` in any precision; the cancellation never
+arises there.
+
+Experiment 2.6 (§5.7) re-run likewise shows no meaningful change:
+`dss_fedavg` vs `adaptive_evasion` moved 36.97 → 38.31 against a ±8.94
+confidence interval, and `dss_krum`, `foolsgold`, `krum`, and plain
+`fedavg` are unchanged to three decimals.
+
+**Conclusion.** The numerical defect is fixed and should stay fixed — a
+mechanism whose output depends on which rounding errors accumulated is
+not one anyone can reason about, and the halved cross-seed variance is
+real. But it was never the cause of DSS-on-`fedavg`'s failure under a
+solo attacker. That cause is §5.8's own **point 1**, which this update
+promotes from context to conclusion: *the shared deviation reference is
+not robust when the base method isn't*. That is a design problem, and it
+is the same one Finding 3 (§5.5, §5.7) describes from the other
+direction — DSS's combine step never lets the base method's own
+selection reach the final weights. Fixing the arithmetic could not have
+addressed it, and did not.
+
 ### 5.9 Experiment: joint non-IID minority + attack (transient false-positive under attack)
 
 §5.4 tested fairness with zero attackers; §5.5–§5.7 tested attack
@@ -899,6 +985,368 @@ holds asymptotically, not from the first round, and the transient
 window's length is presently unbounded/unmeasured in the general case**
 — 5 seeds bound it to single-digit-to-low-double-digit rounds in this
 specific configuration, not a guarantee for every configuration.
+
+### 5.10 Experiment 2.7 — Centered Clipping, and the price of a bounded step (3,000 rows, 5 repeats)
+
+Centered Clipping (Karimireddy, He & Jaggi 2021) was not part of this
+document's original plan — it is a published method the framework now
+ships (Phase 15), not a hypothesis proposed here. It belongs in this
+section for one structural reason: it is the third method in this
+comparison that carries state across rounds, and the only one of the
+three that uses that state to **bound every client's influence** rather
+than to **score clients against each other**. FoolsGold and DSS both ask
+"who looks suspicious?"; Centered Clipping never asks, and never excludes
+anyone — it simply caps how far any one client can move the model in a
+round, at radius `τ`.
+
+Same design as Experiment 2.4 (8 honest, 2 attackers, `dim=3`, 20 rounds,
+5 repeats, identical seeds), across `persistent_sybil`,
+`adaptive_evasion`, and `scaling`. Scripts:
+`docs/research/scripts/experiment_2_7_centered_clipping.sh`; results in
+`experiment_2_7_centered_clipping.jsonl` (1,800 rows, the comparison) and
+`experiment_2_7_centered_clipping_tau_sweep.jsonl` (1,200 rows, the `τ`
+sweep). The two are separate files deliberately — `summarize.py` groups
+by `(aggregator, attack)` and knows nothing about `clip_radius`, so
+merging them would silently average four different `τ`s into one
+meaningless row.
+
+**Part 1 — against the existing comparison, at the builtin `τ = 1.0`:**
+
+| Aggregator | `persistent_sybil` | `adaptive_evasion` | `scaling` |
+|---|---|---|---|
+| `fedavg` | 16.99 | **161.34** (diverging) | 171.47 |
+| `dss_fedavg` | 16.99 | 1.18 | 171.47 |
+| `foolsgold` | 1.34 | 1.34 | 1.34 |
+| `krum` | 0.30 | 0.30 | 0.30 |
+| `multi_krum` | 0.17 | 0.17 | 0.17 |
+| `centered_clipping` | 10.68 | 10.68 | 165.17 |
+
+(mean distance-from-true-value over 20 rounds; lower is better)
+
+Read as a mean, `centered_clipping` looks mediocre — better than `fedavg`
+everywhere, but far behind the selection-based methods. The mean is the
+wrong statistic for it, and that is the finding:
+
+| | round 1 | round 20 |
+|---|---|---|
+| `fedavg` vs `adaptive_evasion` | 17.01 | **552.99** |
+| `centered_clipping` vs `adaptive_evasion` | 16.41 | **4.96** |
+
+`fedavg` **diverges** by a factor of 32; `centered_clipping` **converges**
+by a factor of 3.3, monotonically, on every attack and every seed. It is
+never the best method in this table at round 20, and it is the only one
+whose worst case is bounded by construction rather than by an assumed
+attacker count. Note also that `centered_clipping`'s three attack columns
+are near-identical (10.682634 / 10.682622 / — ), which is exactly what a
+bound rather than a detector should produce: what the attacker *does*
+stops mattering once it is clipped, so three very different attacks
+converge to one behavior.
+
+**Part 2 — `τ` sensitivity, and the tradeoff it exposes:**
+
+| `τ` | `persistent_sybil` | `adaptive_evasion` | `scaling` |
+|---|---|---|---|
+| 0.25 | 15.40 | 15.40 | 169.90 |
+| 1.0 | 10.68 | 10.68 | 165.17 |
+| 4.0 | **3.32** | **3.32** | 146.27 |
+| 16.0 | 4.23 | 4.23 | **72.98** |
+
+This is the experiment's real contribution, and it is not a tuning table.
+`τ` bounds two things *with the same number*:
+
+1. **How far an attacker can pull the model per round** — the property
+   the method exists for. Smaller `τ` is better.
+2. **How far the model can move toward the truth per round** — because
+   honest clients are clipped by the identical rule. Larger `τ` is
+   better.
+
+So no `τ` is good at both, and the optimum is set by whichever bound
+currently dominates. Against `persistent_sybil`/`adaptive_evasion`
+(attacker magnitude 50) the curve is U-shaped with a clear optimum at
+`τ = 4.0`: 0.25 is recovery-rate-bound (final distance 13.94 — it barely
+moves), 16.0 is attacker-influence-bound. Against `scaling` (magnitude
+~100 per coordinate, an attack an order of magnitude larger) recovery
+dominates over the whole tested range and bigger is monotonically
+better — `τ = 16.0` reaches 4.03 by round 20, while `τ = 0.25` is still
+at 168.47.
+
+**A caveat this experiment's own design creates, stated plainly.** The
+implementation warm-starts its reference from round one's plain mean
+rather than the paper's zero vector, because Conflux transmits full
+model weights rather than gradients (see `CenteredClippingAggregator`'s
+fidelity notes). Under a large-magnitude attack that mean is *already*
+dragged — the `scaling` runs all start ~170 from the truth — so what the
+`scaling` column mostly measures is recovery rate from a bad
+initialization, not steady-state robustness. That is a real property of
+this implementation choice and worth knowing, but it should not be read
+as "Centered Clipping is weak against scaling attacks." A zero-start or a
+checkpoint warm-start would produce a different curve, and that
+comparison has not been run.
+
+**What this does and does not license.** It does not license changing any
+default: `τ = 1.0` remains the builtin fallback because the right radius
+depends on the model's weight scale, and this synthetic setting
+(`dim = 3`, honest updates ~N(1.0, 0.3)) says nothing about a real one.
+What it does establish is that `τ` is not a knob a deployment can leave
+alone — the same parameter that makes the method safe makes it slow, and
+the measured spread between best and worst `τ` here is 4.6× on one
+attack and 2.3× on another. The paper tunes `τ` per experiment; this is
+the measured reason why.
+
+### 5.11 Experiment 2.8 — Finding 3, fixed and measured (3,600 rows, 5 repeats)
+
+Finding 3 was the most serious problem this document found in its own
+proposal: **wrapping an already-robust method in DSS could make it
+dramatically worse than leaving it alone.** `dss_krum` measured 16.99
+against `persistent_sybil` where plain `krum` measured 0.297 — a 57×
+regression caused by the wrapper, confirmed independently in §5.7's
+solo-attacker setting. §5.5's practical recommendation was therefore to
+use DSS on `fedavg` only.
+
+**The mechanism.** DSS used the base method's output *only* to compute a
+deviation reference, then combined the raw batch itself. Stable
+colluders never trip the "unstable AND colluding" gate — low deviation
+variance is precisely what makes them stable — so every weight stayed
+`1.0`, and a weighted mean with uniform weights is just FedAvg. Wrapping
+Krum in DSS silently replaced Krum with FedAvg whenever DSS had no
+opinion, discarding Krum's exclusion along with it.
+
+**The fix.** DSS now applies its judgment *through* the base method
+rather than instead of it: it drops fully-distrusted clients, scales the
+survivors' `num_samples` by their weight, and calls `base.aggregate` on
+that re-weighted batch. Krum still selects, Trimmed Mean still trims. A
+non-firing gate now degrades to *the base method*, which is the floor a
+wrapper should always have had.
+
+Dropping matters as much as scaling. Selection-based methods (Krum,
+Multi-Krum, FABA, Bulyan) ignore `num_samples` entirely, so a client
+scaled to zero would still be a *candidate they could select*. Removing
+it is the only way DSS's judgment reaches those methods at all.
+
+**Experiment 2.8** measures three variants side by side — the bare base,
+`dssraw_<base>` (the original combine), and `dss_<base>` (the fix) —
+under the same design as Experiments 2.2/2.4, so the numbers are
+directly comparable to the ones Finding 3 was first measured from.
+Script: `experiment_2_8_finding3_fix.sh`; results:
+`experiment_2_8_finding3_fix.jsonl` (3,600 rows).
+
+| base | attack | bare | `dssraw` (old) | `dss` (fixed) |
+|---|---|---|---|---|
+| `fedavg` | `persistent_sybil` | 16.99 | 16.99 | 16.99 |
+| `fedavg` | `adaptive_evasion` | 161.34 | **1.18** | **1.18** |
+| `fedavg` | `scaling` | 171.47 | 171.47 | 171.47 |
+| `krum` | `persistent_sybil` | 0.297 | 16.99 | **0.297** |
+| `krum` | `adaptive_evasion` | 0.297 | 1.01 | **0.297** |
+| `krum` | `scaling` | 0.297 | 171.47 | **0.297** |
+| `multi_krum` | `persistent_sybil` | 0.173 | 16.99 | **0.173** |
+| `multi_krum` | `adaptive_evasion` | 0.173 | 1.01 | 0.198 |
+| `multi_krum` | `scaling` | 0.173 | 171.47 | **0.173** |
+| `trimmed_mean` | `persistent_sybil` | 0.273 | 16.99 | **0.273** |
+| `trimmed_mean` | `adaptive_evasion` | 0.273 | 1.01 | **0.203** |
+| `trimmed_mean` | `scaling` | 0.273 | 171.47 | **0.273** |
+
+Every one of the nine robust-base cells is fixed: the wrapped method now
+matches its bare base rather than collapsing toward FedAvg. The
+`scaling` column is the starkest — `dssraw_krum` at 171.47 against
+`krum`'s 0.297 was a 577× regression, and it is gone.
+
+Three things worth noting beyond "it works":
+
+1. **The one configuration DSS genuinely helps is untouched.**
+   `dss_fedavg` against `adaptive_evasion` moves 1.175 → 1.178, i.e. not
+   at all, against `fedavg`'s own 161.34. That was the check the fix had
+   to pass and could plausibly have failed: for FedAvg specifically,
+   scaling `num_samples` by a weight *is* what a weighted mean does, so
+   the two combines should agree closely — and they do, to three decimal
+   places. A gap there would have meant the re-weighting was wrong.
+2. **In two cells the wrapper now adds value on top of a robust base.**
+   `dss_trimmed_mean` against `adaptive_evasion` improves on bare
+   `trimmed_mean` (0.203 vs 0.273). Small, and one cell moves the other
+   way within noise (`dss_multi_krum`, 0.198 vs 0.173) — but the
+   composition is no longer purely defensive.
+3. **§5.5's practical recommendation is withdrawn.** "DSS-on-`fedavg`
+   only, for now" existed solely because of this defect. DSS is now safe
+   to compose with any shipped base method, in the specific sense that
+   it can no longer do materially worse than what it wraps.
+
+Experiments 2.4 and 2.6 were re-run and confirm the same thing on their
+own designs — `dss_krum` vs `persistent_sybil` 16.99 → 0.297 in 2.4, and
+8.50 → 0.300 in 2.6's solo-attacker setting (§5.7's independent
+confirmation of Finding 3, now independently confirming its repair).
+`conflux-core` carries a unit test asserting both sides of the change:
+that the original combine reproduces the sybil-dominated result, and
+that the fixed one preserves Krum's exclusion.
+
+**What this does not fix.** DSS-on-`fedavg` under a *solo* attacker
+(§5.7, §5.8.1) is unchanged — 38.3 → 36.3, well inside its confidence
+interval. That failure has a different cause, now isolated: the shared
+deviation reference is not robust when the base method isn't. Finding 3
+was about the combine step ignoring the base method's *output*; this
+remaining problem is about the base method's output being *unreliable
+input* in the first place. Wrapping a robust base sidesteps it, which is
+consistent with §5.8's point 5 — and with the fix above, wrapping a
+robust base is finally something you can do without paying for it.
+
+### 5.12 Experiment 2.9 — a harder collusion model answers §5.6's open question, and finds something else (1,800 rows, 5 repeats)
+
+§5.6's mechanism ablation reported that DSS's "unstable AND colluding"
+AND-gate was *numerically identical* to stability-alone, and left open
+whether that meant the collusion signal is redundant. It could not
+answer that, because it ran against `persistent_sybil`, where every
+colluder submits the byte-identical update: in that model every client's
+collusion score saturates, so the signal carries no information for
+anyone. The result described the attack model, not the mechanism.
+
+`CorrelatedSybilAttack` is the harder model that separates the two.
+Colluders pull toward a shared objective but each adds its own offset
+drawn from `N(0, divergence²)`, so they are correlated yet individually
+distinguishable. With `resample_each_round = false` the offsets are
+fixed for the run, which makes the group **temporally stable** — a
+stability-only detector must miss it by construction, so anything that
+catches it is catching collusion specifically. `divergence = 0`
+reproduces `persistent_sybil` exactly (asserted by a unit test), making
+this a strict generalization rather than a separate attack.
+
+Script: `experiment_2_9_correlated_sybils.sh`; results:
+`experiment_2_9_correlated_sybils.jsonl` (1,800 rows). Mean
+distance-from-true-value over 20 rounds, 5 repeats, ±95% CI:
+
+| aggregator | `persistent_sybil` (identical) | `correlated_sybil` (non-identical, stable) | `correlated_sybil_unstable` |
+|---|---|---|---|
+| `fedavg` | 16.99 ±0.02 | 17.13 ±0.23 | 18.00 ±0.18 |
+| `dss_fedavg` (AND-gate) | 16.99 ±0.02 | 17.13 ±0.23 | 18.00 ±0.18 |
+| `dssstab_fedavg` (stability only) | 16.99 ±0.02 | 17.13 ±0.23 | 18.00 ±0.18 |
+| **`dsscoll_fedavg` (collusion only)** | **1.08 ±0.72** | **1.09 ±0.73** | **1.16 ±0.76** |
+| `krum` | 0.297 ±0.023 | 0.297 ±0.023 | 0.297 ±0.023 |
+| `foolsgold` | 1.35 ±0.04 | **7.54 ±0.70** | **9.93 ±1.09** |
+
+**§5.6's question, answered: the collusion signal is not redundant.**
+Collusion-only catches non-identical, temporally stable colluders
+(1.09) that stability-only misses entirely (17.13, i.e. no better than
+undefended `fedavg`'s 17.13). The two are ~15× apart, far outside their
+intervals. §5.6's "numerically identical" result was an artifact of its
+attack model. The signal carries real, independent information; the
+AND-gate is what discards it, and §5.6's quantified "cost of the
+gate's conservatism" is therefore a genuine cost, not a bookkeeping
+one.
+
+This does **not** license flipping the shipped gate to an OR. The
+AND-gate exists to protect legitimately-noisy honest clients from being
+penalized for instability alone — Claim 2's problem, which §5.4 measured
+as real. Collusion-only scores well here because every client in this
+scenario is either honest-and-uncorrelated or attacking-and-correlated;
+§5.4's non-IID minority is the case that would punish it, and this
+experiment does not include one. What this establishes is narrower and
+sufficient: **the gate is trading away something real**, so the
+stability/collusion combination rule is a genuine open design question
+rather than a settled detail.
+
+**And a finding that wasn't the question: FoolsGold is substantially
+defeated by non-identical colluders.** 1.35 → 7.54 → 9.93 as the
+colluders diverge, a 5.6× degradation from the identical case, well
+outside the intervals. FoolsGold detects collusion by cosine similarity
+between clients' *raw cumulative gradient histories* (§2, §5.3); giving
+each attacker a fixed personal offset lowers those pairwise similarities
+enough to blunt the pardoning logic, even though the attackers still
+share one objective. That is a real limitation of the published method
+under a threat model its own paper doesn't test, found only because this
+experiment needed a harder attack for a different reason.
+
+It also sharpens the contrast this document has been drawing between
+FoolsGold and DSS. Both are cross-round collusion detectors, but they
+measure different things: FoolsGold compares raw gradient histories,
+DSS compares *scalar deviation traces*. The offsets that hide colluders
+from the first leave the second intact — `dsscoll_fedavg` holds at 1.09
+where FoolsGold degrades to 7.54. §6.5 positioned this difference as an
+architectural distinction; it is now a measured one.
+
+Krum is unaffected (0.297 across all three), as expected: selection-based
+robustness never examines the correlation structure at all.
+
+### 5.13 Experiments 3.1 / 3.2 — the first real-data check, and where the synthetic results stop transferring
+
+Everything in §5.1–§5.12 is measured on synthetic vectors: `dim = 3`,
+honest clients drawn from `N(1.0, 0.3)`, no model and no learning
+problem. That design is deliberate — it isolates the aggregation rule
+from every confound — but it means the findings are claims about an
+aggregation rule, not yet claims about federated learning. This section
+is the first test of whether they transfer.
+
+**Setup.** Real MNIST, a real PyTorch MLP (50,890 parameters), five real
+clients over real gRPC, six rounds — `benchmark.py` driving
+`e2e_pytorch_mnist/run_demo.sh`, which is the same harness the
+convergence demos use. `benchmark.py` gained an `--attacks` dimension
+for this; without it the harness could only compare aggregators on clean
+data, where they are all supposed to look alike and mostly do, which
+answers nothing about robustness. The attacker is the demo's own
+persistent Byzantine client (a fixed weight offset of magnitude 20), and
+the reputation pre-filter is disabled so what is measured is the
+*aggregator's* robustness rather than whether a separate filter caught
+the attacker first. Results:
+`experiment_3_1_mnist_robustness.jsonl`.
+
+| aggregator | clean | poisoned |
+|---|---|---|
+| centralized baseline | 0.852 | — |
+| `fedavg` | 0.884 | 0.163 |
+| `krum` | 0.857 | **0.844** |
+| `trimmed_mean` | 0.878 | **0.875** |
+| `centered_clipping` (τ = 1.0) | 0.884 | **0.078** |
+
+**Two of the three synthetic conclusions transfer cleanly.** On clean
+data every method lands within 0.03 of the others and at or above the
+centralized baseline — robustness is close to free when there is nothing
+to defend against, as §5.1 found. Under attack, `fedavg` collapses
+(0.884 → 0.163) while `krum` and `trimmed_mean` hold within a point of
+their clean accuracy. That is §5's central result, reproduced on a real
+model: selection- and trimming-based robustness works, and it is not an
+artifact of three-dimensional toy vectors.
+
+**The third does not transfer, and that is the finding.** Centered
+Clipping at its default `τ = 1.0` scores **0.078 — worse than no
+defense at all**. §5.10 predicted the mechanism (τ bounds the attacker's
+per-round pull *and* the model's own per-round progress with the same
+number, so too small a τ is recovery-rate-bound) and found a genuine
+optimum at τ = 4.0 in the synthetic setting. Sweeping τ here
+(`experiment_3_2_mnist_clip_radius.jsonl`) shows no such optimum exists:
+
+| τ | poisoned accuracy |
+|---|---|
+| 1.0 | 0.078 |
+| 5.0 | 0.126 |
+| 20.0 | 0.152 |
+| 100.0 | 0.153 |
+| (`fedavg`, i.e. τ → ∞) | 0.163 |
+
+The curve is monotonic toward FedAvg's own number. Small τ is too slow
+to recover; large τ stops clipping and *is* FedAvg (the degeneracy
+`centered_clipping`'s own unit test asserts). Nothing in between reaches
+`krum`'s 0.844.
+
+**Why the synthetic experiment couldn't have shown this.** τ is a bound
+on an L2 norm in *parameter space*, so what it buys per round depends on
+how many parameters that norm is spread across. §5.10's setting had
+`dim = 3`; this one has 50,890. The same τ that moved a 3-dimensional
+model decisively moves a 50,890-dimensional one imperceptibly, and no
+sweep over τ at `dim = 3` could reveal a dimensionality dependence,
+because dimensionality was not varied. §5.10's "τ must be tuned per
+deployment" was right and understated: **τ does not transfer across
+model sizes at all**, and the framework's builtin fallback of 1.0 is a
+placeholder, not a default anyone should ship against a real model.
+
+This is exactly the failure mode §7.2's real-dataset harnesses were
+supposed to catch, and it is the first thing they caught.
+
+**Scope, stated honestly.** One dataset, one architecture, one attack,
+one seed per cell, six rounds. The `krum`/`trimmed_mean` results are
+consistent with §5's synthetic findings and with each other, which is
+mild corroboration rather than proof. The Centered Clipping result is
+strong in a narrower sense — it is a *negative* result about a default,
+and a default that loses to no-defense at any tested τ does not need
+many seeds to be worth acting on. What none of this establishes is how
+these methods behave over many rounds, under non-IID splits, or against
+the adaptive attacks §5.7 studied; those are runs, not redesigns, and
+the harness now supports all three.
 
 ## 6. Proposed Solution: Deviation Stability Scoring (DSS)
 
@@ -978,9 +1426,10 @@ and what's still open:
   contribution every round; FoolsGold's raw-history similarity (§2, §5.3)
   catches exactly this case instead, for a different reason (it doesn't
   gate on instability at all).
-- **Settled, and worse than assumed (§5.5, Finding 3; confirmed a second,
-  independent time in §5.7)**: wrapping a robust base method (Krum,
-  Multi-Krum) in DSS can make results *worse* than the unwrapped base,
+- **Settled, then repaired (§5.5, Finding 3; confirmed a second,
+  independent time in §5.7; **fixed and re-measured in §5.11**)**:
+  wrapping a robust base method (Krum, Multi-Krum) in DSS *could* make
+  results worse than the unwrapped base,
   because the current combine step discards the base method's own
   exclusion whenever DSS's own gate doesn't fire (see §5.5 for the
   mechanism). Observed against a colluding Sybil pair (§5.5) *and*,
@@ -1163,15 +1612,31 @@ concretely in §8:
 
 ### 7.2 Datasets
 
-- **Existing**: `python/conflux_client/examples/e2e_numpy_logreg` and
-  `e2e_pytorch_mnist` — real, run, support `--dirichlet`.
-- **New, for external validity**: CIFAR-10 (Dirichlet-partitioned,
-  standard practice in this literature), FEMNIST (LEAF benchmark,
-  Caldas et al. 2018 — *naturally* non-IID by writer identity, not
-  synthetic Dirichlet, strengthening Claim 2's fairness measurement
-  specifically), Shakespeare (LEAF, next-character prediction — a
-  different model family, RNN/LSTM, needed to claim DSS's mechanism
-  generalizes beyond the MLP/logistic-regression models tested so far).
+- **Built and run**: `e2e_numpy_logreg`, `e2e_pytorch_mnist`,
+  `e2e_pytorch_cifar10`, and — added 2026-08-31 —
+  `e2e_pytorch_shakespeare`. All four support `--dirichlet` and
+  `--poison`, and `benchmark.py` now sweeps
+  (aggregator × split × **attack**), which is what makes them usable for
+  validating §5's robustness findings rather than only for convergence
+  demos.
+- **Shakespeare** (LEAF-style, next-character prediction) closes the two
+  external-validity gaps this section named. It is a *different model
+  family* — a character-level GRU, so gradients flow through time —
+  and its non-IID-ness is **natural**: one client per speaking role,
+  each a different person with a different vocabulary and cadence. Every
+  other harness has to synthesize heterogeneity with a Dirichlet knob,
+  which means a fairness result measured on them is partly a result
+  about the knob. This one has no knob.
+- **FEMNIST — still not built, and here is the actual obstacle.** What
+  makes FEMNIST valuable is that it is partitioned *by writer identity*,
+  and that identity is exactly what the convenient distribution loses:
+  `torchvision.datasets.EMNIST` ships the images without writer labels,
+  so building FEMNIST from it would reduce to another synthetic
+  partition — the thing FEMNIST exists to avoid. A faithful version
+  needs LEAF's own preprocessing pipeline over the raw NIST Special
+  Database 19 (several GB, a multi-stage script). That is a real cost
+  for a second naturally-partitioned dataset once Shakespeare already
+  provides one, so it is deferred deliberately rather than pending.
 
 ### 7.3 Statistical rigor
 
@@ -1186,10 +1651,12 @@ Experiment 2.5, 600 rows, 5 repeats.
 - [x] Problem formulation (§3) — argued, and now **fully demonstrated
       empirically** for both claims (§5.1–§5.2 for Claim 1's practical
       consequence, §5.4 for Claim 2/NFG).
-- [x] **Experiments 2.1, 2.1b, 2.2, 2.3, 2.4, 2.5, and 2.6 — all built
-      and run with real, multi-seed results** (§5), plus two
+- [x] **Experiments 2.1, 2.1b, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, and 2.8 —
+      all built and run with real, multi-seed results** (§5), plus two
       diagnostics-driven investigations (§5.8, §5.9) using per-client
-      instrumentation rather than a sweep. `crates/conflux-attacks/
+      instrumentation rather than a sweep. Experiment 2.7 (§5.10) places
+      Centered Clipping in this comparison and measures its `τ` tradeoff;
+      Experiment 2.8 (§5.11) fixes Finding 3 and measures the repair. `crates/conflux-attacks/
       examples/run_experiment.rs` + `run_fairness_experiment.rs` +
       `run_dss_diagnostics.rs` (three `example`s, not a separate crate —
       see the note below) + eight shell scripts in `docs/research/
@@ -1204,9 +1671,14 @@ Experiment 2.5, 600 rows, 5 repeats.
       attacker result (weaker, more volatile protection, a second
       independent confirmation of Finding 3); §5.8's mechanism analysis
       (a real numerical implementation bug, found via new
-      `DssAggregator::last_diagnostics()` instrumentation); §5.9's joint
-      fairness-under-attack experiment (the asymptotic claim holds, with
-      a measured 6–13-round transient false-positive cost). One
+      `DssAggregator::last_diagnostics()` instrumentation — **fixed in
+      §5.8.1, where fixing it turned out not to fix the symptom it was
+      blamed for**); §5.9's joint fairness-under-attack experiment (the
+      asymptotic claim holds, with a measured 6–13-round transient
+      false-positive cost, unchanged by that fix); §5.10's Centered
+      Clipping comparison and `τ` sensitivity sweep; §5.11's repair of
+      Finding 3, which removes the wrapper's ability to regress the
+      method it wraps (nine of nine robust-base cells fixed). One
       attack-design bug found, reported honestly, and then fixed with
       the fix itself verified against real data (§5.3, Finding 3).
 - [x] `PersistentSybilAttack` — built, tested, hand-verified.
@@ -1252,7 +1724,18 @@ Experiment 2.5, 600 rows, 5 repeats.
       Sybils) — §5.6's identical-submission model can't test whether the
       collusion signal adds value beyond stability alone; a harder model
       could.
-- [ ] CIFAR-10 / FEMNIST / Shakespeare harnesses (§7.2) — not yet built.
+- [x] CIFAR-10 harness — built (`e2e_pytorch_cifar10`).
+- [x] Shakespeare harness — built (`e2e_pytorch_shakespeare`, 2026-08-31):
+      character-level GRU, one client per speaking role (natural non-IID),
+      held-out set drawn from roles no client trains on. Verified
+      end-to-end: 0.017 → 0.171 held-out accuracy over 5 rounds against a
+      0.204 centralized baseline, with chance at 1/65 ≈ 0.015.
+- [x] `benchmark.py` gained an `--attacks` dimension, so the real-data
+      harnesses can test robustness and not just convergence — the gap
+      that actually blocked using them for §5's questions.
+- [ ] FEMNIST harness — deliberately deferred, see §7.2 for the reason
+      (writer identity is absent from the torchvision distribution, and
+      a synthetic partition would defeat the point).
 
 **Architectural note on `run_experiment.rs`/`run_dss_diagnostics.rs`**:
 both originally-separate-crate candidates were built as `conflux-attacks`

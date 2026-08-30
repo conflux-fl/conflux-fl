@@ -1,7 +1,10 @@
 //! `RedisNodeAllowlist` — a `NodeAllowlist` backend that's durable across
-//! restarts and shared across processes, the production default for Phase
-//! 8b's `require_node_auth` (mirrors `RedisRegistry`'s Phase 7a role for
-//! `Registry`).
+//! restarts and shared across processes. `conflux-server` picks it
+//! whenever it picks `RedisRegistry` — the same backend-selection choice
+//! drives both — which in practice means every production deployment
+//! (production mode refuses to start with an in-memory registry, so
+//! whichever process actually turns `require_node_auth` on in production
+//! also gets the durable allow-list, not the ephemeral one).
 
 use crate::{ClientId, NodeAllowlist, NodeAuthError, NodeIdentity};
 use redis::aio::ConnectionManager;
@@ -17,9 +20,10 @@ pub struct RedisNodeAllowlist {
 }
 
 impl RedisNodeAllowlist {
-    /// `redis_url` stays argument-based rather than `conflux-config`-driven
-    /// — same precedent as `RedisRegistry::connect` (spec §11 Open Item 2
-    /// is still open).
+    /// `redis_url` is a plain connection string, not routed through
+    /// `conflux-config` — same shape as `RedisRegistry::connect`, and for
+    /// the same reason: nothing about a boot-time connection string needs
+    /// topology/mode layering or an explainable source.
     pub async fn connect(redis_url: &str) -> Result<Self, NodeAuthError> {
         Self::connect_with_key(redis_url, DEFAULT_ALLOWLIST_KEY).await
     }
