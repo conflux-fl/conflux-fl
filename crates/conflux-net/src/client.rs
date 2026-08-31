@@ -33,6 +33,8 @@ pub struct PullTransport {
 }
 
 impl PullTransport {
+    /// Connects without TLS — a plaintext hop, such as the local loopback
+    /// connection or a development deployment.
     pub async fn connect(addr: impl Into<String>) -> Result<Self, TransportError> {
         let client = FlTransportClient::connect(addr.into()).await?;
         Ok(Self { client })
@@ -51,6 +53,7 @@ impl PullTransport {
         })
     }
 
+    /// Asks the server for this client's next task.
     pub async fn fetch_task(&mut self, client_id: &str) -> Result<TaskResponse, TransportError> {
         let response = self
             .client
@@ -61,6 +64,8 @@ impl PullTransport {
         Ok(response.into_inner())
     }
 
+    /// Registers this client. `auth_token` is a signed JWT when the
+    /// deployment's auth mode is `jwt`, otherwise a pre-shared token.
     pub async fn register(
         &mut self,
         client_id: &str,
@@ -76,6 +81,8 @@ impl PullTransport {
         Ok(response.into_inner())
     }
 
+    /// Tells the server this client is still alive, resetting its
+    /// eviction clock.
     pub async fn heartbeat(
         &mut self,
         client_id: &str,
@@ -89,6 +96,9 @@ impl PullTransport {
         Ok(response.into_inner())
     }
 
+    /// Streams a trained update back. Chunks are sent in the order given;
+    /// the server sorts by `chunk_index` before reassembling, so that
+    /// order doesn't matter.
     pub async fn submit_delta(
         &mut self,
         chunks: Vec<DeltaChunk>,
@@ -118,6 +128,8 @@ pub struct PushTransport {
 }
 
 impl PushTransport {
+    /// Connects without TLS. Push mode's default posture is mTLS — see
+    /// [`PushTransport::connect_with_tls`].
     pub async fn connect(addr: impl Into<String>) -> Result<Self, TransportError> {
         let client = FlTransportClient::connect(addr.into()).await?;
         Ok(Self { client })
@@ -135,6 +147,8 @@ impl PushTransport {
         })
     }
 
+    /// Opens a long-lived subscription. The returned stream yields a
+    /// `TaskResponse` each time a round opens, until the server closes it.
     pub async fn subscribe_tasks(
         &mut self,
         client_id: &str,
@@ -148,6 +162,7 @@ impl PushTransport {
         Ok(response.into_inner())
     }
 
+    /// Registers this client over the push connection.
     pub async fn register(
         &mut self,
         client_id: &str,
@@ -163,6 +178,7 @@ impl PushTransport {
         Ok(response.into_inner())
     }
 
+    /// Tells the server this client is still alive.
     pub async fn heartbeat(
         &mut self,
         client_id: &str,
@@ -176,6 +192,8 @@ impl PushTransport {
         Ok(response.into_inner())
     }
 
+    /// Streams a trained update back, exactly as pull mode does — only
+    /// task *acquisition* differs between the two modes.
     pub async fn submit_delta(
         &mut self,
         chunks: Vec<DeltaChunk>,

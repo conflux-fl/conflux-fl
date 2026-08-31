@@ -11,6 +11,8 @@
 //! caller, every later push must be rejected explicitly rather than
 //! silently landing in a batch nobody will ever read again.
 
+#![warn(missing_docs)]
+
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -19,9 +21,17 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 #[derive(Debug, thiserror::Error)]
+/// Why a push into the round's buffer was refused.
 pub enum BufferError {
     #[error("delta is for round {got}, but this buffer is collecting round {expected}")]
-    WrongRound { expected: u64, got: u64 },
+    /// The delta is for a different round than this buffer is collecting.
+    /// A stale client that trained through a round boundary, most often.
+    WrongRound {
+        /// The round this buffer is collecting.
+        expected: u64,
+        /// The round the rejected delta claimed.
+        got: u64,
+    },
     /// Returned when a push arrives after this buffer has already flushed
     /// — whether because quorum was met or the timeout fired. A buffer
     /// whose snapshot has already been taken and handed to aggregation can
@@ -41,14 +51,25 @@ pub enum BufferError {
 /// detail to discard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlushReason {
+    /// Enough clients submitted; the round closed early rather than waiting out its timeout.
     Quorum,
+    /// The wait elapsed with a partial batch. Aggregation proceeds on whoever arrived.
     Timeout,
 }
 
 #[derive(Debug, Clone)]
+/// One round's collected batch, and why collection stopped.
 pub struct FlushResult {
+    /// Which round these deltas belong to.
     pub round: u64,
+    /// Quorum or timeout. Worth logging either way: whether a round closed
+    /// because enough clients responded or because the wait ran out is
+    /// operationally significant, not an implementation detail.
     pub reason: FlushReason,
+    /// Everything that arrived before the buffer closed. May be shorter
+    /// than the quorum when `reason` is `Timeout`, and is never empty in
+    /// practice only because the caller decides what to do with an empty
+    /// round.
     pub deltas: Vec<ClientDelta>,
 }
 
@@ -82,6 +103,8 @@ pub struct RoundBuffer {
 }
 
 impl RoundBuffer {
+    /// A buffer collecting for `round`, closing as soon as `quorum`
+    /// deltas arrive.
     pub fn new(round: u64, quorum: usize) -> Self {
         Self {
             round,
@@ -91,6 +114,13 @@ impl RoundBuffer {
         }
     }
 
+    /// Adds one client's delta to the round.
+    ///
+    /// `&self`, not `&mut self`: clients submit concurrently from
+    /// independent connections, so every caller holds an `Arc` to the same
+    /// buffer. Returns `Closed` once a snapshot has been taken, which the
+    /// caller should treat as "resubmit against the current round" rather
+    /// than a permanent failure.
     pub fn push(&self, delta: ClientDelta) -> Result<(), BufferError> {
         if delta.round != self.round {
             return Err(BufferError::WrongRound {

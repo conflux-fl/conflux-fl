@@ -10,52 +10,78 @@
 use conflux_config::Mode;
 
 #[derive(Debug, Clone, Default)]
+/// Where client lifecycle state lives.
 pub enum RegistryBackend {
     #[default]
+    /// Process-local. Lost on restart, and invisible to any other process.
     Memory,
+    /// Shared and durable.
     Redis {
+        /// Redis connection string.
         url: String,
     },
 }
 
 #[derive(Debug, Clone, Default)]
+/// Where model checkpoints live.
 pub enum StoreBackend {
     #[default]
+    /// Process-local. Lost on restart.
     Memory,
+    /// Durable, in a relational store.
     Postgres {
+        /// Postgres connection string.
         url: String,
     },
+    /// Durable, in object storage — S3 or anything speaking its API.
     S3 {
+        /// Service endpoint. Not `s3.amazonaws.com` for MinIO and friends.
         endpoint: String,
+        /// Bucket holding the checkpoints.
         bucket: String,
+        /// Access key id.
         access_key: String,
+        /// Secret access key.
         secret_key: String,
     },
 }
 
 #[derive(Debug, Clone, Default)]
+/// Where the privacy accountant's round history lives.
 pub enum AccountingBackend {
     #[default]
+    /// Not persisted. Epsilon resets to zero on restart, which silently
+    /// re-grants a spent budget — acceptable only for research runs.
     Disabled,
+    /// Persisted, so epsilon survives a restart.
     Postgres {
+        /// Postgres connection string.
         url: String,
     },
 }
 
 #[derive(Debug, Clone, Default)]
+/// The three backend choices a deployment makes, resolved from the
+/// environment at startup.
 pub struct BackendSelection {
+    /// Client lifecycle backend.
     pub registry: RegistryBackend,
+    /// Checkpoint backend.
     pub store: StoreBackend,
+    /// Privacy-accounting backend.
     pub accounting: AccountingBackend,
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why a backend combination is refused.
 pub enum BackendSelectionError {
     #[error(
         "mode = production requires a durable registry backend (set \
          CONFLUX_REGISTRY_BACKEND=redis and CONFLUX_REDIS_URL) — refusing to \
          start with in-memory client registrations that would be lost on restart"
     )]
+    /// Production with an in-memory registry: every client would be
+    /// forgotten on restart.
     ProductionRequiresDurableRegistry,
     #[error(
         "mode = production requires a durable store backend (set \
@@ -63,6 +89,8 @@ pub enum BackendSelectionError {
          env vars) — refusing to start with in-memory checkpoints that would \
          be lost on restart"
     )]
+    /// Production with an in-memory store: the trained model would be
+    /// lost on restart.
     ProductionRequiresDurableStore,
     #[error(
         "mode = production requires persistent privacy accounting (set \
@@ -70,9 +98,16 @@ pub enum BackendSelectionError {
          refusing to start with an epsilon budget that would silently reset \
          on restart"
     )]
+    /// Production without persistent accounting: a restart would reset
+    /// epsilon to zero and silently re-grant a spent privacy budget.
     ProductionRequiresPersistentAccounting,
 }
 
+/// Whether this backend combination may run in this mode.
+///
+/// A pure function so every branch is testable without connecting to
+/// anything. Research permits all combinations; production refuses
+/// the three above.
 pub fn validate_production_backends(
     mode: Mode,
     selection: &BackendSelection,

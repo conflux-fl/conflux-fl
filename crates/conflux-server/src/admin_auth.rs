@@ -47,6 +47,7 @@ use axum::response::Response;
 pub struct AdminToken(String);
 
 impl AdminToken {
+    /// Wraps a configured token value.
     pub fn new(token: impl Into<String>) -> Self {
         Self(token.into())
     }
@@ -75,6 +76,7 @@ impl AdminToken {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why the admin API's configuration is refused at startup.
 pub enum AdminAuthError {
     #[error(
         "the HTTP admin API is bound to {addr}, which is reachable beyond loopback, but no \
@@ -83,7 +85,11 @@ pub enum AdminAuthError {
          reach the port add themselves. Either set CONFLUX_ADMIN_TOKEN, or bind to \
          127.0.0.1 and reach it through your own authenticated backend."
     )]
-    ExposedWithoutToken { addr: String },
+    /// The admin API is bound somewhere reachable with no token set.
+    ExposedWithoutToken {
+        /// The address the admin API was asked to bind.
+        addr: String,
+    },
 }
 
 /// Whether the server may start, given where the admin API is bound and

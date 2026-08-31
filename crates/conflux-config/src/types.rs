@@ -12,11 +12,18 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionMode {
+    /// The server streams tasks to a subscribed client. `cross_silo`'s
+    /// default: few, trusted, always-reachable participants.
     Push,
+    /// The client asks for its next task when ready. The default
+    /// everywhere else — many, intermittently-connected participants.
     Pull,
 }
 
 impl ConnectionMode {
+    /// This value's canonical string form — the spelling accepted in a
+    /// config file and printed in the startup log, which are the same by
+    /// construction.
     pub fn as_str(&self) -> &'static str {
         match self {
             ConnectionMode::Push => "push",
@@ -27,12 +34,20 @@ impl ConnectionMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// How a node proves who it is.
 pub enum AuthMode {
+    /// Mutual TLS: identity is a client certificate, verified at the TLS
+    /// layer before any RPC runs.
     Mtls,
+    /// A signed JWT in `RegisterRequest.auth_token`, verified against a
+    /// configured public key.
     Jwt,
 }
 
 impl AuthMode {
+    /// This value's canonical string form — the spelling accepted in a
+    /// config file and printed in the startup log, which are the same by
+    /// construction.
     pub fn as_str(&self) -> &'static str {
         match self {
             AuthMode::Mtls => "mtls",
@@ -43,12 +58,19 @@ impl AuthMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Where client-sampling randomness comes from.
 pub enum SeedMode {
+    /// A fixed seed, so a run is reproducible. Research default.
     Fixed,
+    /// OS entropy. Production default — a predictable selection is
+    /// exploitable by a client that wants to be chosen.
     OsRandom,
 }
 
 impl SeedMode {
+    /// This value's canonical string form — the spelling accepted in a
+    /// config file and printed in the startup log, which are the same by
+    /// construction.
     pub fn as_str(&self) -> &'static str {
         match self {
             SeedMode::Fixed => "fixed",
@@ -59,12 +81,21 @@ impl SeedMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// What to do when the privacy budget runs out.
 pub enum BudgetExhaustedAction {
+    /// Stop the round. The default, and the only choice that keeps the
+    /// epsilon guarantee true.
     Halt,
+    /// Keep training past the budget. The name is deliberately blunt:
+    /// choosing this means the deployment no longer has the differential
+    /// privacy guarantee it configured.
     ContinueWithoutGuarantee,
 }
 
 impl BudgetExhaustedAction {
+    /// This value's canonical string form — the spelling accepted in a
+    /// config file and printed in the startup log, which are the same by
+    /// construction.
     pub fn as_str(&self) -> &'static str {
         match self {
             BudgetExhaustedAction::Halt => "halt",
@@ -75,6 +106,8 @@ impl BudgetExhaustedAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Whether epsilon is tracked for the experiment as a whole or per
+/// client.
 pub enum AccountingScope {
     /// One shared differential-privacy budget for the whole experiment —
     /// every client's rounds count against the same epsilon.
@@ -88,6 +121,9 @@ pub enum AccountingScope {
 }
 
 impl AccountingScope {
+    /// This value's canonical string form — the spelling accepted in a
+    /// config file and printed in the startup log, which are the same by
+    /// construction.
     pub fn as_str(&self) -> &'static str {
         match self {
             AccountingScope::Global => "global",
@@ -98,12 +134,19 @@ impl AccountingScope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// How the resolved configuration is printed at startup.
 pub enum LogFormat {
+    /// One JSON object per parameter. Production default — machine-
+    /// readable for log aggregation.
     Json,
+    /// Aligned, human-readable lines. Research default.
     Text,
 }
 
 impl LogFormat {
+    /// This value's canonical string form — the spelling accepted in a
+    /// config file and printed in the startup log, which are the same by
+    /// construction.
     pub fn as_str(&self) -> &'static str {
         match self {
             LogFormat::Json => "json",
@@ -120,9 +163,15 @@ impl LogFormat {
 /// (IoT/edge compute).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Topology {
+    /// Few, trusted institutional participants on reliable connections.
     CrossSilo,
+    /// Many intermittently-connected devices, e.g. phones.
     CrossDevice,
+    /// Like `CrossDevice`, but participants are anonymous or public
+    /// rather than known devices — hence stricter reputation gating.
     Crowdsource,
+    /// Edge and IoT deployments. Currently mirrors `CrossDevice`'s
+    /// posture; resource-aware selection tuned for it isn't built yet.
     Edge,
 }
 
@@ -130,15 +179,20 @@ pub enum Topology {
 /// `round_timeout_secs`, `min_reputation_score`, `client_registry_ttl`.
 #[derive(Debug, Clone, Copy)]
 pub struct TopologyDefaults {
+    /// Push or pull, per this topology's connectivity assumptions.
     pub connection_mode: ConnectionMode,
+    /// The authentication mode this topology's trust model implies.
     pub auth: AuthMode,
+    /// How long to wait for a round's submissions.
     pub round_timeout_secs: u64,
+    /// Reputation gating threshold. `0.0` means no gating.
     pub min_reputation_score: f32,
     /// Seconds.
     pub client_registry_ttl: u64,
 }
 
 impl Topology {
+    /// This topology's config-file and log spelling.
     pub fn label(&self) -> &'static str {
         match self {
             Topology::CrossSilo => "cross_silo",
@@ -211,7 +265,11 @@ impl Topology {
 /// checks, refuse to start otherwise).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
+    /// Iterating on an experiment. Permissive defaults, reproducible
+    /// seeding, human-readable logs.
     Research,
+    /// A live deployment. Refuses configurations research tolerates —
+    /// in-memory backends, missing auth material, the stub client.
     Production,
 }
 
@@ -223,20 +281,29 @@ pub enum Mode {
 /// allow-list before it can register), and `config_log_format`.
 #[derive(Debug, Clone, Copy)]
 pub struct ModeDefaults {
+    /// Fixed seeding for reproducibility, or OS entropy.
     pub seed_mode: SeedMode,
+    /// The fixed seed, when `seed_mode` is `Fixed`. `None` under
+    /// `OsRandom`.
     pub seed_value: Option<u64>,
+    /// What happens when the privacy budget runs out.
     pub budget_exhausted_action: BudgetExhaustedAction,
+    /// Whether epsilon is tracked globally or per client.
     pub accounting_scope: AccountingScope,
+    /// Whether the stub Python `ClientApp` (fixed dummy weights, no
+    /// PyTorch) may connect.
     pub allow_stub_client: bool,
     /// Same on/off-toggle shape as `allow_stub_client`: a real production
     /// deployment must check a connecting node's identity against an
     /// allow-list before letting it register, but a research experiment
     /// iterating on an algorithm shouldn't have to stand one up first.
     pub require_node_auth: bool,
+    /// JSON or text for the startup configuration log.
     pub config_log_format: LogFormat,
 }
 
 impl Mode {
+    /// This mode's config-file and log spelling.
     pub fn label(&self) -> &'static str {
         match self {
             Mode::Research => "research",

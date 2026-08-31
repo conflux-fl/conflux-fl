@@ -14,6 +14,9 @@ use crate::{Store, StoreError};
 
 const DEFAULT_PREFIX: &str = "conflux";
 
+/// A `Store` backed by S3-compatible object storage. Checkpoints are
+/// objects under a configurable key prefix, so one bucket can hold
+/// several experiments.
 pub struct S3Store {
     client: Client,
     bucket: String,
@@ -21,6 +24,9 @@ pub struct S3Store {
 }
 
 impl S3Store {
+    /// Connects with the default key prefix. Ensures the bucket exists,
+    /// checking before creating so read/write-scoped credentials aren't
+    /// asked for a permission they don't need.
     pub async fn connect(
         endpoint_url: &str,
         bucket: impl Into<String>,

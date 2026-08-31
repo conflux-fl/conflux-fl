@@ -4,6 +4,8 @@
 //!
 //! See `docs/spec/conflux-spec-v1.md` §7, §10 (Phase 6).
 
+#![warn(missing_docs)]
+
 mod bridge;
 mod startup_guard;
 

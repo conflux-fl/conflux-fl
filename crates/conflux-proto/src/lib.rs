@@ -24,6 +24,8 @@
 //! depend on `conflux-proto` without risking a cycle, because
 //! `conflux-proto` never depends back on anything built on top of it.
 
+#![warn(missing_docs)]
+
 // Pulls in the Rust types `build.rs` generated from
 // `proto/fl_transport.proto` at compile time — `RegisterRequest`,
 // `ClientDelta`, `FlTransport`'s client/server traits, and so on. The
@@ -42,8 +44,13 @@ tonic::include_proto!("conflux.v1");
 /// `f32` (unlike, say, UTF-8, there's no invalid 4-byte pattern to reject).
 #[derive(Debug, thiserror::Error)]
 pub enum WeightsCodecError {
+    /// The buffer's length isn't a multiple of 4, so it cannot be a
+    /// packed `f32` vector.
     #[error("weights buffer has {len} bytes, which is not a multiple of 4")]
-    Malformed { len: usize },
+    Malformed {
+        /// The buffer's actual length, in bytes.
+        len: usize,
+    },
 }
 
 /// The wire convention every `ClientDelta.weights`/`DeltaChunk.data`/

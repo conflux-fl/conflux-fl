@@ -16,6 +16,8 @@ use crate::{ClientId, Registry, RegistryError};
 /// there's no single per-key expiry to set at write time.
 const DEFAULT_CLIENTS_KEY: &str = "conflux:registry:clients";
 
+/// A `Registry` backed by a real Redis, so client lifecycle state
+/// survives a restart and is shared by every server process.
 pub struct RedisRegistry {
     conn: ConnectionManager,
     key: String,

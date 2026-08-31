@@ -10,6 +10,8 @@
 //! deployment that needs the registry durable across restarts and shared
 //! across multiple server processes.
 
+#![warn(missing_docs)]
+
 mod any_node_allowlist;
 mod any_registry;
 mod node_allowlist;
@@ -51,8 +53,12 @@ impl std::fmt::Display for ClientId {
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
     #[error("client {0} is already registered")]
+    /// This client is already registered. Callers generally treat this as
+    /// success — a second registration is a retry, not an error.
     AlreadyRegistered(ClientId),
     #[error("client {0} is not registered")]
+    /// No such client. Usually means it was evicted after its TTL lapsed
+    /// and should register again.
     NotRegistered(ClientId),
     /// An in-process `HashMap` (`InMemoryRegistry`) never fails, but a
     /// backend that does real I/O (`RedisRegistry`) can — a connection
@@ -64,9 +70,14 @@ pub enum RegistryError {
 }
 
 #[derive(Debug, Clone)]
+/// What the registry knows about one registered client.
 pub struct ClientInfo {
+    /// The client's identity.
     pub id: ClientId,
+    /// When it first registered.
     pub registered_at: Instant,
+    /// When it last checked in. Eviction compares this against the
+    /// configured TTL.
     pub last_heartbeat: Instant,
 }
 
@@ -88,7 +99,11 @@ pub struct ClientInfo {
 /// codebase needs `dyn Registry` (every caller holds a concrete type), so
 /// that's not a cost paid for no reason.
 pub trait Registry: Send + Sync {
+    /// Admits a client. Errors with `AlreadyRegistered` if it is already
+    /// known — which most callers treat as success.
     fn register(&self, id: ClientId) -> impl Future<Output = Result<(), RegistryError>> + Send;
+    /// Records that a client is still alive, resetting its eviction
+    /// clock. Errors with `NotRegistered` if it was already evicted.
     fn heartbeat(&self, id: &ClientId) -> impl Future<Output = Result<(), RegistryError>> + Send;
     /// Removes clients whose last heartbeat is older than `ttl` — a
     /// best-effort sweep (an `InMemoryRegistry` sweep can't fail; a
@@ -117,6 +132,7 @@ pub struct InMemoryRegistry {
 }
 
 impl InMemoryRegistry {
+    /// An empty registry.
     pub fn new() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),

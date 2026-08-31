@@ -10,6 +10,8 @@
 //! [`FlTransportService`] that answers either one through a single
 //! [`RoundDispatcher`] trait.
 
+#![warn(missing_docs)]
+
 mod client;
 mod dispatcher;
 pub mod jwt;
@@ -27,7 +29,9 @@ pub use service::FlTransportService;
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("failed to connect: {0}")]
+    /// The connection itself could not be established.
     Connect(#[from] tonic::transport::Error),
     #[error("RPC failed: {0}")]
+    /// The connection worked; the RPC came back with an error status.
     Rpc(#[from] tonic::Status),
 }

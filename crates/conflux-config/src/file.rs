@@ -28,10 +28,19 @@ use crate::Overrides;
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigFileError {
     #[error("experiment config file not found: {path}")]
-    NotFound { path: String },
-    #[error("could not read experiment config file {path}: {source}")]
-    Unreadable {
+    /// No file at that path. An operator named a config file that isn't
+    /// there — a typo, or a relative path resolved from an unexpected
+    /// working directory.
+    NotFound {
+        /// The path that was looked for.
         path: String,
+    },
+    #[error("could not read experiment config file {path}: {source}")]
+    /// The file exists but could not be read: permissions, usually.
+    Unreadable {
+        /// The path that could not be read.
+        path: String,
+        /// The underlying OS error.
         #[source]
         source: std::io::Error,
     },
@@ -40,13 +49,24 @@ pub enum ConfigFileError {
     /// say "this isn't TOML" rather than blaming whichever key the
     /// parser happened to choke near.
     #[error("experiment config file {path} is not valid TOML: {message}")]
-    Syntax { path: String, message: String },
+    Syntax {
+        /// The file that failed to parse.
+        path: String,
+        /// What the TOML parser reported.
+        message: String,
+    },
     /// The file is valid TOML, but doesn't describe an `Overrides`: a
     /// value of the wrong type (`quorum = "three"`), an unknown key
     /// (usually a typo), or an enum spelled with a value that isn't one
     /// of its variants.
     #[error("experiment config file {path} has an invalid setting: {message}")]
-    Schema { path: String, message: String },
+    Schema {
+        /// The file whose contents don't describe an `Overrides`.
+        path: String,
+        /// What the deserializer reported — a wrong type, an unknown key,
+        /// or an enum value that isn't one of its variants.
+        message: String,
+    },
 }
 
 /// Reads `path` as a flat TOML file of experiment-level overrides.

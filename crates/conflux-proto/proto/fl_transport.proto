@@ -7,6 +7,10 @@ package conflux.v1;
 // see docs/spec/conflux-spec-v1.md §3), and the local loopback gRPC hop
 // between conflux-node and the Python ClientApp (no TLS, localhost only —
 // see §7).
+//
+// Comments here become doc comments on the generated Rust types, so this
+// file is the single place the wire contract is described — for the Rust
+// side, the Python side, and anyone reading the schema on its own.
 service FlTransport {
   // Pull mode: client asks for the next task.
   rpc FetchTask (FetchTaskRequest) returns (TaskResponse);
@@ -18,66 +22,142 @@ service FlTransport {
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
 }
 
+// A client announcing itself before it participates in any round.
 message RegisterRequest {
+  // The identity this client claims. Every later message in the round
+  // pipeline is attributed to this string, and the server's allow-list
+  // (when require_node_auth is on) is keyed by it.
   string client_id = 1;
+  // The client's credential. What this holds depends on the deployment's
+  // resolved auth mode: a signed JWT when auth = jwt (verified against
+  // the server's configured public key), otherwise an opaque pre-shared
+  // token compared against the allow-list. Ignored entirely on the local
+  // loopback hop, where conflux-node has already registered upstream on
+  // the Python client's behalf.
   string auth_token = 2;
 }
 
+// The server's answer to a registration attempt.
 message RegisterResponse {
+  // False means this client may not participate. A repeated registration
+  // from an already-known client is accepted, not refused — treating a
+  // retry as an error only makes clients retry harder.
   bool accepted = 1;
+  // Human-readable detail, for logs. Never parse this; the boolean above
+  // is the decision.
   string message = 2;
 }
 
+// A liveness ping. Clients that stop sending these are evicted once their
+// registry TTL lapses.
 message HeartbeatRequest {
+  // Which client is still alive.
   string client_id = 1;
 }
 
+// The server's answer to a liveness ping.
 message HeartbeatResponse {
+  // False means the server no longer recognizes this client — it was
+  // evicted, and the client should register again rather than continue.
   bool acknowledged = 1;
 }
 
+// Pull mode's request for whatever round is currently open.
 message FetchTaskRequest {
+  // Which client is asking. The server uses this to decide whether the
+  // client was selected for the open round.
   string client_id = 1;
 }
 
+// Push mode's subscription. The server holds the stream open and pushes a
+// TaskResponse whenever a round opens, so the client never polls.
 message SubscribeRequest {
+  // Which client is subscribing.
   string client_id = 1;
 }
 
 // A training task dispatched to a client: the round's starting weights.
 message TaskResponse {
+  // Identifies this dispatch. Distinct from `round` so a server may
+  // re-dispatch one round without the client mistaking it for a new one.
   string task_id = 1;
+  // Which round these weights belong to. A client must echo this back in
+  // its DeltaChunks; a submission for a round that has already closed is
+  // rejected rather than folded into the current one.
   uint64 round = 2;
-  bytes model_weights = 3; // little-endian packed f32
+  // The global model at the start of this round, as little-endian packed
+  // f32. The server has no idea what architecture these weights describe
+  // (ADR 0004) — shape and meaning are entirely the client's business.
+  //
+  // An all-zero buffer is the server's generic placeholder for "no
+  // checkpoint yet": it cannot construct a real initialization for a
+  // model it knows nothing about. A client that recognizes this
+  // substitutes its own architecture-aware initialization, since training
+  // a network of ReLU hidden units from all-zero weights cannot break
+  // symmetry and will not learn.
+  bytes model_weights = 3;
 }
 
 // One chunk of a streamed client update. Large deltas are split across
 // multiple DeltaChunk messages sharing the same (client_id, round);
 // conflux-buffer reassembles them into a ClientDelta.
 message DeltaChunk {
+  // Who is submitting. Must match the client_id that registered.
   string client_id = 1;
+  // Which round this update trained against, echoed from TaskResponse.
   uint64 round = 2;
+  // This chunk's position in the client's stream, zero-based. The server
+  // sorts by this before concatenating, so chunks may arrive in any order.
   uint32 chunk_index = 3;
+  // How many chunks this client's update is split into.
   uint32 total_chunks = 4;
-  bytes data = 5; // little-endian packed f32, this chunk's slice of the delta
+  // This chunk's slice of the update, as little-endian packed f32.
+  // Chunk boundaries are byte offsets and carry no meaning — the
+  // reassembled concatenation is the update.
+  bytes data = 5;
   // FedAvg's SampleCountWeighting input (McMahan et al., 2017) — repeated
   // identically on every chunk of one client's stream (cheap, and avoids
   // depending on chunk 0 arriving first) rather than sent once.
+  //
+  // Self-reported and unauthenticated: FedAvg's weighting takes this on
+  // trust, which is an assumption of the published method rather than a
+  // guarantee of the transport. The server rejects structurally
+  // impossible values, and a robust aggregator ignores this field
+  // entirely — both of which matter, because a client that inflates it
+  // buys proportional influence over the aggregate.
   uint64 num_samples = 6;
 }
 
+// The server's answer to a completed submission.
 message SubmitAck {
+  // False means the update was not taken into the round — most often
+  // because the round already closed on quorum or timeout while this
+  // client was still training. The client should fetch the current task
+  // and resubmit rather than treat it as fatal.
   bool accepted = 1;
+  // Human-readable detail, for logs.
   string message = 2;
 }
 
 // A fully reassembled client update, ready for aggregation
 // (conflux-core's Aggregator, conflux-reputation's ContributionScorer —
 // see docs/spec/conflux-spec-v1.md §5).
+//
+// Never sent on the wire as-is: it is what the server builds after
+// concatenating a client's DeltaChunks, and what every aggregator consumes.
 message ClientDelta {
+  // Who produced this update.
   string client_id = 1;
+  // Which round it trained against.
   uint64 round = 2;
-  bytes weights = 3; // little-endian packed f32
-  // FedAvg's SampleCountWeighting input (McMahan et al., 2017).
+  // The complete trained update, little-endian packed f32, the same
+  // length as the TaskResponse this client trained from.
+  //
+  // Any 4-byte pattern decodes, including NaN and infinity — the codec
+  // cannot know which bit patterns are meaningful for a given model, so
+  // aggregators validate finiteness themselves before using these values.
+  bytes weights = 3;
+  // FedAvg's SampleCountWeighting input (McMahan et al., 2017). See
+  // DeltaChunk.num_samples for what trusting this costs.
   uint64 num_samples = 4;
 }

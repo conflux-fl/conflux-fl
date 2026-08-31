@@ -4,6 +4,8 @@
 //! privacy loss ("epsilon") has been spent across rounds so a caller can
 //! stop once a configured budget runs out.
 
+#![warn(missing_docs)]
+
 use conflux_config::{StrategyEntry, StrategyKind};
 use rand_distr::{Distribution, Normal};
 
@@ -21,6 +23,11 @@ use rand_distr::{Distribution, Normal};
 /// a concrete `&mut StdRng` (or any other `Rng` impl) where `&mut dyn Rng`
 /// is expected is an automatic, zero-effort unsized coercion.
 pub trait PrivacyMechanism: Send + Sync {
+    /// Applies this mechanism to `weights` in place.
+    ///
+    /// In place rather than returning a new vector because a weight vector
+    /// is the largest thing in the pipeline — a model's full parameter set
+    /// — and every caller already owns a mutable one.
     fn transform(&self, weights: &mut [f32], rng: &mut dyn rand::Rng);
 }
 
@@ -34,11 +41,15 @@ inventory::submit! {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why a privacy-mechanism name couldn't be turned into a
+/// `PrivacyMechanism`.
 pub enum PrivacyMechanismBuildError {
     #[error(
         "unknown privacy mechanism \"{0}\" — not a registered conflux-privacy strategy \
          (known: \"gaussian_clipping\")"
     )]
+    /// The name isn't in this crate's registry — almost always a typo in a
+    /// resolved `privacy_mechanism` config value.
     Unknown(String),
 }
 
@@ -68,7 +79,13 @@ pub fn build_privacy_mechanism(
 /// Federated Learning: A Client Level Perspective*.
 #[derive(Debug, Clone, Copy)]
 pub struct GaussianClippingPrivacy {
+    /// The L2 norm each update is clipped to before noise is added. This
+    /// is what bounds any single client's contribution, and therefore what
+    /// makes the noise scale below meaningful.
     pub clip_norm: f32,
+    /// Gaussian noise standard deviation, as a multiple of `clip_norm`.
+    /// Higher means more privacy and less utility; `0.0` disables the
+    /// noise while leaving the clipping in place.
     pub noise_multiplier: f32,
 }
 
@@ -136,8 +153,20 @@ fn l2_norm(weights: &[f32]) -> f32 {
 /// Tracks cumulative privacy loss across rounds and reports whether the
 /// experiment's epsilon budget is exhausted.
 pub trait PrivacyAccountant: Send + Sync {
+    /// Records that one round ran with these parameters.
+    ///
+    /// The raw parameters are stored, not a running epsilon total. Epsilon
+    /// depends on `delta`, which is supplied per query below — a
+    /// precomputed total would silently be wrong the moment a caller asked
+    /// about a different `delta`.
     fn record_round(&mut self, noise_multiplier: f32, sample_rate: f32);
+    /// Cumulative epsilon spent so far, at the given `delta`.
     fn current_epsilon(&self, delta: f64) -> f64;
+    /// Whether `current_epsilon(delta)` has reached `target_epsilon`.
+    ///
+    /// A convenience over comparing the two directly, so every call site
+    /// applies the same boundary condition rather than each choosing
+    /// between `>` and `>=`.
     fn budget_exhausted(&self, target_epsilon: f64, delta: f64) -> bool;
 }
 
@@ -171,6 +200,7 @@ pub struct RdpAccountant {
 }
 
 impl RdpAccountant {
+    /// A fresh accountant with no rounds recorded — zero epsilon spent.
     pub fn new() -> Self {
         Self {
             rounds: Vec::new(),

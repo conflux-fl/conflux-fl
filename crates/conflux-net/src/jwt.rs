@@ -71,23 +71,44 @@ impl std::fmt::Debug for JwtKeyMaterial {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why a JWT was refused, or why a deployment may not start with the
+/// JWT configuration it has.
 pub enum JwtAuthError {
     #[error(
         "JWT public key is neither an RSA nor an ECDSA key in PEM form \
          (expected a PEM-encoded public key for RS256 or ES256): {message}"
     )]
-    UnusableKey { message: String },
+    /// The configured file is not a usable RSA or ECDSA public key.
+    UnusableKey {
+        /// What the key parser reported.
+        message: String,
+    },
     #[error("JWT is expired")]
+    /// The token's `exp` has passed.
     Expired,
     #[error("JWT signature is not valid for the configured public key")]
+    /// The signature doesn't verify against the configured public key.
     BadSignature,
     #[error(
         "JWT is signed with {presented}, but this deployment's key verifies \
          {expected} — refusing to verify a token that chose its own algorithm"
     )]
-    WrongAlgorithm { expected: String, presented: String },
+    /// The token's `alg` header disagrees with the algorithm this
+    /// deployment's key verifies — refused rather than honored, which is
+    /// what prevents algorithm-confusion attacks.
+    WrongAlgorithm {
+        /// The algorithm this deployment's key verifies.
+        expected: String,
+        /// The algorithm the token's own header claimed. Read only to
+        /// report the rejection — never to decide how to verify.
+        presented: String,
+    },
     #[error("JWT is malformed or missing a required claim: {message}")]
-    Malformed { message: String },
+    /// The token could not be decoded, or is missing a required claim.
+    Malformed {
+        /// What the decoder reported.
+        message: String,
+    },
     /// The token is genuine, but authenticates somebody else. Kept
     /// distinct from every failure above because it is the only one that
     /// is not a problem with the token itself — an operator seeing this
@@ -95,7 +116,9 @@ pub enum JwtAuthError {
     /// different fix from "your token expired."
     #[error("JWT is valid but issued for client {token_sub}, not {client_id}")]
     SubjectMismatch {
+        /// The client the token was actually issued for.
         token_sub: String,
+        /// The client that presented it.
         client_id: String,
     },
     #[error(
@@ -103,6 +126,8 @@ pub enum JwtAuthError {
          CONFLUX_JWT_PUBLIC_KEY_PATH) — refusing to start a production \
          deployment that would accept any auth_token without verifying it"
     )]
+    /// Production selected `auth = jwt` with no public key to verify
+    /// against — refused at startup rather than accepting every token.
     ProductionRequiresJwtKey,
 }
 
@@ -134,6 +159,7 @@ impl JwtKeyMaterial {
         }
     }
 
+    /// The algorithm this key verifies, as a JWT `alg` name.
     pub fn algorithm(&self) -> &'static str {
         match self.algorithm {
             Algorithm::RS256 => "RS256",

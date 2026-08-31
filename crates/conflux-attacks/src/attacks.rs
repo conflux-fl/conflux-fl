@@ -50,6 +50,7 @@ fn round_and_samples(honest_updates: &[ClientDelta]) -> (u64, u64) {
 /// Blanchard, El Mhamdi, Guerraoui & Stainer (2017), *Machine Learning
 /// with Adversaries: Byzantine Tolerant Gradient Descent*, NeurIPS 2017.
 pub struct GaussianAttack {
+    /// Standard deviation of the Gaussian noise submitted in place of a real update.
     pub std_dev: f32,
     /// Seeded for reproducible tests — an OS-seeded variant isn't needed
     /// here, unlike `conflux-privacy`'s noise (which must vary run to
@@ -93,6 +94,7 @@ impl Attack for GaussianAttack {
 /// Aggregation Methods for Distributed Learning from Heterogeneous
 /// Datasets*, AAAI 2019.
 pub struct SignFlippingAttack {
+    /// How far each flipped update is scaled beyond simple negation.
     pub scale: f32,
 }
 
@@ -186,6 +188,7 @@ impl Attack for AlieAttack {
 /// Bagdasaryan, Veit, Hua, Estrin & Shmatikov (2020), *How To Backdoor
 /// Federated Learning*, AISTATS 2020.
 pub struct ScalingAttack {
+    /// Multiplier applied to the malicious direction before submission.
     pub scale_factor: f32,
     /// The coordinates the attacker wants the aggregate pulled toward.
     /// Must be the same length as the honest updates' weight vectors.
@@ -321,6 +324,9 @@ pub struct CorrelatedSybilAttack {
     /// Whether each attacker's offset is redrawn every round (unstable)
     /// or fixed for the run (stable). See the type-level docs.
     pub resample_each_round: bool,
+    /// Seeds each attacker's individual offset. Seeded rather than
+    /// OS-random so a sweep is reproducible — an unreproducible attack
+    /// makes an experiment unrepeatable.
     pub seed: u64,
 }
 
@@ -414,7 +420,11 @@ pub struct AdaptiveEvasionAttack {
     /// Attacked direction — not required to be a unit vector, scaled by
     /// the adapting magnitude below.
     pub direction: Vec<f32>,
+    /// Growth applied when the previous round's update appears to have
+    /// landed largely unresisted.
     pub escalation_factor: f32,
+    /// Shrinkage applied when the previous round's update appears to have
+    /// been actively suppressed beyond ordinary dilution.
     pub retreat_factor: f32,
     /// How much *worse* than plain-averaging dilution the actual
     /// suppression must be (as an additional fraction of

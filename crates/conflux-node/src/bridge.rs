@@ -42,6 +42,8 @@ pub enum ConnectionMode {
 }
 
 impl ConnectionMode {
+    /// The mode's canonical name, matching `conflux-config`'s spelling so
+    /// a log line from the node and one from the server agree.
     pub fn as_str(&self) -> &'static str {
         match self {
             ConnectionMode::Push => "push",

@@ -20,12 +20,17 @@ use tonic::transport::ServerTlsConfig;
 /// material (a cert path is a deployment detail, not an experiment-tuning
 /// parameter).
 pub struct TlsMaterial {
+    /// The server's own certificate, PEM-encoded.
     pub cert_pem: Vec<u8>,
+    /// Its private key, PEM-encoded.
     pub key_pem: Vec<u8>,
+    /// The CA that client certificates must be signed by. This is what
+    /// makes the connection *mutual* TLS rather than server-side TLS.
     pub client_ca_pem: Vec<u8>,
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why a deployment's auth configuration is refused at startup.
 pub enum AuthEnforcementError {
     #[error(
         "mode = production with auth = mtls requires TLS material (set \
@@ -34,6 +39,8 @@ pub enum AuthEnforcementError {
          cross_silo deployment that would silently accept plaintext \
          connections"
     )]
+    /// Production selected `auth = mtls` with no certificates configured
+    /// — refused rather than silently accepting plaintext.
     ProductionRequiresMtlsMaterial,
 }
 

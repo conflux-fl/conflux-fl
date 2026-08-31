@@ -29,6 +29,8 @@
 //! implementation in another crate become selectable by name from
 //! config, without this crate ever importing that other crate.
 
+#![warn(missing_docs)]
+
 mod file;
 mod registry;
 mod source;
@@ -52,7 +54,10 @@ use source::{LoggedValue, log_line};
 /// hand-rolled "value + source" pairs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resolved<T> {
+    /// The value that won.
     pub value: T,
+    /// Which tier supplied it. Logged at startup, so a surprising value
+    /// can always be traced to the thing that set it (ADR 0007).
     pub source: ConfigSource,
 }
 
@@ -81,15 +86,29 @@ pub struct Resolved<T> {
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Overrides {
+    /// Push or pull. Topology-owned.
     pub connection_mode: Option<ConnectionMode>,
+    /// How nodes authenticate. Topology-owned.
     pub auth: Option<AuthMode>,
+    /// How long a round waits for submissions before flushing what it has.
     pub round_timeout_secs: Option<u64>,
+    /// Reputation threshold below which an update is filtered out, when
+    /// the reputation filter is enabled.
     pub min_reputation_score: Option<f32>,
+    /// How long a client may go without a heartbeat before eviction, in
+    /// seconds.
     pub client_registry_ttl: Option<u64>,
+    /// How many submissions close a round early. No builtin fallback —
+    /// a deployment must choose it, since the right number depends on how
+    /// many clients there are.
     pub quorum: Option<u32>,
+    /// Which client-sampling strategy to use, by registered name.
     pub selector: Option<String>,
+    /// Fixed seeding or OS entropy. Mode-owned.
     pub seed_mode: Option<SeedMode>,
+    /// The fixed seed, when seeding is fixed.
     pub seed_value: Option<u64>,
+    /// Which aggregation method to use, by registered name.
     pub aggregator: Option<String>,
     /// The assumed fraction of Byzantine (malicious or faulty) clients in
     /// a round's batch, `0.0..1.0`. Feeds the `robust` aggregator
@@ -152,15 +171,26 @@ pub struct Overrides {
     /// batched. Turning this on adds a stage in front of the existing
     /// pipeline; it does not disable the server-side one.
     pub client_side_privacy_transform: Option<bool>,
+    /// Which privacy mechanism to use, by registered name.
     pub privacy_mechanism: Option<String>,
+    /// L2 norm each update is clipped to before noise is added.
     pub clip_norm: Option<f32>,
+    /// Gaussian noise standard deviation, as a multiple of `clip_norm`.
     pub noise_multiplier: Option<f32>,
+    /// The experiment's privacy budget.
     pub target_epsilon: Option<f64>,
+    /// The delta in (epsilon, delta)-differential privacy.
     pub delta: Option<f64>,
+    /// Halt, or continue without the guarantee. Mode-owned.
     pub budget_exhausted_action: Option<BudgetExhaustedAction>,
+    /// Global or per-client epsilon accounting. Mode-owned.
     pub accounting_scope: Option<AccountingScope>,
+    /// Whether the stub Python `ClientApp` may connect. Mode-owned.
     pub allow_stub_client: Option<bool>,
+    /// Whether registration is checked against the node allow-list.
+    /// Mode-owned.
     pub require_node_auth: Option<bool>,
+    /// JSON or text for the startup configuration log. Mode-owned.
     pub config_log_format: Option<LogFormat>,
 }
 
@@ -182,11 +212,29 @@ pub struct ResolvedConfig {
     /// came from is a question about the process's own arguments, not
     /// about config resolution.
     pub topology: Topology,
+    /// The mode this configuration was resolved for.
     pub mode: Mode,
+    /// Push or pull. Topology-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub connection_mode: Resolved<ConnectionMode>,
+    /// How nodes authenticate. Topology-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub auth: Resolved<AuthMode>,
+    /// How long a round waits for submissions before flushing what it has.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub round_timeout_secs: Resolved<u64>,
+    /// Reputation threshold below which an update is filtered out, when
+    /// the reputation filter is enabled.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub min_reputation_score: Resolved<f32>,
+    /// How long a client may go without a heartbeat before eviction, in
+    /// seconds.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub client_registry_ttl: Resolved<u64>,
     /// How many client updates a round needs before it closes. No
     /// built-in default exists for this one — `None` here means
@@ -195,7 +243,13 @@ pub struct ResolvedConfig {
     /// topology-appropriate value, an experiment file, `CONFLUX_QUORUM`,
     /// or `--quorum`.
     pub quorum: Option<Resolved<u32>>,
+    /// Which client-sampling strategy to use, by registered name.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub selector: Resolved<String>,
+    /// Fixed seeding or OS entropy. Mode-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub seed_mode: Resolved<SeedMode>,
     /// The fixed seed used for reproducible client sampling when
     /// `seed_mode` is `Fixed`. `None` when the resolved mode profile uses
@@ -203,20 +257,66 @@ pub struct ResolvedConfig {
     /// names which tier produced that `None`, same as any other resolved
     /// value.
     pub seed_value: Resolved<Option<u64>>,
+    /// Which aggregation method to use, by registered name.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub aggregator: Resolved<String>,
+    /// Assumed Byzantine fraction, read only by the `robust` family.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub robust_byzantine_fraction: Resolved<f32>,
+    /// Centered Clipping's clip radius.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub clip_radius: Resolved<f32>,
+    /// Whether the pre-aggregation reputation filter runs.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub reputation_filter_enabled: Resolved<bool>,
+    /// Whether `conflux-node` also applies the privacy transform locally.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub client_side_privacy_transform: Resolved<bool>,
+    /// Which privacy mechanism to use, by registered name.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub privacy_mechanism: Resolved<String>,
+    /// L2 norm each update is clipped to before noise is added.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub clip_norm: Resolved<f32>,
+    /// Gaussian noise standard deviation, as a multiple of `clip_norm`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub noise_multiplier: Resolved<f32>,
+    /// The experiment's privacy budget.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub target_epsilon: Resolved<f64>,
+    /// The delta in (epsilon, delta)-differential privacy.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub delta: Resolved<f64>,
+    /// Halt, or continue without the guarantee. Mode-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub budget_exhausted_action: Resolved<BudgetExhaustedAction>,
+    /// Global or per-client epsilon accounting. Mode-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub accounting_scope: Resolved<AccountingScope>,
+    /// Whether the stub Python `ClientApp` may connect. Mode-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub allow_stub_client: Resolved<bool>,
+    /// Whether registration is checked against the node allow-list.
+    /// Mode-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub require_node_auth: Resolved<bool>,
+    /// JSON or text for the startup configuration log. Mode-owned.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
     pub config_log_format: Resolved<LogFormat>,
 }
 

@@ -326,6 +326,8 @@ fn scale_samples(num_samples: u64, weight: f32) -> u64 {
     (scaled as u64).max(1)
 }
 
+/// Deviation Stability Scoring — see the module-level notes above for
+/// what it is and why it is deliberately not in the shipped catalog.
 pub struct DssAggregator {
     base: Box<dyn Aggregator>,
     /// How many recent rounds' deviation values each client's trace
@@ -375,9 +377,15 @@ pub struct DssAggregator {
 /// `DssAggregator::last_diagnostics`.
 #[derive(Debug, Clone)]
 pub struct ClientDssDiagnostic {
+    /// Which client this row describes.
     pub client_id: String,
+    /// `1 / (1 + Var(trace))` over the rolling window. Near 1 means a
+    /// steady deviation trace; near 0 means an erratic one.
     pub stability: f32,
+    /// Highest cosine similarity between this client's deviation trace
+    /// and any other client's.
     pub collusion: f32,
+    /// The weight this client actually received in the combine step.
     pub weight: f32,
 }
 
@@ -662,6 +670,11 @@ pub struct CenteredClippingAggregator {
 }
 
 impl CenteredClippingAggregator {
+    /// An aggregator clipping each client's deviation from the running
+    /// reference to `clip_radius`.
+    ///
+    /// `clip_radius` must be tuned to the model's weight scale — see this
+    /// type's fidelity notes for what the untuned default measured.
     pub fn new(clip_radius: f32) -> Self {
         Self {
             clip_radius,

@@ -11,12 +11,21 @@
 //! filters the already-decoded, already-privatized updates, then passes
 //! only the surviving client ids' updates on to the aggregator.
 
+#![warn(missing_docs)]
+
 /// Scores one client's update against a reference direction (typically the
 /// mean, or some other consensus signal, computed across the round's
 /// submissions). Higher means more similar to that reference; the exact
 /// scale and sign depend on the implementation. Scoring alone rejects
 /// nothing — it's the input to threshold-based filtering, below.
 pub trait ContributionScorer: Send + Sync {
+    /// Scores `update` against `reference`. Both slices are raw weight
+    /// vectors of the same length.
+    ///
+    /// Returns a bare `f32` rather than a `Result`: a scorer compares two
+    /// vectors it was handed and always has an answer, so there is no
+    /// failure to report. Whether that answer is *good enough* is the
+    /// caller's threshold decision, not this method's.
     fn score(&self, update: &[f32], reference: &[f32]) -> f32;
 }
 

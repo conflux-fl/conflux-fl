@@ -32,6 +32,11 @@ pub struct DistanceMatrix {
 }
 
 impl DistanceMatrix {
+    /// Computes every pairwise L2 distance in the batch once.
+    ///
+    /// The selection-based members all need the same matrix, and it costs
+    /// O(n² · dim) — computing it once and sharing it is why they can be
+    /// small trait impls rather than whole aggregators.
     pub fn from_updates(updates: &[ClientDelta]) -> Result<Self, AggregatorError> {
         let decoded = decode_and_validate(updates)?;
 
@@ -48,14 +53,17 @@ impl DistanceMatrix {
         Ok(Self { distances })
     }
 
+    /// Distance between updates `i` and `j`. Symmetric.
     pub fn distance(&self, i: usize, j: usize) -> f32 {
         self.distances[i][j]
     }
 
+    /// How many updates the matrix covers.
     pub fn len(&self) -> usize {
         self.distances.len()
     }
 
+    /// Whether the matrix covers no updates.
     pub fn is_empty(&self) -> bool {
         self.distances.is_empty()
     }
@@ -72,6 +80,8 @@ fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Which updates in a batch a filter judges trustworthy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionResult {
+    /// Indices into the original batch that survived filtering, in
+    /// ascending order. Everything not listed was excluded.
     pub selected_indices: Vec<usize>,
 }
 
@@ -83,6 +93,9 @@ pub struct SelectionResult {
 /// Same word ("select") would otherwise describe two different pipeline
 /// stages if this trait kept its Phase 4b name (`RobustSelection`).
 pub trait UpdateFilter: Send + Sync {
+    /// Chooses which updates survive. Excluding is the whole mechanism
+    /// here — the surviving set is then combined by an ordinary
+    /// aggregator, which is why these members compose.
     fn filter(&self, updates: &[ClientDelta]) -> Result<SelectionResult, AggregatorError>;
 }
 
@@ -98,6 +111,8 @@ pub struct FilteredAggregator<F: UpdateFilter, C: Aggregator> {
 }
 
 impl<F: UpdateFilter, C: Aggregator> FilteredAggregator<F, C> {
+    /// Pairs a filter with the aggregator that combines whatever survives
+    /// it.
     pub fn new(filter: F, combiner: C) -> Self {
         Self { filter, combiner }
     }
@@ -162,6 +177,9 @@ fn krum_scores(
 /// no-op, so this reproduces Krum's own "use that one update" definition
 /// exactly, without a separate single-item special case).
 pub struct KrumFilter {
+    /// Assumed fraction of the batch that may be Byzantine. Sizes how
+    /// many updates this method excludes; too low lets an attacker
+    /// through, too high discards honest clients.
     pub byzantine_fraction: f32,
 }
 
@@ -190,6 +208,8 @@ impl UpdateFilter for KrumFilter {
 /// showing it should be (ADR 0008's "changing a default means
 /// re-justifying against the literature," applied within a method).
 pub struct MultiKrumFilter {
+    /// Assumed fraction of the batch that may be Byzantine, sizing how
+    /// many updates are kept.
     pub byzantine_fraction: f32,
 }
 
@@ -220,6 +240,9 @@ impl UpdateFilter for MultiKrumFilter {
 /// `values` is `&mut` so an implementation can sort in place rather than
 /// allocating its own copy.
 pub trait CoordinateWiseRobustStatistic: Send + Sync {
+    /// Reduces one coordinate's values, across every client, to a single
+    /// number. Called once per coordinate; the slice is scratch space the
+    /// implementation may reorder.
     fn combine(&self, values_at_one_coordinate: &mut [f32]) -> f32;
 }
 
@@ -236,6 +259,8 @@ pub struct CoordinateWiseAggregator<S: CoordinateWiseRobustStatistic> {
 }
 
 impl<S: CoordinateWiseRobustStatistic> CoordinateWiseAggregator<S> {
+    /// Builds an aggregator that applies `statistic` coordinate by
+    /// coordinate.
     pub fn new(statistic: S) -> Self {
         Self { statistic }
     }
@@ -263,6 +288,8 @@ impl<S: CoordinateWiseRobustStatistic> Aggregator for CoordinateWiseAggregator<S
 /// `byzantine_fraction`-derived count from each end, average what's
 /// left. Clamped so at least one value always survives per coordinate.
 pub struct TrimmedMeanStatistic {
+    /// Assumed Byzantine fraction, sizing how many values are trimmed
+    /// from each end of each coordinate.
     pub byzantine_fraction: f32,
 }
 
@@ -307,6 +334,8 @@ impl CoordinateWiseRobustStatistic for MedianStatistic {
 /// raw median directly, worth having as its own citable member rather
 /// than treating it as a variant of `MedianStatistic`.
 pub struct MedianOfMeansStatistic {
+    /// How many clients per group. Coordinates are reduced within each
+    /// group first, then across groups.
     pub group_size: usize,
 }
 
@@ -348,6 +377,7 @@ impl CoordinateWiseRobustStatistic for MedianOfMeansStatistic {
 /// FABA's whole pitch is speed — at the cost of only ever removing one
 /// point per pass instead of scoring everyone against everyone.
 pub struct FabaFilter {
+    /// Assumed Byzantine fraction, sizing how many updates are dropped.
     pub byzantine_fraction: f32,
 }
 
@@ -411,6 +441,7 @@ impl UpdateFilter for FabaFilter {
 /// (ADR 0008) — the selection mechanism, which is Bulyan's actual novel
 /// contribution over Multi-Krum, is unmodified and exact.
 pub struct BulyanFilter {
+    /// Assumed Byzantine fraction, sizing the selection step.
     pub byzantine_fraction: f32,
 }
 
@@ -502,6 +533,8 @@ fn top_singular_vector(centered: &[Vec<f32>], iterations: usize) -> Vec<f32> {
 /// subsampling optimization, and skipping it keeps this deterministic
 /// (no RNG, no per-run variance in what a test asserts).
 pub struct DivideAndConquerFilter {
+    /// Assumed Byzantine fraction, sizing how many updates the spectral
+    /// score excludes.
     pub byzantine_fraction: f32,
     /// Power iteration count for the top singular vector. The
     /// deterministic start converges quickly for well-separated data; 30
@@ -571,6 +604,13 @@ impl UpdateFilter for DivideAndConquerFilter {
 /// than raw `ClientDelta`s) so an implementation never has to decode or
 /// know about the wire format itself.
 pub trait RobustVectorStatistic: Send + Sync {
+    /// Reduces the whole batch to one vector at once, rather than
+    /// coordinate by coordinate — for statistics like the geometric
+    /// median that are defined over whole vectors and cannot be
+    /// decomposed per coordinate.
+    ///
+    /// Weights arrive as raw sample counts; normalize before accumulating
+    /// to avoid overflow.
     fn combine(&self, weighted_updates: &[(f32, Vec<f32>)]) -> Vec<f32>;
 }
 
@@ -583,6 +623,7 @@ pub struct VectorRobustAggregator<S: RobustVectorStatistic> {
 }
 
 impl<S: RobustVectorStatistic> VectorRobustAggregator<S> {
+    /// Builds an aggregator around a whole-vector statistic.
     pub fn new(statistic: S) -> Self {
         Self { statistic }
     }

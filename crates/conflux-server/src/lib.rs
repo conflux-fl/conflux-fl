@@ -4,6 +4,8 @@
 //!
 //! See `docs/spec/conflux-spec-v1.md` §8, §10 (Phase 5).
 
+#![warn(missing_docs)]
+
 mod admin_auth;
 mod app_state;
 mod auth_enforcement;

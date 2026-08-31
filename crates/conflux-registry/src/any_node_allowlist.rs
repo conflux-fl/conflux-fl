@@ -7,8 +7,14 @@ use crate::{
     ClientId, InMemoryNodeAllowlist, NodeAllowlist, NodeAuthError, NodeIdentity, RedisNodeAllowlist,
 };
 
+/// Whichever allow-list backend this deployment selected at startup.
+///
+/// An enum rather than `Box<dyn NodeAllowlist>` because the trait's
+/// methods are `async fn` in native syntax, which is not object-safe.
 pub enum AnyNodeAllowlist {
+    /// Process-local. Lost on restart.
     InMemory(InMemoryNodeAllowlist),
+    /// Shared and durable across restarts and processes.
     Redis(RedisNodeAllowlist),
 }
 

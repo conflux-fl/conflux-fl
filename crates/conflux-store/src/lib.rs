@@ -9,6 +9,8 @@
 //! runtime by the `AnyStore` enum so a caller can pick a backend by
 //! config without needing `Box<dyn Store>`.
 
+#![warn(missing_docs)]
+
 mod any_store;
 mod postgres_store;
 mod s3_store;
@@ -38,13 +40,26 @@ pub use s3_store::S3Store;
 /// a future run resolves, not just the one in effect when a round was
 /// recorded.
 pub trait PrivacyRoundLog: Send + Sync {
+    /// Records one experiment-wide round's raw privacy parameters.
+    ///
+    /// Raw parameters, not a running epsilon: epsilon depends on
+    /// `delta`, so a stored total goes stale the moment a later run
+    /// resolves a different one.
     fn append_round(
         &self,
         noise_multiplier: f32,
         sample_rate: f32,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    /// Every recorded round, oldest first — enough to rebuild an
+    /// accountant's state after a restart.
     fn load_rounds(&self) -> impl Future<Output = Result<Vec<(f32, f32)>, StoreError>> + Send;
 
+    /// Records one round against a single client, for `PerClient`
+    /// accounting scope.
+    ///
+    /// Both this and `append_round` are called on every round regardless
+    /// of which scope is configured, so switching scope between restarts
+    /// never loses the history that wasn't active at the time.
     fn append_round_for_client(
         &self,
         client_id: &str,
@@ -66,12 +81,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
+/// Why a checkpoint or privacy-log operation failed.
 pub enum StoreError {
+    /// Nothing has been saved yet. The first round's `load_latest_weights`
+    /// hits this, and the caller substitutes its initial weights.
     #[error("no checkpoint has been saved yet")]
     NoCheckpoint,
+    /// The filesystem refused a read or write.
     #[error("I/O error at {path}: {source}")]
     Io {
+        /// The path being read or written.
         path: String,
+        /// The underlying OS error.
         #[source]
         source: std::io::Error,
     },
@@ -79,7 +100,14 @@ pub enum StoreError {
         "checkpoint file {path} has a truncated weight buffer \
          ({len} bytes, not a multiple of 4)"
     )]
-    MalformedCheckpoint { path: String, len: usize },
+    /// A checkpoint file's byte length isn't a multiple of 4, so it
+    /// cannot be a packed `f32` vector — a truncated write, usually.
+    MalformedCheckpoint {
+        /// The checkpoint file that could not be decoded.
+        path: String,
+        /// Its length in bytes, which is not a multiple of 4.
+        len: usize,
+    },
     /// Wraps an error from a backend that talks to a separate service —
     /// `PostgresStore`'s SQL driver, `S3Store`'s HTTP client — where the
     /// request itself failed (connection refused, auth rejected, query
@@ -106,7 +134,11 @@ pub enum StoreError {
 /// concrete type, and `AnyStore` (below) is how a caller picks between
 /// backends at runtime without needing dynamic dispatch at all.
 pub trait Store: Send + Sync {
+    /// The most recent checkpoint's weights, or `NoCheckpoint` if none
+    /// has been saved.
     fn load_latest_weights(&self) -> impl Future<Output = Result<Vec<f32>, StoreError>> + Send;
+    /// Persists `weights` as `round`'s checkpoint, replacing any
+    /// existing checkpoint for that round.
     fn save_checkpoint(
         &self,
         round: u64,
@@ -122,6 +154,8 @@ pub struct InMemoryStore {
 }
 
 impl InMemoryStore {
+    /// A store seeded with `initial_weights`, returned by
+    /// `load_latest_weights` until a real checkpoint is saved over it.
     pub fn new(initial_weights: Vec<f32>) -> Self {
         Self {
             latest: Mutex::new((0, initial_weights)),
@@ -151,6 +185,8 @@ pub struct FileStore {
 }
 
 impl FileStore {
+    /// A store writing `checkpoint-<round>.bin` files into `dir`,
+    /// creating the directory if it doesn't exist.
     pub fn new(dir: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let dir = dir.into();
         std::fs::create_dir_all(&dir).map_err(|source| StoreError::Io {

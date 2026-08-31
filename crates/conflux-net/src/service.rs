@@ -21,6 +21,8 @@ pub struct FlTransportService<D> {
 }
 
 impl<D> FlTransportService<D> {
+    /// Wraps a dispatcher in the shape tonic's generated server trait
+    /// wants.
     pub fn new(dispatcher: Arc<D>) -> Self {
         Self { dispatcher }
     }

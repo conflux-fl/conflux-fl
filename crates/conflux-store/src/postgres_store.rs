@@ -11,6 +11,8 @@ use crate::{PrivacyRoundLog, Store, StoreError};
 
 const DEFAULT_TABLE: &str = "conflux_checkpoints";
 
+/// A `Store` (and `PrivacyRoundLog`) backed by real Postgres, so
+/// checkpoints and privacy history survive a restart.
 pub struct PostgresStore {
     client: Client,
     table: String,

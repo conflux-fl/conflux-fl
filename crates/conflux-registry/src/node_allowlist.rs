@@ -38,6 +38,8 @@ pub enum NodeIdentity {
 #[derive(Debug, thiserror::Error)]
 pub enum NodeAuthError {
     #[error("client {0} is not on the node allow-list")]
+    /// The client is not on the allow-list, or presented an identity that
+    /// doesn't match the one it was allowed under.
     NotAllowed(ClientId),
     /// Mirrors `RegistryError::Backend` — `InMemoryNodeAllowlist` never
     /// needs this, `RedisNodeAllowlist` does since it does real I/O.
@@ -92,6 +94,7 @@ pub struct InMemoryNodeAllowlist {
 }
 
 impl InMemoryNodeAllowlist {
+    /// An empty allow-list — nothing is permitted until something is added.
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),

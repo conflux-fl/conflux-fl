@@ -19,9 +19,16 @@
 
 use crate::{InMemoryStore, PostgresStore, S3Store, Store, StoreError};
 
+/// Whichever checkpoint backend this deployment selected at startup.
+///
+/// An enum rather than `Box<dyn Store>` because `Store`'s methods use
+/// native `async fn`, which is not object-safe.
 pub enum AnyStore {
+    /// Process-local. Lost on restart.
     InMemory(InMemoryStore),
+    /// Durable, and shared by every server process.
     Postgres(PostgresStore),
+    /// Durable object storage — S3 or anything speaking its API, such as MinIO.
     S3(S3Store),
 }
 

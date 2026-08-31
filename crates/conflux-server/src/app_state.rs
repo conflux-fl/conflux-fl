@@ -34,20 +34,36 @@ use crate::backend_selection::{
 };
 
 #[derive(Debug, thiserror::Error)]
+/// Why the server's shared state could not be assembled at startup.
 pub enum AppStateError {
     #[error(transparent)]
+    /// The requested backend combination is not permitted — production
+    /// with in-memory storage, most often.
     BackendSelection(#[from] BackendSelectionError),
     #[error(transparent)]
+    /// The registry backend could not be reached.
     Registry(#[from] conflux_registry::RegistryError),
     #[error(transparent)]
+    /// The checkpoint backend could not be reached.
     Store(#[from] StoreError),
     #[error(transparent)]
+    /// The node allow-list backend could not be reached.
     NodeAuth(#[from] conflux_registry::NodeAuthError),
 }
 
+/// Everything one experiment's server needs, constructed once at
+/// startup and shared by every gRPC handler, HTTP handler, and the
+/// round loop.
+///
+/// One process serves exactly one experiment (ADR 0003), which is why
+/// nothing here is keyed by experiment id.
 pub struct AppState {
+    /// The fully resolved configuration, including the topology and mode
+    /// it was resolved from.
     pub config: ResolvedConfig,
+    /// Client lifecycle — who is registered and still alive.
     pub registry: Arc<AnyRegistry>,
+    /// Where checkpoints are read from and written to.
     pub store: Arc<AnyStore>,
     /// Phase 8c: always constructed, even when `config.require_node_auth`
     /// is `false` — toggling the parameter is then just a config change
@@ -60,12 +76,16 @@ pub struct AppState {
     /// `Box<dyn _>` rather than a concrete type since the constructed
     /// type is only known at runtime.
     pub selector: Box<dyn ClientSelector>,
+    /// The aggregation method, constructed by name from the resolved
+    /// config.
     pub aggregator: Box<dyn Aggregator>,
     /// Phase 11b: constructed by name from `config.privacy_mechanism.value`
     /// via `conflux_privacy::build_privacy_mechanism` — the third of the
     /// three spec §5 families now registry-wired (Phase 10b did the
     /// other two).
     pub privacy: Box<dyn PrivacyMechanism>,
+    /// Cumulative privacy loss. `Mutex` because recording a round mutates
+    /// it and every handler shares one `AppState`.
     pub accountant: Mutex<RdpAccountant>,
     /// `Some` when the privacy accountant's round history is durable
     /// across restarts (Phase 7d) — `None` reproduces Phase 5's original
@@ -73,12 +93,15 @@ pub struct AppState {
     /// `store`'s own backend choice: a deployment can persist accounting
     /// via Postgres while checkpointing to S3, say.
     pub accountant_log: Option<Arc<PostgresStore>>,
+    /// The contribution scorer used by the optional pre-aggregation
+    /// filter.
     pub reputation: CosineScorer,
     /// The round a `fetch_task` call should hand out and a `submit_delta`
     /// call should accept. `run_round` advances this only after a round's
     /// checkpoint lands — a delta for a round that isn't current is
     /// rejected, not silently accepted into the wrong batch.
     pub round: AtomicU64,
+    /// The open round's staging buffer, or `None` between rounds.
     pub current_buffer: Mutex<Option<Arc<RoundBuffer>>>,
     /// Push-mode subscribers (spec §3: `cross_silo`) get every new round's
     /// task broadcast to them; pull-mode clients just see it on their next

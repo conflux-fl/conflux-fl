@@ -14,6 +14,8 @@ use redis::aio::ConnectionManager;
 /// `SCAN` over a key pattern.
 const DEFAULT_ALLOWLIST_KEY: &str = "conflux:node_allowlist:entries";
 
+/// A `NodeAllowlist` backed by a real Redis, so the allow-list
+/// survives a restart and is shared by every server process.
 pub struct RedisNodeAllowlist {
     conn: ConnectionManager,
     key: String,

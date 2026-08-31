@@ -27,6 +27,7 @@ pub type TaskStream = Pin<Box<dyn Stream<Item = Result<TaskResponse, Status>> + 
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchError {
     #[error("client {0} is not registered")]
+    /// No such client is registered.
     UnknownClient(String),
     /// Returned when node-auth enforcement (`require_node_auth`) is on and
     /// this registration's presented identity — an mTLS peer cert
@@ -54,6 +55,9 @@ pub enum DispatchError {
     #[error("this round already closed; fetch the current task and resubmit")]
     RoundClosed,
     #[error("dispatch failed: {0}")]
+    /// Anything the variants above don't cover. Maps to
+    /// `Status::internal`, so it should not carry a condition a client
+    /// could act on — those deserve their own variant.
     Other(String),
 }
 
@@ -87,8 +91,13 @@ impl From<DispatchError> for Status {
 /// the same macro for the same reason.
 #[async_trait::async_trait]
 pub trait RoundDispatcher: Send + Sync + 'static {
+    /// Answers pull mode's request for the current round's task.
     async fn fetch_task(&self, client_id: &str) -> Result<TaskResponse, DispatchError>;
+    /// Hands back a stream of pushed tasks. Returns as soon as the
+    /// subscription exists, not when the first task arrives.
     async fn subscribe_tasks(&self, client_id: &str) -> Result<TaskStream, DispatchError>;
+    /// Accepts one client's complete update. The transport gathers the
+    /// whole stream before calling this.
     async fn submit_delta(&self, chunks: Vec<DeltaChunk>) -> Result<SubmitAck, DispatchError>;
     /// `peer_cert_fingerprint` is `Some` only when the connection used
     /// mTLS and the server verified a client cert (see
@@ -102,5 +111,6 @@ pub trait RoundDispatcher: Send + Sync + 'static {
         auth_token: &str,
         peer_cert_fingerprint: Option<&str>,
     ) -> Result<RegisterResponse, DispatchError>;
+    /// Records a liveness ping.
     async fn heartbeat(&self, client_id: &str) -> Result<HeartbeatResponse, DispatchError>;
 }

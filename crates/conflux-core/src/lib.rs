@@ -7,6 +7,8 @@
 //! reusing the family's existing accumulation logic rather than a whole
 //! new implementation written from scratch.
 
+#![warn(missing_docs)]
+
 mod averaging;
 mod robust;
 mod temporal;
@@ -42,6 +44,12 @@ use conflux_proto::ClientDelta;
 /// existing shared accumulators, not a change to this trait or
 /// `Aggregator` itself.
 pub trait Aggregator: Send + Sync {
+    /// Turns one round's batch into the new global weights.
+    ///
+    /// `&self`, not `&mut self`: one aggregator serves every round behind
+    /// an `Arc`, and methods that carry state across rounds (the
+    /// `temporal` family) use interior mutability rather than changing
+    /// this signature for everyone.
     fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError>;
 }
 
@@ -92,6 +100,7 @@ inventory::submit! {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why an aggregator name couldn't be turned into an `Aggregator`.
 pub enum AggregatorBuildError {
     #[error(
         "unknown aggregator \"{0}\" — not a registered conflux-core strategy \
@@ -99,6 +108,9 @@ pub enum AggregatorBuildError {
          \"faba\", \"bulyan\", \"geometric_median\", \"median_of_means\", \
          \"divide_and_conquer\", \"foolsgold\", \"centered_clipping\")"
     )]
+    /// The name isn't in the catalog — almost always a typo in a resolved
+    /// `aggregator` config value, since the set of names is fixed at
+    /// compile time.
     Unknown(String),
 }
 
@@ -192,8 +204,15 @@ pub fn build_aggregator(
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why a batch could not be aggregated.
+///
+/// Every variant is a rejection, never a repair: an aggregator that
+/// quietly fixed up bad input would hide the fact that a client sent
+/// it.
 pub enum AggregatorError {
     #[error("cannot aggregate an empty batch of updates")]
+    /// No updates to aggregate. A round that reached its timeout with no
+    /// submissions, usually.
     EmptyBatch,
     /// A client submitted `NaN` or an infinity.
     ///
@@ -209,10 +228,15 @@ pub enum AggregatorError {
     /// Nothing on the wire prevents this: `decode_weights` accepts any
     /// 4-byte pattern, as it must — the codec has no way to know which
     /// bit patterns are meaningful for a given model.
-    #[error(
-        "update {client_id} contains a non-finite weight (NaN or infinity)          at index {index}"
-    )]
-    NonFiniteWeights { client_id: String, index: usize },
+    #[error("update {client_id} contains a non-finite weight (NaN or infinity) at index {index}")]
+    NonFiniteWeights {
+        /// Which client sent it.
+        client_id: String,
+        /// The first offending coordinate. Reported because a real client
+        /// hitting this is usually diverging, and *where* in the parameter
+        /// vector tells its operator which layer blew up.
+        index: usize,
+    },
     /// A client reported a sample count that cannot be a real one.
     ///
     /// `num_samples` is self-reported and unauthenticated, and FedAvg
@@ -222,25 +246,44 @@ pub enum AggregatorError {
     /// defense against a client that merely exaggerates within
     /// plausible bounds; see that constant's docs for what is.
     #[error(
-        "update {client_id} reports {got} samples, which exceeds the largest          plausible count ({max}) — self-reported sample counts are          unauthenticated and this one cannot be real"
+        "update {client_id} reports {got} samples, which exceeds the largest \
+         plausible count ({max}) — self-reported sample counts are \
+         unauthenticated and this one cannot be real"
     )]
     ImplausibleSampleCount {
+        /// Which client reported it.
         client_id: String,
+        /// The count it claimed.
         got: u64,
+        /// The largest count treated as possible.
         max: u64,
     },
     #[error(
         "update {client_id} has {got} weights, expected {expected} \
          (every update in a batch must have the same weight-vector length)"
     )]
+    /// Updates in one batch disagree about the model's dimension. Two
+    /// clients training different architectures, or one that failed to
+    /// load the dispatched weights.
     MismatchedLength {
+        /// The client whose update is the wrong length.
         client_id: String,
+        /// The batch's dimension, taken from its first update.
         expected: usize,
+        /// This update's dimension.
         got: usize,
     },
     #[error("update {client_id} has malformed weights: {len} bytes is not a multiple of 4")]
-    MalformedWeights { client_id: String, len: usize },
+    /// A client's weight buffer isn't a whole number of `f32`s.
+    MalformedWeights {
+        /// Which client sent it.
+        client_id: String,
+        /// The buffer's length in bytes, which is not a multiple of 4.
+        len: usize,
+    },
     #[error("batch weights sum to zero — cannot normalize")]
+    /// Every client's weight came out zero, so normalizing would divide
+    /// by zero. Reachable when every update reports `num_samples = 0`.
     ZeroWeightSum,
 }
 

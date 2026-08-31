@@ -9,6 +9,8 @@
 //! list, and `docs/EXTENDING.md`'s "Adding a new attack" section for how
 //! to add another one.
 
+#![warn(missing_docs)]
+
 mod attacks;
 mod stats;
 
@@ -42,6 +44,12 @@ pub struct RoundFeedback {
 /// threat model this literature studies (a weaker, non-omniscient
 /// attacker can only do worse).
 pub trait Attack {
+    /// Produces `num_attackers` malicious updates for this round.
+    ///
+    /// `honest_updates` is visible on purpose: this models an omniscient
+    /// adversary that can see the round's honest submissions, which is the
+    /// conservative threat model most robustness papers evaluate first.
+    /// Returns an empty vector when `num_attackers` is zero.
     fn craft(&self, honest_updates: &[ClientDelta], num_attackers: usize) -> Vec<ClientDelta>;
 
     /// Like `craft`, but given the chance to react to how the

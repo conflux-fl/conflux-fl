@@ -8,6 +8,8 @@
 //! pool of candidate client IDs, return up to `n` of them for round
 //! `round`.
 
+#![warn(missing_docs)]
+
 use conflux_config::{StrategyEntry, StrategyKind};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -42,6 +44,13 @@ pub enum SelectionSeed {
 /// `Send + Sync`, and a fixed-seed selection is reproducible independent
 /// of call order — re-running round 5 always gives the same subset.
 pub trait ClientSelector: Send + Sync {
+    /// Returns up to `n` of `candidates`. Fewer when the pool is smaller
+    /// than `n`; never more, and never a client that wasn't a candidate.
+    ///
+    /// `round` is what makes a fixed-seed selection reproducible: an
+    /// implementation derives its randomness from the seed *and* this
+    /// number, so round 5 always picks the same subset no matter how many
+    /// rounds preceded it in this process.
     fn select(&self, candidates: &[String], n: usize, round: u64) -> Vec<String>;
 }
 
@@ -51,6 +60,9 @@ pub trait ClientSelector: Send + Sync {
 /// the original FedAvg algorithm: pick `n` of the candidates, uniformly
 /// at random.
 pub struct UniformRandomSelector {
+    /// Where the sampling randomness comes from — a fixed seed for a
+    /// reproducible research run, or OS entropy for a deployment where a
+    /// predictable selection would be exploitable.
     pub seed: SelectionSeed,
 }
 
@@ -67,11 +79,15 @@ inventory::submit! {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why a selector name couldn't be turned into a `ClientSelector`.
 pub enum SelectorBuildError {
     #[error(
         "unknown selector \"{0}\" — not a registered conflux-selector strategy \
          (known: \"uniform_random\")"
     )]
+    /// The name isn't in this crate's registry. Almost always a typo in a
+    /// resolved `selector` config value, since the set of valid names is
+    /// fixed at compile time.
     Unknown(String),
 }
 

@@ -13,6 +13,11 @@ use crate::{Aggregator, AggregatorError};
 /// implementation only needs to return a relative weight, not a
 /// pre-normalized fraction.
 pub trait AveragingWeighting: Send + Sync {
+    /// This member's weight for one update.
+    ///
+    /// `batch` is available so a weighting can normalize against the
+    /// round — the shared accumulator divides by the total afterwards, so
+    /// returning a raw, unnormalized number is correct here.
     fn weight_for(&self, update: &ClientDelta, batch: &[ClientDelta]) -> f32;
 }
 
@@ -25,6 +30,7 @@ pub struct WeightedAverageAggregator<W: AveragingWeighting> {
 }
 
 impl<W: AveragingWeighting> WeightedAverageAggregator<W> {
+    /// Builds an aggregator from a weighting rule.
     pub fn new(weighting: W) -> Self {
         Self { weighting }
     }

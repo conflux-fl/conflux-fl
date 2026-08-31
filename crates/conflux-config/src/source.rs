@@ -7,11 +7,19 @@
 /// Where one resolved parameter's value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigSource {
+    /// An explicit command-line override. Highest precedence.
     Cli,
+    /// A `CONFLUX_*` environment variable, named by the string.
     EnvVar(String),
+    /// An experiment TOML file, named by its path.
     ExperimentFile(String),
+    /// The `research` or `production` profile's default.
     ModeProfile(String),
+    /// The topology's default — `cross_silo`, `cross_device`,
+    /// `crowdsource`, or `edge`.
     TopologyProfile(String),
+    /// Nothing overrode it; this is the framework's own default. Lowest
+    /// precedence.
     BuiltinFallback,
 }
 

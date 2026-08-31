@@ -16,14 +16,27 @@
 //! corresponding implementation.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which family a registered strategy belongs to. The three families
+/// spec §5 defines.
 pub enum StrategyKind {
+    /// `conflux-core`'s aggregation methods.
     Aggregator,
+    /// `conflux-privacy`'s mechanisms.
     PrivacyMechanism,
+    /// `conflux-selector`'s client-sampling strategies.
     Selector,
 }
 
+/// One registered implementation, submitted at compile time via
+/// `inventory::submit!` from the crate that implements it.
+///
+/// This is what lets configuration select an implementation by name
+/// without `conflux-server` naming the type — and without this crate
+/// depending on the crates that implement them.
 pub struct StrategyEntry {
+    /// Which family it belongs to.
     pub kind: StrategyKind,
+    /// The name configuration selects it by, e.g. `"fedavg"`.
     pub name: &'static str,
 }
 

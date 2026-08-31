@@ -15,7 +15,10 @@
 /// depending on that crate for one enum — see the module doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeMode {
+    /// Iterating on an experiment. Permissive defaults; the stub client is
+    /// allowed.
     Research,
+    /// A live deployment. Refuses the configurations research tolerates.
     Production,
 }
 
@@ -36,12 +39,17 @@ pub enum ClientAppKind {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Why this node refused to start.
 pub enum StartupGuardError {
     #[error(
         "mode = production with a stub ClientApp is refused (spec: allow_stub_client = false \
          in production) — set CONFLUX_CLIENT_APP_KIND=real once a real ClientApp is wired up, \
          or CONFLUX_ALLOW_STUB_CLIENT=true to override for a deliberate production pipeline test"
     )]
+    /// Production mode was asked to run against the stub `ClientApp`
+    /// (fixed dummy weights, no PyTorch). The error message names both
+    /// escape hatches, since an operator hitting this in a pipeline test
+    /// has a legitimate reason to override it.
     ProductionRefusesStubClient,
 }
 

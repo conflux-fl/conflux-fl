@@ -11,8 +11,12 @@ use std::time::Duration;
 
 use crate::{ClientId, InMemoryRegistry, RedisRegistry, Registry, RegistryError};
 
+/// Whichever registry backend this deployment selected at startup.
+/// Same dispatch reasoning as `AnyNodeAllowlist`.
 pub enum AnyRegistry {
+    /// Process-local. Lost on restart.
     InMemory(InMemoryRegistry),
+    /// Shared and durable across restarts and processes.
     Redis(RedisRegistry),
 }
 

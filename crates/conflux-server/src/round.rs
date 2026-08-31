@@ -19,14 +19,24 @@ use conflux_store::Store;
 use crate::{AppState, ServerError};
 
 #[derive(Debug, Clone)]
+/// What one round did, returned by `run_round` for logging and tests.
 pub struct RoundSummary {
+    /// Which round this describes.
     pub round: u64,
+    /// Whether the round closed on quorum or on timeout.
     pub flush_reason: FlushReason,
+    /// How many clients the selector picked.
     pub num_selected: usize,
+    /// How many actually submitted before the buffer closed.
     pub num_submitted: usize,
+    /// How many survived the reputation filter and privacy budget checks
+    /// to reach aggregation.
     pub num_passed: usize,
 }
 
+/// Runs one full round: load the checkpoint, select clients, dispatch,
+/// wait for quorum or timeout, filter, aggregate, checkpoint, and
+/// advance the round counter.
 pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerError> {
     let round = state.round.load(Ordering::SeqCst);
 
