@@ -1,20 +1,24 @@
 [package]
 name = "conflux-core"
-version = "0.1.0"
-edition = "2024"
+description = "Aggregation algorithms for Conflux FL — FedAvg plus eleven cited robust and cross-round methods, built on a shared family pattern."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 conflux-config = { path = "../conflux-config" }
 conflux-proto = { path = "../conflux-proto" }
-inventory = "0.3"
-thiserror = "2.0"
+inventory.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
-criterion = "0.8"
+criterion.workspace = true
 # Phase 19: `benches/accumulate.rs` keeps explicit-SIMD variants of the
 # combine loop purely as the standing evidence for why the shipped code
 # is scalar. Nothing in `src/` uses this.
-wide = "1.7"
+wide.workspace = true
 
 # The evidence for Phase 19's premise. A SIMD change nobody measured is
 # an unverified claim, and this project measures.

@@ -12,14 +12,25 @@ use conflux_registry::{ClientId, NodeAllowlist, NodeIdentity, Registry, Registry
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
+use crate::admin_auth::{AdminToken, require_admin_token};
 
-pub fn router(state: Arc<AppState>) -> Router {
+/// Builds the admin router.
+///
+/// `admin_token` gates every route except `/health` — see
+/// [`crate::admin_auth`] for the policy and why `/health` is exempt.
+/// `None` leaves the surface open, which is only reachable for a
+/// loopback-bound listener because `validate_admin_binding` refuses to
+/// start otherwise.
+pub fn router(state: Arc<AppState>, admin_token: Option<AdminToken>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/round/status", get(round_status))
         .route("/clients/register", post(register))
         .route("/admin/allowlist", get(list_allowlist).post(allow_node))
         .route("/admin/allowlist/{client_id}", delete(revoke_node))
+        .layer(axum::middleware::from_fn(move |req, next| {
+            require_admin_token(admin_token.clone(), req, next)
+        }))
         .with_state(state)
 }
 
@@ -50,6 +61,16 @@ struct RegisterHttpResponse {
 
 /// Delegates to the same registry the gRPC `Register` RPC uses — this is
 /// an admin/observability entry point, not a second source of truth.
+///
+/// **It is not a second *authentication* path either, and that is worth
+/// being explicit about.** The gRPC `Register` RPC runs JWT verification
+/// (Phase 16) and the node allow-list check (Phase 8c); this handler
+/// runs neither. Before the admin token existed, that made it a way to
+/// register a client while bypassing both — the HTTP port undoing the
+/// gRPC port's authentication. It is now behind the admin token, so
+/// reaching it already requires an operator credential, which is the
+/// only footing on which "register this client, no questions asked" is a
+/// reasonable thing to offer.
 async fn register(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterHttpRequest>,

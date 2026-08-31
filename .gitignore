@@ -11,3 +11,10 @@ python/conflux_client/examples/results_*.png
 python/conflux_client/examples/benchmark_*.log
 .claude/
 CLAUDE.md
+
+# Real environment values. `.env.example` is the tracked template —
+# keep them in sync with `evnx sync`, and let `evnx scan` catch a secret
+# before it reaches a commit.
+.env
+.env.*
+!.env.example

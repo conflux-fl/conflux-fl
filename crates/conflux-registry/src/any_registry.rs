@@ -50,6 +50,12 @@ impl Registry for AnyRegistry {
 mod tests {
     use super::*;
 
+    /// This test module's backend URL, overridable from the environment so
+    /// CI can point at its own service containers. See `.env.example`.
+    fn test_backend_url(var: &str, default: &str) -> String {
+        std::env::var(var).unwrap_or_else(|_| default.to_string())
+    }
+
     fn id(s: &str) -> ClientId {
         ClientId(s.to_string())
     }
@@ -74,9 +80,12 @@ mod tests {
             "conflux:registry:test:any_registry_redis:{}",
             std::process::id()
         );
-        let backend = RedisRegistry::connect_with_key("redis://127.0.0.1:16379", key)
-            .await
-            .expect("connect to the dev Redis container — is it running?");
+        let backend = RedisRegistry::connect_with_key(
+            &test_backend_url("CONFLUX_TEST_REDIS_URL", "redis://127.0.0.1:16379"),
+            key,
+        )
+        .await
+        .expect("connect to the dev Redis container — is it running?");
         let registry = AnyRegistry::Redis(backend);
 
         registry.register(id("c1")).await.unwrap();

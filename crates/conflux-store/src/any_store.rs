@@ -47,6 +47,12 @@ impl Store for AnyStore {
 mod tests {
     use super::*;
 
+    /// This test module's backend URL, overridable from the environment so
+    /// CI can point at its own service containers. See `.env.example`.
+    fn test_backend_url(var: &str, default: &str) -> String {
+        std::env::var(var).unwrap_or_else(|_| default.to_string())
+    }
+
     #[tokio::test]
     async fn in_memory_variant_delegates_correctly() {
         let store = AnyStore::InMemory(InMemoryStore::new(vec![1.0, 2.0]));
@@ -61,7 +67,10 @@ mod tests {
     #[tokio::test]
     async fn postgres_variant_delegates_correctly() {
         let backend = PostgresStore::connect_with_table(
-            "postgres://postgres:conflux@127.0.0.1:15432/conflux",
+            &test_backend_url(
+                "CONFLUX_TEST_POSTGRES_URL",
+                "postgres://postgres:conflux@127.0.0.1:15432/conflux",
+            ),
             format!(
                 "conflux_checkpoints_test_any_store_pg_{}",
                 std::process::id()
@@ -82,7 +91,7 @@ mod tests {
     #[tokio::test]
     async fn s3_variant_delegates_correctly() {
         let backend = S3Store::connect_with_prefix(
-            "http://127.0.0.1:19000",
+            &test_backend_url("CONFLUX_TEST_S3_ENDPOINT", "http://127.0.0.1:19000"),
             "conflux-test-bucket",
             "confluxadmin",
             "confluxsecret",

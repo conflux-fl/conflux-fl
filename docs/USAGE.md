@@ -192,13 +192,14 @@ half is profile files, not experiment files.
 | `CONFLUX_SELECTOR` | `selector` |
 | `CONFLUX_PRIVACY_MECHANISM` | `privacy_mechanism` (Phase 11b) |
 | `CONFLUX_ROBUST_BYZANTINE_FRACTION` | `robust_byzantine_fraction` — only read by `robust`-family aggregators |
-| `CONFLUX_CLIP_RADIUS` | `clip_radius` — Centered Clipping's `τ`, only read by `centered_clipping` (Phase 15) |
+| `CONFLUX_CLIP_RADIUS` | `clip_radius` — Centered Clipping's `τ`. **Must be tuned to your model.** The builtin `1.0` is a placeholder: on a real 50,890-parameter MLP it scored *below undefended `fedavg`* (0.078 vs 0.163, [§5.13](research/temporal-consistency-aggregation.md)). The server warns at startup if you select `centered_clipping` without setting this |
 | `CONFLUX_MIN_REPUTATION_SCORE` | `min_reputation_score` — see `docs/E2E_TESTING.md`'s "Real findings" for why you might want this low when testing a `robust` aggregator specifically |
 | `CONFLUX_QUORUM` | `quorum` |
 | `CONFLUX_ROUND_TIMEOUT_SECS` | `round_timeout_secs` |
 | `CONFLUX_CLIP_NORM` | `clip_norm` |
 | `CONFLUX_NOISE_MULTIPLIER` | `noise_multiplier` |
 | `CONFLUX_INITIAL_WEIGHTS_DIM` | not an `Overrides` field — the dimension of the server's placeholder initial checkpoint (`vec![0.0f32; N]`), which has to match whatever real model a deployment trains (default `4`) |
+| `CONFLUX_ADMIN_TOKEN` | not an `Overrides` field — bearer token required on every HTTP admin route except `/health`. **The server refuses to start if `CONFLUX_HTTP_ADDR` binds beyond loopback without one**, since `/admin/allowlist` decides who may participate |
 | `CONFLUX_JWT_PUBLIC_KEY_PATH` | not an `Overrides` field — a PEM public key (RSA → RS256, ECDSA → ES256) that `register()` verifies `auth_token` against when `auth = jwt` (Phase 16). Required in production for the three topologies that default to `jwt`; research warns and skips verification without it |
 | `CONFLUX_EXPERIMENT_CONFIG_PATH` | not an `Overrides` field — a TOML file of experiment-level overrides (see below) |
 | `CONFLUX_GRPC_ADDR` / `CONFLUX_HTTP_ADDR` | not `Overrides` fields — override the `FlTransport` gRPC and HTTP admin listen addresses (default `127.0.0.1:50051` / `127.0.0.1:8080`). Needed to reach the admin API from a different container — see `docs/WEB_APP_INTEGRATION.md`. Defaults stay loopback-only since the admin API has no auth of its own; bind wider deliberately, not by habit |
@@ -265,6 +266,46 @@ fallbacks) is printed at startup before the server is "ready" — this is
 mandatory, not optional verbosity (ADR 0007). In production mode this
 prints as JSON lines; in research mode, human-readable text.
 
+## Environment configuration
+
+Every setting above is an environment variable, and there are enough of
+them to be worth managing rather than remembering. `.env.example` is the
+tracked template — every variable, grouped, with the non-obvious ones
+annotated. Copy it and edit:
+
+```bash
+cp .env.example .env
+```
+
+`.env` is gitignored; `.env.example` is not, and must never hold a real
+value.
+
+Variables that are *commented out* in the template are optional, and
+that distinction matters: leaving one unset lets `conflux-config`
+resolve it through the topology/mode/builtin chain and log where the
+value came from (ADR 0007). Setting it to an empty string is instead an
+explicit override to "nothing", which is rarely what anyone wants.
+
+This project uses [evnx](https://evnx.dev) to keep the two files honest:
+
+```bash
+evnx doctor              # gitignore coverage, file permissions, .example sync
+evnx diff                # what one file has that the other doesn't
+evnx sync                # bring them back into line
+evnx validate            # placeholders, weak values, config mistakes
+evnx scan .env           # refuse to let a real secret reach a commit
+```
+
+`evnx validate` and `evnx scan` both run in CI. `validate` exits non-zero
+on errors but not on warnings — the "uses localhost" warnings it reports
+against the defaults are deliberate here, since the HTTP admin API's
+whole safety model is that it binds to loopback unless you explicitly
+give it a token.
+
+Scope `scan` to the env files (`evnx scan .env .env.example`) rather than
+the repository root: an unscoped scan walks `python/conflux_client/.venv`
+and reports base64 font data inside PIL as an AWS key.
+
 ## Durable backends (Redis, Postgres, S3)
 
 `conflux-registry::RedisRegistry`, `conflux-store::PostgresStore`, and
@@ -276,7 +317,18 @@ they're usable programmatically (construct one directly instead of
 crates in your own code) and are exercised by each crate's own test suite
 against real local infrastructure.
 
-To run those test suites, start the backing services first:
+To run those test suites, start the backing services first. The
+repository ships a `docker-compose.yml` that brings up all three on the
+ports the tests default to:
+
+```bash
+docker compose up -d      # redis, postgres, minio
+cargo test --workspace
+docker compose down -v    # stop and discard the data
+```
+
+The individual `docker run` commands below are equivalent, and remain
+here because they document what compose is doing:
 
 ```bash
 # Redis — conflux-registry's RedisRegistry tests

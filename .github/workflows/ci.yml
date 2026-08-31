@@ -1,0 +1,149 @@
+# Every guarantee this repository makes about itself, checked on every
+# push and pull request.
+#
+# The adversarial suite in `conflux-core/tests/adversarial_input.rs` is
+# the clearest example of why this exists: it is a regression guard for
+# three remotely-triggerable defects, and a regression guard nobody runs
+# guards nothing.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run's answer obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Warnings are failures here. They are not in a local `cargo build`,
+  # deliberately — an experiment in progress should not be blocked by an
+  # unused import, but nothing should merge with one.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `--all-targets` so tests, benches, and examples are linted too.
+      # Most of this repository's example code is documentation that has
+      # to keep compiling.
+      - run: cargo clippy --workspace --all-targets
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    # The backend tests are not optional extras — RedisRegistry,
+    # PostgresStore, and S3Store are three of the four Store/Registry
+    # implementations. Running CI without them would leave the majority
+    # of the persistence layer unverified.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: conflux
+          POSTGRES_DB: conflux
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d conflux"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: confluxadmin
+          MINIO_ROOT_PASSWORD: confluxsecret
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "mc ready local"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Service containers use standard ports; the code's defaults point
+      # at docker-compose.yml's non-standard ones. This override is the
+      # reason those URLs stopped being hardcoded constants.
+      CONFLUX_TEST_REDIS_URL: redis://127.0.0.1:6379
+      CONFLUX_TEST_POSTGRES_URL: postgres://postgres:conflux@127.0.0.1:5432/conflux
+      CONFLUX_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  msrv:
+    name: minimum supported Rust (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      # Only the crates that claim 1.85. `conflux-store` and
+      # `conflux-server` declare 1.94.1 because `aws-sdk-s3` requires it
+      # — checking them here would test the claim we did not make.
+      # `--all-targets` is omitted: dev-dependencies (criterion, rcgen)
+      # carry their own, higher MSRVs, and an MSRV is a promise about
+      # building the library, not about running its test suite.
+      - run: >
+          cargo check
+          -p conflux-proto -p conflux-config -p conflux-registry
+          -p conflux-selector -p conflux-net -p conflux-buffer
+          -p conflux-privacy -p conflux-reputation -p conflux-core
+          -p conflux-node
+
+  env-files:
+    name: env hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install evnx
+        run: curl -fsSL https://dotenv.space/install.sh | bash
+      # Scans the whole checkout, which is the point: it catches a `.env`
+      # committed by accident, or a credential pasted into any tracked
+      # file. Locally this reports false positives from
+      # `python/conflux_client/.venv` (base64 font data inside PIL matches
+      # the AWS key pattern), but that directory is gitignored and so
+      # never exists here. Verified against a simulated checkout: 0
+      # high-confidence findings.
+      #
+      # Exits non-zero on any high-confidence secret.
+      - name: scan the checkout for secrets
+        run: evnx scan .
+      # A belt-and-braces check on top of the scan. `.env` holds real
+      # values by construction, so it must never be tracked — and
+      # `git ls-files` answers that directly rather than inferring it
+      # from a gitignore rule someone could later reorder.
+      - name: refuse a tracked .env
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked in git — it holds real values and must not be"
+            exit 1
+          fi
+          echo ".env is not tracked"
+      # The template must stay parseable and free of placeholder-looking
+      # values, since it is what every developer copies from.
+      - name: validate the template
+        run: evnx validate --env .env.example --example .env.example

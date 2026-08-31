@@ -642,16 +642,25 @@ impl RobustVectorStatistic for GeometricMedianStatistic {
         // Weiszfeld needs a starting estimate; the weighted arithmetic
         // mean is the standard choice (never itself equal to an outlier,
         // so the first reweighting step is always well-defined).
+        //
+        // Weights are normalized *before* accumulating, not after. The
+        // result is identical — a weighted mean is scale-invariant in
+        // its weights — but the intermediate is not: these weights
+        // arrive as raw sample counts, so `w * x` for a client reporting
+        // 10 samples and a weight near `f32::MAX` overflows to infinity
+        // before the division that would have brought it back. That
+        // infinity then propagates through every Weiszfeld iteration and
+        // into the checkpoint. `WeightedAverageAggregator` already
+        // normalizes first for the same reason; this is the same
+        // ordering, not a different formula.
         let mut estimate = vec![0.0f32; dim];
         let total_weight: f32 = weighted_updates.iter().map(|(w, _)| w).sum();
-        for (w, v) in weighted_updates {
-            for (e, x) in estimate.iter_mut().zip(v) {
-                *e += w * x;
-            }
-        }
         if total_weight > 0.0 {
-            for e in &mut estimate {
-                *e /= total_weight;
+            for (w, v) in weighted_updates {
+                let normalized = w / total_weight;
+                for (e, x) in estimate.iter_mut().zip(v) {
+                    *e += normalized * x;
+                }
             }
         }
 
@@ -659,20 +668,36 @@ impl RobustVectorStatistic for GeometricMedianStatistic {
         // of the updates (common once it converges close to a cluster).
         const EPS: f32 = 1e-6;
         for _ in 0..self.iterations {
-            let mut weighted_sum = vec![0.0f32; dim];
-            let mut weight_sum = 0.0f32;
-            for (w, v) in weighted_updates {
-                let inverse_distance_weight = w / l2_distance(v, &estimate).max(EPS);
-                for (s, x) in weighted_sum.iter_mut().zip(v) {
-                    *s += inverse_distance_weight * x;
-                }
-                weight_sum += inverse_distance_weight;
+            // Two passes for the same reason the initialization above
+            // normalizes first: the inverse-distance weights can be
+            // large (`w / EPS` is 1e7 for a client sitting on the
+            // current estimate), and multiplying that by a large
+            // coordinate overflows. Summing them first costs one extra
+            // traversal and makes the accumulation bounded by
+            // construction.
+            let inverse_distance_weights: Vec<f32> = weighted_updates
+                .iter()
+                .map(|(w, v)| w / l2_distance(v, &estimate).max(EPS))
+                .collect();
+            let weight_sum: f32 = inverse_distance_weights.iter().sum();
+            if weight_sum <= 0.0 || !weight_sum.is_finite() {
+                // Every update is infinitely far from the estimate, or
+                // the weights themselves overflowed. Neither leaves a
+                // meaningful direction to step in, so hold the current
+                // estimate rather than stepping to a garbage one.
+                break;
             }
-            if weight_sum > 0.0 {
-                for (e, s) in estimate.iter_mut().zip(&weighted_sum) {
-                    *e = s / weight_sum;
+
+            let mut next = vec![0.0f32; dim];
+            for (inverse_distance_weight, (_, v)) in
+                inverse_distance_weights.iter().zip(weighted_updates)
+            {
+                let normalized = inverse_distance_weight / weight_sum;
+                for (s, x) in next.iter_mut().zip(v) {
+                    *s += normalized * x;
                 }
             }
+            estimate = next;
         }
         estimate
     }

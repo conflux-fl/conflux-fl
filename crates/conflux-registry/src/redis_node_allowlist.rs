@@ -118,10 +118,18 @@ impl NodeAllowlist for RedisNodeAllowlist {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This test module's backend URL, overridable from the environment so
+    /// CI can point at its own service containers. See `.env.example`.
+    fn test_backend_url(var: &str, default: &str) -> String {
+        std::env::var(var).unwrap_or_else(|_| default.to_string())
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine`
-    const TEST_REDIS_URL: &str = "redis://127.0.0.1:16379";
+    fn test_redis_url() -> String {
+        test_backend_url("CONFLUX_TEST_REDIS_URL", "redis://127.0.0.1:16379")
+    }
 
     /// Same per-test-isolation shape as `redis_registry.rs`'s
     /// `unique_key` — process id *and* a counter, since a counter alone
@@ -138,7 +146,7 @@ mod tests {
     }
 
     async fn fresh_allowlist(test_name: &str) -> RedisNodeAllowlist {
-        RedisNodeAllowlist::connect_with_key(TEST_REDIS_URL, unique_key(test_name))
+        RedisNodeAllowlist::connect_with_key(&test_redis_url(), unique_key(test_name))
             .await
             .expect("connect to the dev Redis container — is it running?")
     }
@@ -215,10 +223,10 @@ mod tests {
     #[tokio::test]
     async fn two_handles_to_the_same_redis_see_each_others_writes() {
         let key = unique_key("two_handles");
-        let a = RedisNodeAllowlist::connect_with_key(TEST_REDIS_URL, key.clone())
+        let a = RedisNodeAllowlist::connect_with_key(&test_redis_url(), key.clone())
             .await
             .unwrap();
-        let b = RedisNodeAllowlist::connect_with_key(TEST_REDIS_URL, key)
+        let b = RedisNodeAllowlist::connect_with_key(&test_redis_url(), key)
             .await
             .unwrap();
 

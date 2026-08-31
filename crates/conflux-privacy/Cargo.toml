@@ -1,11 +1,15 @@
 [package]
 name = "conflux-privacy"
-version = "0.1.0"
-edition = "2024"
+description = "Local differential privacy and RDP epsilon accounting for Conflux FL."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 conflux-config = { path = "../conflux-config" }
-inventory = "0.3"
-rand = "0.10"
-rand_distr = "0.6"
-thiserror = "2.0"
+inventory.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+thiserror.workspace = true

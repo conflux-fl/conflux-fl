@@ -75,7 +75,12 @@ pub fn encode_weights(weights: &[f32]) -> Vec<u8> {
 /// diverged local training run, say) checks for that separately, after
 /// decoding.
 pub fn decode_weights(bytes: &[u8]) -> Result<Vec<f32>, WeightsCodecError> {
-    if !bytes.len().is_multiple_of(4) {
+    // `% 4 != 0` rather than `is_multiple_of`, which is stable only
+    // since 1.87. This crate promises 1.85 (edition 2024's own floor),
+    // and a one-token convenience is not worth two minor versions of
+    // downstream compatibility. `clippy::incompatible_msrv` is what
+    // caught the mismatch.
+    if bytes.len() % 4 != 0 {
         return Err(WeightsCodecError::Malformed { len: bytes.len() });
     }
     Ok(bytes

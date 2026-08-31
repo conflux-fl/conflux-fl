@@ -153,9 +153,12 @@ B — which would have sidestepped both — isn't on the table:
    the auth point below — so treat binding wider as an explicit, considered
    choice for your deployment, not something you flip without also solving
    point 2.
-2. **The admin API has no auth of its own.** `http.rs`'s router applies no
-   auth middleware — anything that can reach `:8080` can read round status
-   and rewrite the node allowlist. That's fine as long as it's genuinely
+2. **The admin API now has auth, and enforces it.** Set
+   `CONFLUX_ADMIN_TOKEN` and every route except `/health` requires
+   `Authorization: Bearer <token>`. If `CONFLUX_HTTP_ADDR` binds beyond
+   loopback *without* a token, the server refuses to start rather than
+   exposing an unauthenticated control plane — the failure mode this
+   section used to warn about is now impossible to reach by accident. That's fine as long as it's genuinely
    unreachable except from your own backend (the constraint above actually
    helps here — loopback-only is also a de facto access control, as long as
    nothing else shares that namespace). Your backend is the only thing with
@@ -197,12 +200,12 @@ WebSocket, SSE — your existing pattern, nothing FL-specific).
 
 ## What's still missing for a real platform
 
-- No auth on the admin HTTP API — acceptable only as long as it stays
-  unreachable except from your own backend. `CONFLUX_HTTP_ADDR` now lets
-  you bind wider than loopback (see above), which means it's now possible
-  to accidentally expose an unauthenticated admin API — binding beyond
-  loopback and *not* isolating the port behind your own network policy is
-  the actual gap now, not the lack of the override itself.
+- ~~No auth on the admin HTTP API~~ — **closed**. A bearer token
+  (`CONFLUX_ADMIN_TOKEN`) gates every route but `/health`, and binding
+  beyond loopback without one is a startup failure. Note this is
+  *operator* authentication, not per-user: your own backend remains the
+  place where user identity lives, and it should hold the admin token
+  rather than passing user credentials through.
 - No experiment-listing endpoint — a `conflux-server` process only knows
   about the one experiment it's running; your own DB is the only source of
   truth for "what experiments exist," by design (ADR 0003).

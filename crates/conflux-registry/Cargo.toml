@@ -1,13 +1,17 @@
 [package]
 name = "conflux-registry"
-version = "0.1.0"
-edition = "2024"
+description = "Client lifecycle for Conflux FL — registration, heartbeats, eviction, and the node allow-list."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-thiserror = "2.0"
-redis = { version = "1.6", features = ["aio", "tokio-comp", "connection-manager"] }
-tokio = { version = "1", features = ["sync"] }
-tracing = "0.1"
+thiserror.workspace = true
+redis = { workspace = true, features = ["aio", "tokio-comp", "connection-manager"] }
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

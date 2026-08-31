@@ -1,16 +1,27 @@
 [package]
 name = "conflux-store"
-version = "0.1.0"
-edition = "2024"
+description = "Model checkpoint and experiment metadata persistence for Conflux FL (in-memory, file, Postgres, S3)."
+license.workspace = true
+repository.workspace = true
+# Overrides the workspace 1.85. `aws-sdk-s3` declares rust-version
+# 1.94.1, and a declared MSRV that the dependency graph cannot
+# actually satisfy is worse than none — it would build here and
+# fail for anyone taking the claim at face value. Verified with
+# `cargo metadata`, not assumed.
+rust-version = "1.94.1"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-thiserror = "2.0"
-tokio-postgres = "0.7"
-tokio = { version = "1", features = ["rt"] }
-tracing = "0.1"
-aws-sdk-s3 = "1"
-aws-config = "1"
-aws-credential-types = "1"
+thiserror.workspace = true
+tokio-postgres.workspace = true
+# "rt": spawn_blocking, which FileStore uses so its synchronous std::fs
+# calls never occupy an async executor thread.
+tokio = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+aws-sdk-s3.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

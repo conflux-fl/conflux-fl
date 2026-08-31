@@ -1,14 +1,18 @@
 [package]
 name = "conflux-proto"
-version = "0.1.0"
-edition = "2024"
+description = "Shared protobuf schema for Conflux FL — one FlTransport service for both the network hop and the local Python IPC hop."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-prost = "0.14"
-tonic = "0.14"
-tonic-prost = "0.14"
-thiserror = "2.0"
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+thiserror.workspace = true
 
 [build-dependencies]
-tonic-prost-build = "0.14"
-protoc-bin-vendored = "3"
+tonic-prost-build.workspace = true
+protoc-bin-vendored.workspace = true

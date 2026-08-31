@@ -58,10 +58,24 @@ impl S3Store {
             .build();
         let client = Client::from_conf(config);
 
-        // Idempotent: MinIO returns a "bucket already owned by you" error
-        // on a second create, which is fine — this is just "ensure it
-        // exists," not "create fresh."
-        let _ = client.create_bucket().bucket(&bucket).send().await;
+        // Ensure the bucket exists, but check before creating.
+        //
+        // `create_bucket` is idempotent in the sense that a second call
+        // errors harmlessly, and this used to rely on that — every
+        // `connect` issued one, discarding the result. Two reasons not
+        // to: it is a write request on a path where a read suffices, so
+        // a deployment whose credentials are scoped to read/write
+        // *objects* (the common least-privilege setup) fails a
+        // permission it never needed; and it makes reconnects
+        // needlessly chattier against a real S3 endpoint.
+        //
+        // `head_bucket` is the cheap existence check. Only its failure
+        // leads to a create, and the create's own result is still
+        // ignored — two processes starting together may race, and
+        // "someone else created it" is success, not an error.
+        if client.head_bucket().bucket(&bucket).send().await.is_err() {
+            let _ = client.create_bucket().bucket(&bucket).send().await;
+        }
 
         Ok(Self {
             client,
@@ -157,12 +171,20 @@ impl Store for S3Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This test module's backend URL, overridable from the environment so
+    /// CI can point at its own service containers. See `.env.example`.
+    fn test_backend_url(var: &str, default: &str) -> String {
+        std::env::var(var).unwrap_or_else(|_| default.to_string())
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-minio -p 19000:9000 -p 19001:9001
     /// -e MINIO_ROOT_USER=confluxadmin -e MINIO_ROOT_PASSWORD=confluxsecret
     /// minio/minio server /data --console-address ":9001"`
-    const TEST_ENDPOINT: &str = "http://127.0.0.1:19000";
+    fn test_endpoint() -> String {
+        test_backend_url("CONFLUX_TEST_S3_ENDPOINT", "http://127.0.0.1:19000")
+    }
     const TEST_BUCKET: &str = "conflux-test-bucket";
     const TEST_ACCESS_KEY: &str = "confluxadmin";
     const TEST_SECRET_KEY: &str = "confluxsecret";
@@ -175,7 +197,7 @@ mod tests {
 
     async fn connect(test_name: &str) -> S3Store {
         S3Store::connect_with_prefix(
-            TEST_ENDPOINT,
+            &test_endpoint(),
             TEST_BUCKET,
             TEST_ACCESS_KEY,
             TEST_SECRET_KEY,

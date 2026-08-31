@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-08-31 — **Part B complete (all six phase briefs) and Part A complete (all four research items)**. 260 → 343 tests. Four new experiments (2.7–2.9, 3.1/3.2), a new attack, a new aggregator, a new dataset harness; three of this document's own prior conclusions revised by measurement.
+Last updated: 2026-08-31 — **stabilization Tiers 1–3 complete**. Three remotely-triggerable defects fixed, the admin API authenticated, and the project is now releasable: Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, and CI. 367 tests. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -859,6 +859,118 @@ Last updated: 2026-08-31 — **Part B complete (all six phase briefs) and Part A
   survives a simulated restart. 249 → 260 tests passing workspace-wide
   (11 new); `cargo fmt` and `cargo clippy --workspace --all-targets`
   both clean.
+
+## Stabilization (2026-08-31)
+
+Auditing conflux-fl for a stable release turned up defects that 343
+passing tests had not, because the tests exercised *plausible* batches
+and a `ClientDelta` arrives from the network.
+
+**Tier 1 — remotely-triggerable, all fixed:**
+
+- **Non-finite weights crashed or corrupted every aggregator.** One
+  client sending `NaN` — four bytes — made six aggregators *panic*
+  (`krum`, `multi_krum`, `trimmed_mean`, `median`, `bulyan`,
+  `median_of_means`, all via `partial_cmp(...).expect("never NaN")`),
+  taking the server down; the other six returned `NaN`, which lands in
+  the checkpoint and ends the experiment silently. Now rejected at
+  `decode_and_validate` — the single chokepoint all eleven aggregator
+  entry points share — as `AggregatorError::NonFiniteWeights`, naming
+  the client and the coordinate.
+- **`num_samples` was unbounded.** A client claiming `u64::MAX` samples
+  made FedAvg's output *exactly* its own submission, every honest
+  contribution numerically erased. Now bounded by
+  `MAX_PLAUSIBLE_SAMPLE_COUNT` (2^40). Note this closes the degenerate
+  case only: no absolute ceiling distinguishes a liar claiming 100,000
+  from a genuinely large client, and the real defenses remain a robust
+  aggregator (`krum` was unharmed throughout) or not accepting
+  unauthenticated counts.
+- **`geometric_median` overflowed to infinity on finite input** — found
+  by the new adversarial suite on its first run. It multiplied by raw
+  sample counts before normalizing, so `10 * f32::MAX` reached infinity
+  before the division that would have brought it back.
+  `WeightedAverageAggregator` already normalized first; this now does
+  too, in both the initialization and the Weiszfeld iteration. Same
+  formula, different order of operations.
+- **New `crates/conflux-core/tests/adversarial_input.rs`** (12 tests):
+  every aggregator against `NaN`, both infinities, a single bad
+  coordinate, `f32::MAX`, denormals, zero and impossible sample counts,
+  empty batches, single clients, `dim = 1`, mismatched dimensions, and
+  truncated bytes. The rule it encodes: **an aggregator may reject a
+  batch and may return a defensible number, but must never panic and
+  must never return a non-finite value.**
+- **The HTTP admin API had no authentication at all**, while the gRPC
+  surface beside it had two layers. `/admin/allowlist` decides who may
+  participate, so an unauthenticated write there undid the gRPC port's
+  authentication entirely; `/clients/register` separately bypassed both
+  the JWT check and the allow-list. Now behind `CONFLUX_ADMIN_TOKEN`
+  (constant-time comparison, `/health` exempt), and **binding beyond
+  loopback without a token refuses to start** — verified against the
+  real binary in all three states.
+
+**Tier 2 — all fixed:**
+
+- `FileStore`'s synchronous `std::fs` calls now run on
+  `spawn_blocking`. They were occupying tokio executor threads, so a
+  slow disk during a checkpoint write stalled the gRPC service and the
+  round timer along with it.
+- `S3Store::connect` now checks `head_bucket` before `create_bucket`,
+  instead of issuing a write request on every connection — which also
+  means credentials scoped to object read/write no longer fail a
+  permission they never needed.
+- `clip_radius = 1.0` is documented as a **placeholder, not a default**,
+  in the config field, the aggregator, `USAGE.md`, and — most usefully —
+  a startup warning that fires when `centered_clipping` is selected with
+  an untuned radius. Verified to fire only in that case. The default
+  itself is unchanged: `τ` bounds an L2 norm in parameter space, so no
+  value is right for an unknown model (§5.13).
+
+## Tier 3 — release engineering (2026-08-31)
+
+- **S10 — workspace manifest.** `[workspace.package]` and
+  `[workspace.dependencies]`. `version`/`edition`/`license`/
+  `repository`/`rust-version` are declared once; 32 third-party
+  versions are declared once. Features stay per-crate deliberately —
+  `conflux-store` needs tokio's `rt` and nothing else, and hoisting the
+  union would compile capabilities into crates with no use for them.
+- **S9 — Apache-2.0.** `LICENSE` (canonical text), `license`/
+  `description`/`repository` on all 13 crates, a README license section.
+  `cargo package` now succeeds. `conflux-attacks` is marked
+  `publish = false` — ADR 0010 forbids the dependency edge that
+  publishing it would invite.
+- **S11 — MSRV, measured rather than guessed.** `rust-toolchain.toml`
+  pins the channel. `rust-version = 1.85` (edition 2024's floor) for
+  eleven crates; `conflux-store` and `conflux-server` declare **1.94.1**
+  because `aws-sdk-s3` requires it — found with `cargo metadata`, not
+  assumed. Declaring an MSRV immediately paid for itself:
+  `clippy::incompatible_msrv` caught `decode_weights` using
+  `usize::is_multiple_of` (stable 1.87), which would have broken the
+  1.85 promise. Rewritten as `% 4 != 0`.
+- **S12 — reproducible backends.** `docker-compose.yml` on the same
+  non-standard ports `USAGE.md` already documented, so existing dev
+  containers keep working. The seven hardcoded backend URLs became
+  env-configurable (`CONFLUX_TEST_REDIS_URL` and friends) — which is
+  what let CI point them at its own service containers. Verified the
+  override takes effect by aiming one at a dead port.
+- **S12 — env configuration via [evnx](https://evnx.dev).**
+  `.env.example` documents all 32 variables; `.env` is gitignored.
+  Optional variables are **commented out rather than set empty**: unset
+  lets `conflux-config` resolve through its chain and log the source
+  (ADR 0007), while empty is an explicit override to nothing. That
+  distinction is also what took `evnx validate` from 10 errors to 0.
+- **S8 — CI.** Five jobs: `fmt`, `clippy` (`--all-targets`, warnings
+  denied), `test` (with Redis/Postgres/MinIO service containers, so the
+  three durable backends are actually exercised), `msrv` (checks the
+  1.85 crates on a 1.85 toolchain), and `env-files` (`evnx scan` plus a
+  direct `git ls-files .env` guard).
+
+Every job was verified locally before being written down, and doing so
+found three things: the `is_multiple_of` MSRV violation, an unindented
+helper that `cargo fmt --check` rejected, and an `evnx scan .env.example`
+step that was scanning **zero files** because evnx excludes that filename
+by design. The scan now covers the whole checkout, validated against a
+simulated CI tree (265 files, no `.venv`, no `.env`, 0 high-confidence
+findings).
 
 ## Research-line entry point
 

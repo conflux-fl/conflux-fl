@@ -228,12 +228,23 @@ impl Store for PostgresStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This test module's backend URL, overridable from the environment so
+    /// CI can point at its own service containers. See `.env.example`.
+    fn test_backend_url(var: &str, default: &str) -> String {
+        std::env::var(var).unwrap_or_else(|_| default.to_string())
+    }
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-postgres -e POSTGRES_PASSWORD=conflux
     /// -e POSTGRES_DB=conflux -p 15432:5432 postgres:16-alpine`
-    const TEST_POSTGRES_URL: &str = "postgres://postgres:conflux@127.0.0.1:15432/conflux";
+    fn test_postgres_url() -> String {
+        test_backend_url(
+            "CONFLUX_TEST_POSTGRES_URL",
+            "postgres://postgres:conflux@127.0.0.1:15432/conflux",
+        )
+    }
 
     fn unique_table(test_name: &str) -> String {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -245,7 +256,7 @@ mod tests {
     }
 
     async fn connect(test_name: &str) -> PostgresStore {
-        PostgresStore::connect_with_table(TEST_POSTGRES_URL, unique_table(test_name))
+        PostgresStore::connect_with_table(&test_postgres_url(), unique_table(test_name))
             .await
             .expect("connect to the dev Postgres container — is it running?")
     }
@@ -356,7 +367,7 @@ mod tests {
     async fn client_rounds_survive_a_simulated_restart() {
         let table = unique_table("client_restart_recovery");
         {
-            let store = PostgresStore::connect_with_table(TEST_POSTGRES_URL, table.clone())
+            let store = PostgresStore::connect_with_table(&test_postgres_url(), table.clone())
                 .await
                 .unwrap();
             store
@@ -373,7 +384,7 @@ mod tests {
                 .unwrap();
         } // `store` (and its connection) dropped — simulates the process exiting
 
-        let restarted = PostgresStore::connect_with_table(TEST_POSTGRES_URL, table)
+        let restarted = PostgresStore::connect_with_table(&test_postgres_url(), table)
             .await
             .unwrap();
         let recovered = restarted.load_client_rounds().await.unwrap();

@@ -1,7 +1,11 @@
 [package]
 name = "conflux-net"
-version = "0.1.0"
-edition = "2024"
+description = "Dual-mode (push/pull) gRPC transport for Conflux FL, with mTLS and JWT authentication."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
@@ -11,15 +15,15 @@ conflux-proto = { path = "../conflux-proto" }
 # link both `ring` and `aws-lc-rs` into this crate's own test binaries too,
 # and rustls panics at runtime with no way to pick a default automatically.
 # Matching the AWS SDK's provider avoids the conflict outright.
-tonic = { version = "0.14", features = ["tls-aws-lc", "tls-connect-info"] }
-tonic-prost = "0.14"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-thiserror = "2.0"
-async-trait = "0.1"
+tonic = { workspace = true, features = ["tls-aws-lc", "tls-connect-info"] }
+tonic-prost.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
+tokio-stream = { workspace = true, features = ["net"] }
+thiserror.workspace = true
+async-trait.workspace = true
 # Phase 8c: hashing a peer certificate's DER bytes into the fingerprint
 # `NodeIdentity::CertFingerprint` compares against.
-sha2 = "0.10"
+sha2.workspace = true
 # Phase 16: RS256/ES256 verification of RegisterRequest.auth_token.
 # Verification only — no signing key ever lives in a Conflux process.
 # `aws_lc_rs`, not `rust_crypto`, for exactly the reason the tonic
@@ -28,12 +32,12 @@ sha2 = "0.10"
 # provider feature. Picking the same one keeps a single crypto stack in
 # the binary rather than a second, parallel implementation of the same
 # primitives.
-jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
-serde = { version = "1", features = ["derive"] }
+jsonwebtoken = { workspace = true, features = ["use_pem", "aws_lc_rs"] }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-rcgen = "0.14"
+rcgen.workspace = true
 # Names `Certificate::der()`'s return type in the Phase 8c fingerprint
 # test — the same `rustls-pki-types` tonic's own `tls-connect-info`
 # feature already pulls in, not a new crate to the dependency tree.
-rustls-pki-types = "1"
+rustls-pki-types.workspace = true

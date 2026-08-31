@@ -196,7 +196,7 @@ async fn a_round_completes_when_the_client_already_applied_its_own_privacy_trans
 async fn health_endpoint_returns_ok() {
     let config = deterministic_config(&Overrides::default());
     let state = Arc::new(AppState::new(config, vec![0.0]));
-    let router = conflux_server::router(state);
+    let router = conflux_server::router(state, None);
 
     let response = router
         .oneshot(
@@ -217,7 +217,7 @@ async fn health_endpoint_returns_ok() {
 async fn round_status_endpoint_reports_current_round() {
     let config = deterministic_config(&Overrides::default());
     let state = Arc::new(AppState::new(config, vec![0.0]));
-    let router = conflux_server::router(state);
+    let router = conflux_server::router(state, None);
 
     let response = router
         .oneshot(
@@ -633,7 +633,7 @@ async fn admin_allowlist_add_list_revoke_round_trip() {
         "client_id": "client-1",
         "identity": { "kind": "shared_token", "token": "secret" }
     });
-    let response = conflux_server::router(Arc::clone(&state))
+    let response = conflux_server::router(Arc::clone(&state), None)
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -646,7 +646,7 @@ async fn admin_allowlist_add_list_revoke_round_trip() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let response = conflux_server::router(Arc::clone(&state))
+    let response = conflux_server::router(Arc::clone(&state), None)
         .oneshot(
             Request::builder()
                 .uri("/admin/allowlist")
@@ -660,7 +660,7 @@ async fn admin_allowlist_add_list_revoke_round_trip() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["client_ids"], serde_json::json!(["client-1"]));
 
-    let response = conflux_server::router(Arc::clone(&state))
+    let response = conflux_server::router(Arc::clone(&state), None)
         .oneshot(
             Request::builder()
                 .method("DELETE")
@@ -672,7 +672,7 @@ async fn admin_allowlist_add_list_revoke_round_trip() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let response = conflux_server::router(Arc::clone(&state))
+    let response = conflux_server::router(Arc::clone(&state), None)
         .oneshot(
             Request::builder()
                 .uri("/admin/allowlist")

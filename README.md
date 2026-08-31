@@ -202,7 +202,23 @@ follows: **[docs/EXTENDING.md](docs/EXTENDING.md)**.
 
 ## Project status
 
-249 tests pass workspace-wide; `cargo fmt --check` and
+367 tests pass workspace-wide; `cargo fmt --check` and
 `cargo clippy --workspace --all-targets` are both clean. See
 [docs/STATUS.md](docs/STATUS.md) for exactly what's shipped and what's
 next — it's kept current every session, unlike this README.
+
+Version `0.2.0`. The `0.x` is deliberate: the public API is still
+moving (several types gained methods or changed signatures in the last
+release), and a `1.0` would be a compatibility promise this codebase
+isn't ready to make. Breaking changes will land in minor versions until
+then.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
+
+Copyright the Conflux FL authors.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work shall be licensed as above, without
+any additional terms or conditions.

@@ -161,46 +161,68 @@ impl FileStore {
     }
 
     fn checkpoint_path(&self, round: u64) -> PathBuf {
-        self.dir.join(format!("checkpoint-{round}.bin"))
-    }
-
-    fn latest_round(&self) -> Result<Option<u64>, StoreError> {
-        let entries = std::fs::read_dir(&self.dir).map_err(|source| StoreError::Io {
-            path: self.dir.display().to_string(),
-            source,
-        })?;
-
-        let mut latest: Option<u64> = None;
-        for entry in entries {
-            let entry = entry.map_err(|source| StoreError::Io {
-                path: self.dir.display().to_string(),
-                source,
-            })?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if let Some(round) = name
-                .strip_prefix("checkpoint-")
-                .and_then(|s| s.strip_suffix(".bin"))
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                latest = Some(latest.map_or(round, |current| current.max(round)));
-            }
-        }
-        Ok(latest)
+        checkpoint_path_in(&self.dir, round)
     }
 }
 
+/// Free functions rather than methods, so the closures handed to
+/// `spawn_blocking` can own a cloned `PathBuf` instead of borrowing
+/// `&self` across a task boundary (which would need the store itself to
+/// be `'static`).
+fn checkpoint_path_in(dir: &Path, round: u64) -> PathBuf {
+    dir.join(format!("checkpoint-{round}.bin"))
+}
+
+fn latest_round_in(dir: &Path) -> Result<Option<u64>, StoreError> {
+    let entries = std::fs::read_dir(dir).map_err(|source| StoreError::Io {
+        path: dir.display().to_string(),
+        source,
+    })?;
+
+    let mut latest: Option<u64> = None;
+    for entry in entries {
+        let entry = entry.map_err(|source| StoreError::Io {
+            path: dir.display().to_string(),
+            source,
+        })?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(round) = name
+            .strip_prefix("checkpoint-")
+            .and_then(|s| s.strip_suffix(".bin"))
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            latest = Some(latest.map_or(round, |current| current.max(round)));
+        }
+    }
+    Ok(latest)
+}
+
 impl Store for FileStore {
-    // Still plain `std::fs` calls under the hood, wrapped in an `async fn`
-    // only to satisfy the `Store` trait's signature — `InMemoryStore`
-    // needs no async runtime either. That means a `FileStore` call
-    // briefly blocks whatever thread polls it; fine at the scale a local
-    // research run writes checkpoints, but a real candidate for
-    // `tokio::task::spawn_blocking` if `FileStore` ever needs to stop
-    // blocking the executor under sustained load.
+    // Filesystem work runs on `spawn_blocking`, not on the thread polling
+    // the future.
+    //
+    // The `std::fs` calls underneath are synchronous, and calling them
+    // directly from an `async fn` blocks the executor thread for the
+    // whole duration of the syscall. Tokio's runtime has a small, fixed
+    // pool of those threads; a checkpoint write is a multi-megabyte
+    // `write` that can stall on a slow disk, and while it stalls that
+    // thread cannot poll *anything* — not the gRPC service accepting
+    // client submissions, not the round timer. At the scale a local
+    // research run writes checkpoints this was tolerable, which is why it
+    // stood; on a real deployment it converts one slow disk into
+    // server-wide unresponsiveness.
+    //
+    // `spawn_blocking` moves the work to a pool sized for exactly this,
+    // leaving the async threads free. It costs one task spawn per call,
+    // which is nothing beside a disk write.
     async fn load_latest_weights(&self) -> Result<Vec<f32>, StoreError> {
-        let round = self.latest_round()?.ok_or(StoreError::NoCheckpoint)?;
-        read_weights(&self.checkpoint_path(round))
+        let dir = self.dir.clone();
+        blocking(move || {
+            let round = latest_round_in(&dir)?.ok_or(StoreError::NoCheckpoint)?;
+            read_weights(&checkpoint_path_in(&dir, round))
+        })
+        .await
     }
 
     async fn save_checkpoint(&self, round: u64, weights: &[f32]) -> Result<(), StoreError> {
@@ -209,10 +231,35 @@ impl Store for FileStore {
         for w in weights {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
-        std::fs::write(&path, bytes).map_err(|source| StoreError::Io {
-            path: path.display().to_string(),
-            source,
+        blocking(move || {
+            std::fs::write(&path, bytes).map_err(|source| StoreError::Io {
+                path: path.display().to_string(),
+                source,
+            })
         })
+        .await
+    }
+}
+
+/// Runs `work` on tokio's blocking pool.
+///
+/// A `JoinError` here means the closure itself panicked (the task is
+/// never cancelled — nothing holds its handle to abort it), so it is
+/// surfaced as a `StoreError` rather than resumed. Re-panicking on the
+/// caller's thread would take down whichever request happened to be
+/// waiting, which is precisely the coupling this whole function exists
+/// to remove.
+async fn blocking<T, F>(work: F) -> Result<T, StoreError>
+where
+    F: FnOnce() -> Result<T, StoreError> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(result) => result,
+        Err(join_error) => Err(StoreError::Io {
+            path: "<blocking task>".to_string(),
+            source: std::io::Error::other(format!("checkpoint task failed: {join_error}")),
+        }),
     }
 }
 

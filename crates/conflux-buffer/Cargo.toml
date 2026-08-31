@@ -1,13 +1,17 @@
 [package]
 name = "conflux-buffer"
-version = "0.1.0"
-edition = "2024"
+description = "Async round staging for Conflux FL — quorum and timeout flush."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
-tokio = { version = "1", features = ["sync", "time", "rt-multi-thread", "macros"] }
-thiserror = "2.0"
-tracing = "0.1"
+tokio = { workspace = true, features = ["sync", "time", "rt-multi-thread", "macros"] }
+thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-tracing-test = "0.2"
+tracing-test.workspace = true

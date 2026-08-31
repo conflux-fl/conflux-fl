@@ -103,11 +103,31 @@ pub struct Overrides {
     pub robust_byzantine_fraction: Option<f32>,
     /// Centered Clipping's clip radius `τ` — how far any one client's
     /// deviation from the running reference may pull the model in a
-    /// round. Builtin fallback `1.0`. Read only by the
-    /// `centered_clipping` aggregator, and, like
-    /// `robust_byzantine_fraction`, an algorithm-tuning value rather
-    /// than a topology/mode posture: the right radius depends on the
-    /// model's own weight scale, which no deployment profile knows.
+    /// round. Read only by the `centered_clipping` aggregator.
+    ///
+    /// **The builtin fallback of `1.0` is a placeholder, not a
+    /// recommendation, and shipping against it is measurably worse than
+    /// using no defense at all.** On real MNIST with a real
+    /// 50,890-parameter MLP and one Byzantine client, `centered_clipping`
+    /// at `τ = 1.0` scored 0.078 held-out accuracy where undefended
+    /// `fedavg` scored 0.163 and `krum` scored 0.844
+    /// (`docs/research/temporal-consistency-aggregation.md` §5.13).
+    ///
+    /// The reason is structural rather than a bad constant. `τ` bounds
+    /// an L2 norm in *parameter space*, so it simultaneously bounds how
+    /// far an attacker can pull the model **and** how far the model can
+    /// move toward the truth — with the same number, spread across
+    /// however many parameters the model has. Too small and the model
+    /// cannot converge; large enough and nothing is clipped, at which
+    /// point the method *is* FedAvg. A sweep on that model
+    /// (1.0 → 5 → 20 → 100) rose monotonically toward FedAvg's own
+    /// number with no optimum anywhere, while a sweep on a
+    /// 3-dimensional synthetic model found a clear optimum at `τ = 4.0`.
+    /// **`τ` does not transfer across model sizes**, so no default this
+    /// field could carry would be right for an unknown model.
+    ///
+    /// Tune it against your own model, or use a selection-based robust
+    /// aggregator, which has no equivalent parameter to get wrong.
     pub clip_radius: Option<f32>,
     /// Whether `conflux-reputation`'s pre-aggregation contribution filter
     /// runs at all, independent of which aggregator is selected. Builtin

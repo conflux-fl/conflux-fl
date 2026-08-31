@@ -4,6 +4,7 @@
 //!
 //! See `docs/spec/conflux-spec-v1.md` §8, §10 (Phase 5).
 
+mod admin_auth;
 mod app_state;
 mod auth_enforcement;
 mod backend_selection;
@@ -12,6 +13,7 @@ mod error;
 mod http;
 mod round;
 
+pub use admin_auth::{AdminAuthError, AdminToken, validate_admin_binding};
 pub use app_state::{AppState, AppStateError};
 pub use auth_enforcement::{
     AuthEnforcementError, TlsMaterial, resolve_server_tls, validate_jwt_startup,

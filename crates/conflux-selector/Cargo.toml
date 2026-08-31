@@ -1,10 +1,14 @@
 [package]
 name = "conflux-selector"
-version = "0.1.0"
-edition = "2024"
+description = "Client sampling strategies for Conflux FL."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 conflux-config = { path = "../conflux-config" }
-inventory = "0.3"
-rand = "0.10"
-thiserror = "2.0"
+inventory.workspace = true
+rand.workspace = true
+thiserror.workspace = true

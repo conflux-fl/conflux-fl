@@ -168,6 +168,25 @@ async fn main() {
         (None, _) => {}
     }
 
+    // ADR 0007's "say so, out loud" applied to a default that is
+    // actively dangerous. `clip_radius` has a builtin fallback so the
+    // config layer has something to resolve, but there is no value that
+    // is right for an unknown model — and the placeholder measured
+    // *worse than no defense at all* on a real one (§5.13). An operator
+    // who selected this aggregator and never set the radius has almost
+    // certainly not made a choice; say so before serving a round.
+    if config.aggregator.value == "centered_clipping"
+        && config.clip_radius.source == conflux_config::ConfigSource::BuiltinFallback
+    {
+        tracing::warn!(
+            clip_radius = config.clip_radius.value,
+            "aggregator = centered_clipping with an untuned clip_radius. This is a \
+             placeholder, not a default: on a real 50,890-parameter model it scored below \
+             undefended fedavg. Tune CONFLUX_CLIP_RADIUS to your model's weight scale, or \
+             use a selection-based robust aggregator instead."
+        );
+    }
+
     let initial_weights = vec![0.0f32; initial_weights_dim];
     let backends = backend_selection_from_env();
     let state = Arc::new(
@@ -192,6 +211,26 @@ async fn main() {
         })
         .unwrap_or_else(|| "127.0.0.1:8080".parse().unwrap());
 
+    // The HTTP admin surface's own gate, beside the gRPC ones above.
+    // `/admin/allowlist` decides who may participate, so an
+    // unauthenticated admin API bound anywhere reachable would undo the
+    // authentication on the gRPC port entirely.
+    let admin_token = std::env::var("CONFLUX_ADMIN_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .map(conflux_server::AdminToken::new);
+    conflux_server::validate_admin_binding(http_addr, admin_token.as_ref())
+        .expect("admin API binding refused");
+    if admin_token.is_some() {
+        tracing::info!("HTTP admin API requires a bearer token (CONFLUX_ADMIN_TOKEN)");
+    } else {
+        tracing::warn!(
+            %http_addr,
+            "HTTP admin API is unauthenticated — permitted only because it is bound to \
+             loopback. Set CONFLUX_ADMIN_TOKEN before binding it anywhere else."
+        );
+    }
+
     let grpc_state = Arc::clone(&state);
     let grpc = tokio::spawn(async move {
         let mut builder = tonic::transport::Server::builder();
@@ -206,11 +245,12 @@ async fn main() {
     });
 
     let http_state = Arc::clone(&state);
+    let http_token = admin_token.clone();
     let http = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(http_addr)
             .await
             .expect("http bind failed");
-        axum::serve(listener, conflux_server::router(http_state))
+        axum::serve(listener, conflux_server::router(http_state, http_token))
             .await
             .expect("http server failed");
     });

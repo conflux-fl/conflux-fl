@@ -253,9 +253,8 @@ fn degenerate_batch_shapes_do_not_panic() {
         let aggregator = build_aggregator(name, AggregatorParams::default()).unwrap();
 
         // Empty batch: every method must say EmptyBatch, not panic.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            aggregator.aggregate(&[])
-        }));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| aggregator.aggregate(&[])));
         match outcome {
             Err(_) => panic!("{name} panicked on an empty batch"),
             Ok(Ok(_)) => panic!("{name} accepted an empty batch"),
@@ -283,10 +282,7 @@ fn degenerate_batch_shapes_do_not_panic() {
 fn mismatched_dimensions_are_rejected_by_name() {
     let aggregator = build_aggregator("fedavg", AggregatorParams::default()).unwrap();
     let err = aggregator
-        .aggregate(&[
-            delta("a", &[1.0, 2.0, 3.0], 10),
-            delta("short", &[1.0], 10),
-        ])
+        .aggregate(&[delta("a", &[1.0, 2.0, 3.0], 10), delta("short", &[1.0], 10)])
         .expect_err("a dimension mismatch must be rejected");
     assert!(
         matches!(err, AggregatorError::MismatchedLength { .. }),

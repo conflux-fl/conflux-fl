@@ -1,7 +1,11 @@
 [package]
 name = "conflux-node"
-version = "0.1.0"
-edition = "2024"
+description = "Conflux FL client binary — Rust-side networking and orchestration, bridging to a Python ClientApp."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
@@ -16,18 +20,18 @@ conflux-net = { path = "../conflux-net" }
 # calls no conflux-config API directly, keeping Phase 6's "read env vars,
 # mirror the defaults inline" convention (see startup_guard.rs).
 conflux-privacy = { path = "../conflux-privacy" }
-rand = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+rand.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 # "sync": `ReceiverStream`, which adapts the mpsc channel behind
 # push mode's reconnecting task relay into a `Stream`.
-tokio-stream = { version = "0.1", features = ["net", "sync"] }
-tonic = "0.14"
-async-trait = "0.1"
-thiserror = "2.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-stream = { workspace = true, features = ["net", "sync"] }
+tonic.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
 # Push mode's `cross_silo` test issues real certs so push and mTLS can be
 # exercised together — same generator `conflux-net`'s own mTLS tests use.
-rcgen = "0.14"
+rcgen.workspace = true

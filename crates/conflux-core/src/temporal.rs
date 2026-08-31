@@ -639,7 +639,14 @@ impl Aggregator for DssAggregator {
 ///   rounds rather than arriving fully formed in round one.
 /// - `τ` is problem-scale dependent — the paper tunes it per experiment,
 ///   and so must a deployment. It is config-resolved (`clip_radius`),
-///   never a hardcoded constant. A negative `τ` would invert the
+///   never a hardcoded constant. **Measured (§5.13): at the framework's
+///   placeholder `τ = 1.0`, this method scored *worse than no defense*
+///   on a real 50,890-parameter model, and no `τ` in a 1→100 sweep
+///   reached a selection-based method's accuracy.** `τ` bounds an L2
+///   norm in parameter space, so what it buys per round depends on how
+///   many parameters that norm is spread across; an optimum found at
+///   `dim = 3` does not transfer to `dim = 50,890`. Treat an untuned
+///   `clip_radius` as an unconfigured deployment. A negative `τ` would invert the
 ///   clipping rather than bound it; like the `robust` family's
 ///   `byzantine_fraction`, it is documented rather than validated, since
 ///   the config layer is where an operator-supplied value belongs.
