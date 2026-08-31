@@ -54,6 +54,33 @@ pub enum DispatchError {
     /// instead of both showing up as `Status::internal`.
     #[error("this round already closed; fetch the current task and resubmit")]
     RoundClosed,
+    /// The caller's streamed update exceeded `max_update_bytes` before
+    /// it finished arriving, and the transport stopped reading rather
+    /// than keep growing a buffer.
+    ///
+    /// Distinct from `Other` because it is the one submission failure a
+    /// client can act on *without* an operator: the update really is too
+    /// big for this deployment's configured bound, and either the client
+    /// is sending the wrong model or the bound needs raising. It also
+    /// maps to `resource_exhausted` rather than `internal`, which is
+    /// what tells an honest client "back off / this won't succeed on
+    /// retry" instead of "the server is broken".
+    #[error(
+        "client {client_id}'s update exceeded the {limit_bytes}-byte limit \
+         (at least {received_bytes} bytes received before the stream was cut)"
+    )]
+    UpdateTooLarge {
+        /// Whose stream was cut. Taken from the first chunk that carried
+        /// a `client_id`, so it is what the caller claimed to be — the
+        /// bound is enforced before any identity check, deliberately, or
+        /// the check itself would be the thing being flooded.
+        client_id: String,
+        /// The configured `max_update_bytes` this stream exceeded.
+        limit_bytes: u64,
+        /// How much had accumulated when the limit tripped. A lower
+        /// bound on what the client intended to send, not a total.
+        received_bytes: u64,
+    },
     #[error("dispatch failed: {0}")]
     /// Anything the variants above don't cover. Maps to
     /// `Status::internal`, so it should not carry a condition a client
@@ -76,6 +103,11 @@ impl From<DispatchError> for Status {
             DispatchError::RoundClosed => Status::failed_precondition(
                 "this round already closed; fetch the current task and resubmit",
             ),
+            // 8, not 3 (`invalid_argument`): the request was well-formed,
+            // the server simply refused to hold that much of it.
+            err @ DispatchError::UpdateTooLarge { .. } => {
+                Status::resource_exhausted(err.to_string())
+            }
             DispatchError::Other(msg) => Status::internal(msg),
         }
     }

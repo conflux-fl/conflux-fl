@@ -32,6 +32,7 @@ use crate::backend_selection::{
     AccountingBackend, BackendSelection, BackendSelectionError, RegistryBackend, StoreBackend,
     validate_production_backends,
 };
+use crate::round_health::RoundLoopHealth;
 
 #[derive(Debug, thiserror::Error)]
 /// Why the server's shared state could not be assembled at startup.
@@ -103,6 +104,16 @@ pub struct AppState {
     pub round: AtomicU64,
     /// The open round's staging buffer, or `None` between rounds.
     pub current_buffer: Mutex<Option<Arc<RoundBuffer>>>,
+    /// Tier 5 (H2): what the round loop is doing, so `/health` can report
+    /// it instead of a constant.
+    ///
+    /// Lives here rather than being threaded into [`crate::router`] as a
+    /// third parameter, because every other handler already reaches its
+    /// state this way and `/health` should not be the one exception.
+    /// Constructed in every `AppState`, including the ones tests build
+    /// that never run a round loop — those simply stay `Starting`, which
+    /// is the truthful answer for a server whose loop never started.
+    pub round_loop_health: Arc<RoundLoopHealth>,
     /// Push-mode subscribers (spec §3: `cross_silo`) get every new round's
     /// task broadcast to them; pull-mode clients just see it on their next
     /// `fetch_task`.
@@ -297,6 +308,7 @@ impl AppState {
             reputation: CosineScorer,
             round: AtomicU64::new(1),
             current_buffer: Mutex::new(None),
+            round_loop_health: Arc::new(RoundLoopHealth::new()),
             push_sender,
             jwt_key: None,
             config,

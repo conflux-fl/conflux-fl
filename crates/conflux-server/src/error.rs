@@ -28,3 +28,45 @@ pub enum ServerError {
     /// which validation rejected it.
     Aggregator(#[from] conflux_core::AggregatorError),
 }
+
+impl ServerError {
+    /// Whether the round loop should try again, or stop for good.
+    ///
+    /// Tier 5 (H2). The loop previously stopped on *every* error but
+    /// `EmptyBatch`, which meant one Redis reconnect or one client
+    /// sending a `NaN` ended the experiment permanently — while the gRPC
+    /// and HTTP servers kept running, so nothing outside the process
+    /// could tell. The distinction that matters is not "how bad is this
+    /// error" but **"can the next round differ from this one?"**
+    ///
+    /// - **Transient**: backend I/O ([`ServerError::Registry`],
+    ///   [`ServerError::Store`]) and every aggregation rejection. A
+    ///   rejected batch is a statement about *this round's* batch — the
+    ///   client that sent `NaN` may not be selected next round, and if it
+    ///   is, the rejection is doing its job every time. Retrying is
+    ///   correct in both cases.
+    /// - **Fatal**: an exhausted privacy budget, in either scope. This is
+    ///   the one case where stopping *is* the specified behavior rather
+    ///   than a failure to handle something —
+    ///   `budget_exhausted_action = halt` means halt, and no amount of
+    ///   waiting produces more budget (ADR 0006).
+    ///
+    /// Retrying a transient error is not the same as ignoring it: the
+    /// caller backs off, counts consecutive failures, and reports the
+    /// round loop as degraded so an operator and an orchestrator can both
+    /// see it.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Halt means halt. Waiting cannot produce more epsilon.
+            ServerError::BudgetExhausted | ServerError::BudgetExhaustedForClient { .. } => false,
+            // A backend that was unreachable a moment ago may be
+            // reachable now — this is the case the old behavior got
+            // most wrong.
+            ServerError::Registry(_) | ServerError::Store(_) => true,
+            // Every aggregation rejection describes one batch, not the
+            // experiment. `EmptyBatch` in particular is the ordinary
+            // "nobody has registered yet" startup case.
+            ServerError::Aggregator(_) => true,
+        }
+    }
+}

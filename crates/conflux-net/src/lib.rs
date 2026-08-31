@@ -22,7 +22,7 @@ pub mod tls;
 pub use client::{PullTransport, PushTransport};
 pub use dispatcher::{DispatchError, RoundDispatcher, TaskStream};
 pub use peer_identity::peer_cert_fingerprint;
-pub use service::FlTransportService;
+pub use service::{DEFAULT_MAX_UPDATE_BYTES, FlTransportService};
 
 /// The client-side transport error type — a connection failure or an RPC
 /// that came back with a `tonic::Status`.

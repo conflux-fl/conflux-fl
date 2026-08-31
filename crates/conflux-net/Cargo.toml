@@ -21,6 +21,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 tokio-stream = { workspace = true, features = ["net"] }
 thiserror.workspace = true
 async-trait.workspace = true
+# Tier 5 (H1): the oversized-update rejection logs the client and the
+# limit it tripped, per the project's "say so, out loud" principle — the
+# same reason conflux-buffer logs quorum-vs-timeout and conflux-reputation
+# logs every rejected update.
+tracing.workspace = true
 # Phase 8c: hashing a peer certificate's DER bytes into the fingerprint
 # `NodeIdentity::CertFingerprint` compares against.
 sha2.workspace = true

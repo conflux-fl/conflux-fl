@@ -210,7 +210,17 @@ async fn health_endpoint_returns_ok() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(&body[..], b"ok");
+    // Tier 5 (H2) changed this from the bare string `ok` to a JSON object
+    // reporting the round loop. `status: "ok"` is kept as the first field
+    // deliberately, so anything matching on the old string still sees it;
+    // this assertion checks the new contract rather than that accident.
+    // Full coverage of the states lives in `tests/round_loop_health.rs`.
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "ok");
+    assert_eq!(
+        json["round_loop"], "starting",
+        "no round loop runs in this test, so `starting` is the truthful answer"
+    );
 }
 
 #[tokio::test]

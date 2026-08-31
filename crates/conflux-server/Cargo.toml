@@ -23,7 +23,7 @@ conflux-buffer = { path = "../conflux-buffer" }
 conflux-privacy = { path = "../conflux-privacy" }
 conflux-reputation = { path = "../conflux-reputation" }
 conflux-core = { path = "../conflux-core" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
 tokio-stream = { workspace = true, features = ["net", "sync"] }
 # tls-aws-lc, not tls-ring: matches conflux-net/conflux-store's existing
 # crypto-provider choice (see conflux-net/Cargo.toml's comment) — needed

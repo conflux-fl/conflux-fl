@@ -1,10 +1,23 @@
 # `cflux` — a CLI for Conflux FL
 
-**Status: proposed — pending project-owner review, nothing built yet.**
-This is a scoping document, in the same spirit as
-`docs/AGGREGATION_LANDSCAPE.md`: analysis and a proposed shape,
-written to precede a numbered phase brief once the scope below is
-confirmed, not a decision already made.
+**Status: proposed, and deliberately sequenced last.** Nothing built
+yet. This is a scoping document in the same spirit as
+`docs/AGGREGATION_LANDSCAPE.md`: analysis and a proposed shape, written
+to precede a numbered phase brief once the scope below is confirmed,
+not a decision already made.
+
+**Sequencing decision (2026-08-31, project owner):** the CLI comes
+*after* `conflux-fl` is stable, not before. The reasoning is that a CLI
+is a surface over functionality that already exists — building one over
+an unstable surface means rewriting it when the surface moves, and
+`docs/STATUS.md`'s Tier 5 (production hardening) is still open. Crate
+publication is likewise gated on stability, which matters here because
+`cargo install cflux` is one of the two distribution paths below.
+
+**Documentation model (2026-08-31):** `cflux` follows the
+[`evnx`](https://evnx.dev) pattern — same project owner, and a proven
+shape. See "Documentation as part of the tool" below; it is a design
+constraint on the CLI, not a docs-site task to do afterwards.
 
 ## Why this exists
 
@@ -189,6 +202,95 @@ choice (ADR 0003's no-multi-tenancy, the self-hosted/no-cloud-service
 posture implicit in everything else in this repo) — the comparison
 mostly *confirms* those choices were coherent, rather than surfacing
 gaps `cflux` should close by imitation.
+
+## Documentation as part of the tool (the `evnx` model)
+
+`evnx` (same project owner, v0.3.8 at time of writing) already solves
+the problem `cflux` will have, and the shape is worth copying rather
+than re-deriving. Three separable ideas:
+
+### 1. Every command's `--help` ends with a deep link to its own guide
+
+```
+$ evnx validate --help
+Check .env against .env.example, find issues
+...
+  -h, --help               Print help
+
+📖  Full guide: https://www.evnx.dev/guides/commands/validate
+```
+
+The URL is per-command and predictable: `/guides/commands/<command>`.
+The terminal carries the *signature* — flags, types, defaults — and
+hands off to the web for the *explanation*. Neither duplicates the
+other, which is why neither drifts.
+
+For `cflux` this means `https://<docs-host>/guides/commands/<command>`,
+emitted from a single helper so no subcommand can be added without one.
+The docs host is a `conflux-web` concern; the *link* is a `cflux`
+concern, and it is easier to build in from the first command than to
+retrofit onto twenty.
+
+### 2. Each command is a self-contained module
+
+`evnx` has twelve top-level commands, each with its own flags, its own
+output shape, and its own guide page. There is no shared "god struct"
+of options threaded through everything — only three genuinely global
+flags (`-v`, `-q`, `--no-color`) plus `--help`/`--version`.
+
+The Rust shape this implies, and the one `cflux` should adopt:
+`src/commands/<name>.rs` per command, each exporting its own `clap`
+`Args` struct and a `run(args, ctx) -> Result<Output, CliError>`. The
+top-level dispatcher only routes. Two consequences worth naming: a new
+command is a new file plus one match arm (the same additive property
+ADR 0002's registry gives aggregators), and a command's guide page,
+its `Args`, and its tests sit close enough together that updating one
+without the others is visibly incomplete.
+
+### 3. Machine-readable output is a first-class mode, not an afterthought
+
+`evnx validate` takes `--format pretty|json|github-actions`. Not a
+`--json` bolt-on: three named renderers over one structured result,
+and the human-readable one is just the default renderer.
+
+Everything downstream follows from that separation:
+
+| `evnx` feature | Why it exists | `cflux` equivalent |
+|---|---|---|
+| `--format json` | Parseable by another tool | Every command that prints anything |
+| `--format github-actions` | `::error file=...::` inline PR annotations | `cflux doctor` in CI |
+| Documented **exit codes** (`0` clean, `1` errors found) | Scripts branch on them | `cflux doctor`, `cflux server resolve-config` |
+| `--exit-zero` | Report findings without failing the pipeline | Same, same commands |
+| Named issue **types** (`missing_variable`, `weak_secret`) | Stable identifiers to `--ignore`, not prose to grep | `cflux doctor` findings |
+| **Severity** (error / warning / style) | Not everything found is fatal | Same |
+| `--fix`, with an explicit *auto-fixable* column | Only some findings are safely repairable, and the docs say which | `cflux doctor --fix` — see caveat below |
+| `completions` subcommand | Shell completion for bash/zsh/fish | Same, free via `clap_complete` |
+| `.evnx.toml` | Per-project defaults so flags aren't retyped | `.cflux.toml`, once phase-21 profile files land |
+
+This table is the actionable part of the comparison. The
+`--json`-everywhere point was already raised in the Flower comparison
+below as a lesson worth taking; `evnx` shows the same conclusion
+reached independently, plus the four things that only become possible
+*after* output is structured (stable issue types, severities,
+`--exit-zero`, CI-native formats).
+
+**One caveat, specific to `cflux`.** `evnx validate --fix` can
+regenerate a weak secret because a `.env` file is a local artifact and
+the blast radius is one file `git diff` will show. `cflux doctor --fix`
+would be operating on a *deployment* — an unreachable Redis, missing TLS
+material, an inconsistent auth configuration. Most of those have no safe
+automatic repair, and the ones that look like they do (generating a
+missing key, say) are exactly the ones where doing it silently is worst.
+The `--fix` row above should ship as **suggestions printed, not applied**
+unless a specific finding is argued into auto-fixability one at a time.
+
+### What this changes about the MVP
+
+The MVP below stays the same five commands, but two properties are now
+non-negotiable from the first commit rather than retrofitted:
+structured output with a `--format` renderer split, and a
+`📖 Full guide:` link on every subcommand. Both are cheap at five
+commands and expensive at twenty.
 
 ## Installation
 

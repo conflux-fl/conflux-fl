@@ -195,6 +195,7 @@ half is profile files, not experiment files.
 | `CONFLUX_CLIP_RADIUS` | `clip_radius` — Centered Clipping's `τ`. **Must be tuned to your model.** The builtin `1.0` is a placeholder: on a real 50,890-parameter MLP it scored *below undefended `fedavg`* (0.078 vs 0.163, [§5.13](research/temporal-consistency-aggregation.md)). The server warns at startup if you select `centered_clipping` without setting this |
 | `CONFLUX_MIN_REPUTATION_SCORE` | `min_reputation_score` — see `docs/E2E_TESTING.md`'s "Real findings" for why you might want this low when testing a `robust` aggregator specifically |
 | `CONFLUX_QUORUM` | `quorum` |
+| `CONFLUX_MAX_UPDATE_BYTES` | `max_update_bytes` — the largest reassembled update the transport accepts from one client, in bytes (builtin 256 MiB). A trust-boundary bound rather than a tuning knob: gRPC's own limit is per *message*, so without this an unbounded chunk stream is an unbounded server allocation (Tier 5, H1). Over it, the client gets gRPC `resource_exhausted` and the server logs the client id and the limit |
 | `CONFLUX_ROUND_TIMEOUT_SECS` | `round_timeout_secs` |
 | `CONFLUX_CLIP_NORM` | `clip_norm` |
 | `CONFLUX_NOISE_MULTIPLIER` | `noise_multiplier` |

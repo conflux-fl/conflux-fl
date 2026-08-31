@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-08-31 — **stabilization Tiers 1–3 complete**. Three remotely-triggerable defects fixed, the admin API authenticated, and the project is now releasable: Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, and CI. 367 tests. Version 0.2.0.
+Last updated: 2026-08-31 — **stabilization Tiers 1–5 complete**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, and the three production-hardening defects a post-Tier-4 audit found now closed. 387 tests, clippy clean under `-D warnings`, fmt clean. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -972,6 +972,185 @@ by design. The scan now covers the whole checkout, validated against a
 simulated CI tree (265 files, no `.venv`, no `.env`, 0 high-confidence
 findings).
 
+## Tier 4 — API stability for downstream (2026-08-31)
+
+The tier `conflux-web` and the DSS research line actually needed:
+both build on these crates, and "whatever compiles today" is not
+something either can plan against.
+
+- **S14 — the public API is documented.** `#![warn(missing_docs)]` on
+  all thirteen crates, and the 341 undocumented public items it found
+  are gone. Worst offenders were `conflux-config` (107),
+  `conflux-server` (57), and `conflux-core` (39). The lint is the
+  enforcement: an undocumented public item is now a build warning, and
+  CI denies warnings, so this cannot silently regress. Doc comments on
+  `.proto` fields propagate into the generated Rust, so the schema
+  shared with Python was documented at the source rather than in the
+  codegen output.
+- **S15 — public API review**, written up as
+  [`docs/API_STABILITY.md`](API_STABILITY.md). States the promise
+  (`0.x`: breaking changes land in minor versions and are listed here —
+  a commitment to *disclosure*, not stability), why not `1.0` yet, what
+  is deliberately **excluded** from the promise (`conflux-attacks`
+  entirely; `conflux-core`'s `DssAggregator`/`ClientDssDiagnostic`, an
+  unvalidated research hypothesis), and per-layer settledness — the wire
+  contract is the most stable, `AppState` the least.
+- **S16 — a runnable example for each of the four crates that never had
+  one.** Each is a real "try it", not a snippet:
+  - `conflux-core/examples/compare_aggregators.rs` — twelve methods on
+    one poisoned batch, plus every typed rejection path.
+  - `conflux-node/examples/local_hop.rs` — pull mode, push mode, and the
+    client-side privacy transform over a real local gRPC hop.
+  - `conflux-server/examples/round_pipeline.rs` — one complete round
+    end to end: real `AppState`, real gRPC, real clients, `run_round`
+    driving the actual pipeline. Nothing mocked.
+  - `conflux-attacks/examples/attack_vs_defense.rs` — the attack ×
+    defense matrix.
+
+  Writing them found two things prose alone would not have. The server
+  example's checkpoints came out looking random until the default
+  privacy transform (`gaussian_clipping`, `clip_norm = 1.0`,
+  `noise_multiplier = 1.0`) was explicitly disabled in it — a good
+  demonstration that the default is on, and a bad one for showing what
+  aggregators do. And an error message's formatting bug surfaced only
+  when a human-readable example printed it.
+- **S17 — catalog drift closed.** `AGGREGATION_LANDSCAPE.md` gained its
+  "Update (2026-08-30, fifth) — Centered Clipping shipped" section. The
+  web-side catalog remains a `conflux-web` concern.
+
+**One CI-breaking defect fixed after the fact**: `attack_vs_defense.rs`
+carried a `clippy::useless_vec` warning. Locally harmless; CI runs
+`clippy --all-targets -- -D warnings`, so it would have failed the first
+run against the pushed branch. Verified clean now, along with `cargo fmt
+--check` and the full 367-test suite against real Redis, Postgres, and
+MinIO backends (0 ignored).
+
+## Tier 5 — production hardening (2026-08-31, COMPLETE)
+
+A post-Tier-4 audit for what "stable" should mean beyond "compiles,
+tested, documented". Three defects, none caught by 367 tests, all in
+the same class as Tier 1's: they are about what the process does when
+something goes wrong, which the tests never exercise because they only
+ever exercise the path where nothing does.
+
+- **H1 — unbounded chunk accumulation (remotely triggerable).**
+  [`service.rs`](../crates/conflux-net/src/service.rs)'s `submit_delta`
+  collects a client-controlled stream into a `Vec` with no cap on
+  chunk count, before any dispatcher-level check runs. tonic's default
+  4 MiB limit is **per message**, not per stream, so `N` chunks are
+  `N × 4 MiB` of server memory. One client that never stops sending
+  exhausts the heap. Same class as Tier 1's non-finite weights — a
+  trust-boundary input with no bound on it — and the fix is the same
+  shape: reject past a configured maximum, with a typed error naming
+  the client. Needs a `max_update_bytes` (or `max_chunks`) config key,
+  which is a `conflux-config` addition, not just a `conflux-net` one.
+
+- **H2 — the round loop dies silently, and `/health` lies about it.**
+  [`main.rs`](../crates/conflux-server/src/main.rs)'s loop `break`s on
+  every error except `EmptyBatch`. A transient Redis blip or a Postgres
+  reconnect therefore stops the experiment permanently — while the gRPC
+  and HTTP servers keep running, so the process stays up and
+  [`http.rs`](../crates/conflux-server/src/http.rs)'s `/health` keeps
+  returning a hardcoded `"ok"`. An orchestrator sees a healthy pod
+  doing no work, indefinitely, with one `tracing::error!` line as the
+  only evidence. Two separable fixes: retry-with-backoff for transient
+  backend errors (keeping genuinely fatal ones fatal — an exhausted
+  privacy budget *should* stop the loop), and a `/health` that reports
+  round-loop liveness instead of a constant.
+
+- **H3 — no graceful shutdown.** No `SIGTERM` or `ctrl_c` handling in
+  either binary. `docker stop`, a Kubernetes eviction, or Ctrl-C kills
+  the server mid-round: submissions already buffered are lost, and a
+  checkpoint being written has no chance to finish. `run_round` is
+  already the natural boundary — draining to the end of the current
+  round, refusing new work, then exiting is the shape.
+
+**All three shipped.** 20 new tests (367 -> 387), clippy clean under
+`-D warnings`, fmt clean.
+
+- **H1 — fixed.** `max_update_bytes` is a real `conflux-config`
+  parameter (builtin 256 MiB, `CONFLUX_MAX_UPDATE_BYTES`, experiment-file
+  key, logged with its source like every other value per ADR 0007). It
+  carries a builtin and is owned by *neither* axis — `None` for both
+  topology and mode — which keeps ADR 0001's disjointness intact: a
+  payload ceiling is a framework safety bound, not a claim about what
+  kind of participants a deployment has. `submit_delta` now counts bytes
+  as each chunk arrives and **before** pushing it, so the peak is one
+  chunk over the limit rather than whatever the client felt like
+  sending, and returns a typed `DispatchError::UpdateTooLarge {
+  client_id, limit_bytes, received_bytes }` mapping to gRPC
+  `resource_exhausted` (8) — not `invalid_argument`, because the request
+  was well-formed and the server simply refused to hold that much of it.
+  The client id is taken from the chunk in hand and is therefore
+  *claimed, not verified*: the bound is deliberately enforced ahead of
+  any identity check, since a check that ran first would be the thing
+  being flooded. Documented as such on the variant. `conflux-net` gained
+  a `tracing` dependency for the rejection log, per the same "say so,
+  out loud" principle `conflux-buffer` and `conflux-reputation` already
+  follow.
+- **H2 — fixed, and the decision is recorded.** `ServerError::
+  is_transient` draws the line, and the question it answers is not "how
+  bad is this error" but **"can the next round differ from this one?"**
+  Backend I/O (`Registry`, `Store`) and *every* aggregation rejection
+  are transient — a rejected batch is a statement about this round's
+  batch, and the client that sent a `NaN` may not be selected next
+  round. An exhausted privacy budget, in either scope, is fatal: `halt`
+  means halt and no amount of waiting produces more epsilon (ADR 0006).
+  The loop backs off exponentially (2s doubling to a 60s cap) and races
+  the sleep against shutdown, so Ctrl-C during a 60-second backoff does
+  not wait it out.
+- **H2 — `/health` reports the loop.** New `round_health.rs`:
+  `starting` / `running` / `degraded` / `stopped`, with the last
+  completed round, the consecutive-failure count, and the last error.
+  **`degraded` returns 200 deliberately** — a loop retrying an
+  unreachable Redis is alive, and failing its health check would turn a
+  backend outage into a crash loop on top of a backend outage.
+  `stopped` returns **503**, because that is the state a restart or a
+  config change is the only remedy for. Read through atomics rather than
+  one mutex: a health check that can be blocked by the thing it is
+  checking is worse than useless.
+- **H3 — fixed, in both binaries.** `SIGTERM` and Ctrl-C are handled via
+  a `watch` latch (not `broadcast` — a late subscriber must still see
+  that shutdown was requested). The server's gRPC and HTTP listeners
+  stop accepting; the round loop checks the latch **between rounds and
+  never during one**, so a shutdown arriving mid-round waits for that
+  round rather than abandoning buffered submissions and a half-written
+  checkpoint. `conflux-node` gained the same handling — it has no round
+  state to drain, but its local listener now closes rather than the
+  process vanishing, so a Python `ClientApp` mid-call sees a closed
+  connection instead of a reset.
+
+**Each fix was verified to fail without itself**, not just to pass with
+it. Neutralising H1's bound turns two of its four tests red; a process
+with no `SIGTERM` handler exits `-15`, which is not `success()`, so H3's
+subprocess tests go red too. H3's tests drive the **real binary** — signal
+handling is process-level behavior, and the wiring between handler,
+listeners, and round loop is exactly what a library-level test would
+miss.
+
+**One thing the tests do not prove.** H3's "drain the round in flight"
+property is structural, not asserted: the loop awaits `run_round` as a
+unit with no `select!` around it, so it *cannot* abandon a round
+mid-flight. Observing that from outside the process would need a round
+with a real submission in it and instrumentation to catch the moment.
+Worth building if the loop ever gains a cancellation path.
+
+### Breaking change: the `/health` response shape
+
+`GET /health` returned the bare string `ok`. It now returns JSON:
+
+```json
+{"status":"ok","round_loop":"running","last_completed_round":12,
+ "consecutive_failures":0}
+```
+
+`status` is kept as the first field with `"ok"` as its value, so a naive
+substring match still works — but anything comparing the whole body to
+`ok` will break, and `tests/integration.rs`'s own health test did. Listed
+here per `API_STABILITY.md`'s promise that breaking changes are disclosed
+in `STATUS.md`. The bar that justifies it: the previous shape could not
+express the failure it was being polled to detect.
+
 ## Research-line entry point
 
 The DSS research now has its own harness (scaffolded 2026-08-31 with the
@@ -998,6 +1177,47 @@ produce drift, not clarity. `AGENT.md` maps each one to where it lives.
 (none)
 
 ## Next
+
+**Stabilization: Tiers 1–5 are complete — `conflux-fl` is stable.**
+What's left on the framework line, in the order it makes sense to take
+it:
+
+- **Tier 5 — feature gaps**, all deferred past "stable" deliberately:
+  ADR 0012's stateful-aggregator proto extension (unlocks
+  FedNova/SCAFFOLD/FedOpt together) · ADR 0011's trusted-reference
+  sidecar · ADR 0005's Python SDK interface question · Phase 21's
+  profile-file `inherits` · a `cflux` CLI.
+- **Publishing (P1–P3), gated on a decision that hasn't been made.**
+  Whether crates.io publishing is intended is still open. If yes:
+  **P1** every internal path dependency needs a `version` alongside its
+  `path` (`cargo package -p conflux-core` fails today without it);
+  **P2** decide facade vs. no facade — twelve crates published
+  separately keeps the layering that lets a researcher take
+  `conflux-core` (77 transitive deps) without `conflux-server`'s 264,
+  and a thin `conflux-fl` facade would both give one dependency line
+  and reserve the name; **P3** `cargo publish --dry-run` in dependency
+  order (wave 1: `config`/`proto`/`registry`/`reputation`/`store`;
+  wave 2: `buffer`/`core`/`net`/`privacy`/`selector`; wave 3: `node`,
+  then `server`). If publishing is *not* intended, P1–P3 all drop and
+  the metadata still stands on its own for the license.
+
+Then `conflux-web`, then the DSS research line below.
+
+**DSS paper (2026-08-31).**
+[`docs/research/paper/dss.tex`](research/paper/dss.tex) — a standalone
+LaTeX write-up of the research line as it stands: title, abstract,
+introduction, related work, problem formulation, the proposed method,
+experimental setup, results, a dedicated ablation section, real-data
+validation, and a section for the four conclusions measurement
+overturned. Self-contained (inline `thebibliography`, no `.bib` or
+bibtex pass); figures resolve to `docs/research/figures/`. **Not
+compiled** — no TeX toolchain on this machine. This partly overlaps
+research task `p3` (extract a standalone results narrative), which was
+blocked on `p1`, the publication decision; the paper exists now either
+way, and `p1` still governs whether it's worth polishing toward a venue.
+
+---
+
 Every item from `docs/research/temporal-consistency-aggregation.md`'s
 original validation plan (§7.1, now 8 items) is done, including DSS
 itself, its mechanism ablation, its solo-attacker generalization, and the
@@ -1191,8 +1411,9 @@ phase-sized feature also listed in Part B above, not a small fix.
   spec §5 families, not two of three.
 - `FileStore`'s internals are still blocking `std::fs` calls under an
   `async fn` signature (Phase 7b note, unchanged).
-- `S3Store`'s `create_bucket` call on every `connect`/`connect_with_prefix`
-  is a minor inefficiency (checks/creates on every connection, not just
-  the first) — harmless (idempotent, MinIO/S3 both handle the
-  already-exists case cheaply) but worth trimming if `S3Store` sees
-  frequent reconnects in practice.
+- ~~`S3Store`'s `create_bucket` call on every
+  `connect`/`connect_with_prefix`~~ — **closed in Tier 2 (S7)**.
+  `connect` now checks `head_bucket` first, which also means
+  credentials scoped to object read/write no longer fail a permission
+  they never needed. Left listed, struck through, because this entry
+  outlived its fix once already.

@@ -102,6 +102,17 @@ pub struct Overrides {
     /// a deployment must choose it, since the right number depends on how
     /// many clients there are.
     pub quorum: Option<u32>,
+    /// The largest reassembled update, in bytes, the transport will
+    /// accept from one client in one round.
+    ///
+    /// A trust-boundary bound, not a tuning knob: `submit_delta` streams
+    /// chunks, and gRPC's own message limit is per *message*, so without
+    /// this a client that never stops sending grows the server's heap
+    /// without bound. Sized to the model, not to the network — a
+    /// 50,890-parameter `f32` model is ~200 KiB, so the 256 MiB builtin
+    /// is deliberately far above any plausible model while still being a
+    /// bound.
+    pub max_update_bytes: Option<u64>,
     /// Which client-sampling strategy to use, by registered name.
     pub selector: Option<String>,
     /// Fixed seeding or OS entropy. Mode-owned.
@@ -243,6 +254,11 @@ pub struct ResolvedConfig {
     /// topology-appropriate value, an experiment file, `CONFLUX_QUORUM`,
     /// or `--quorum`.
     pub quorum: Option<Resolved<u32>>,
+    /// The largest reassembled update, in bytes, the transport will
+    /// accept from one client in one round.
+    ///
+    /// See the same field on [`Overrides`] for why this exists.
+    pub max_update_bytes: Resolved<u64>,
     /// Which client-sampling strategy to use, by registered name.
     ///
     /// See the same field on [`Overrides`] for the full description.
@@ -517,6 +533,22 @@ pub fn resolve(
         (None, None, None) => None,
     };
 
+    // A framework safety bound, so it carries a builtin and is owned by
+    // neither axis — `None` for both topology and mode keeps ADR 0001's
+    // disjointness intact. 256 MiB.
+    let max_update_bytes = layer(
+        256 * 1024 * 1024_u64,
+        None,
+        None,
+        file_overrides.and_then(|o| o.max_update_bytes),
+        env.max_update_bytes,
+        cli.max_update_bytes,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("MAX_UPDATE_BYTES"),
+    );
+
     let selector = layer(
         "uniform_random".to_string(),
         None,
@@ -743,6 +775,7 @@ pub fn resolve(
         min_reputation_score,
         client_registry_ttl,
         quorum,
+        max_update_bytes,
         selector,
         seed_mode,
         seed_value,
@@ -808,6 +841,12 @@ impl ResolvedConfig {
             "client_registry_ttl",
             LoggedValue::Number(self.client_registry_ttl.value.to_string()),
             &self.client_registry_ttl.source,
+        ));
+        lines.push(log_line(
+            format,
+            "max_update_bytes",
+            LoggedValue::Number(self.max_update_bytes.value.to_string()),
+            &self.max_update_bytes.source,
         ));
         if let Some(quorum) = &self.quorum {
             lines.push(log_line(

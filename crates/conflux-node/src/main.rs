@@ -146,9 +146,46 @@ async fn main() {
 
     tonic::transport::Server::builder()
         .add_service(FlTransportServer::new(FlTransportService::new(bridge)))
-        .serve_with_incoming(TcpListenerStream::new(listener))
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal())
         .await
         .expect("local grpc server failed");
+    tracing::info!("local grpc server stopped; node exiting");
+}
+
+/// Resolves when the process is asked to stop: Ctrl-C on any platform, or
+/// `SIGTERM` on Unix (Tier 5, H3).
+///
+/// The node's shutdown is simpler than the server's — it holds no round
+/// state and writes no checkpoints, so there is nothing to drain. What it
+/// gains is an *orderly* stop: the local listener closes rather than the
+/// process vanishing, so a Python `ClientApp` mid-call sees a closed
+/// connection instead of a reset, and `docker stop` produces exit code 0
+/// rather than a signal death.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("received Ctrl-C; shutting down"),
+        _ = terminate => tracing::info!("received SIGTERM; shutting down"),
+    }
 }
 
 /// Applies the client-side privacy transform to `bridge` when one was

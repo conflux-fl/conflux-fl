@@ -950,6 +950,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-prost",
+ "tracing",
 ]
 
 [[package]]

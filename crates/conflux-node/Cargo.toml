@@ -21,7 +21,7 @@ conflux-net = { path = "../conflux-net" }
 # mirror the defaults inline" convention (see startup_guard.rs).
 conflux-privacy = { path = "../conflux-privacy" }
 rand.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
 # "sync": `ReceiverStream`, which adapts the mpsc channel behind
 # push mode's reconnecting task relay into a `Stream`.
 tokio-stream = { workspace = true, features = ["net", "sync"] }

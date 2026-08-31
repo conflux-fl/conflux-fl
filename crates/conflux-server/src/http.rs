@@ -34,8 +34,61 @@ pub fn router(state: Arc<AppState>, admin_token: Option<AdminToken>) -> Router {
         .with_state(state)
 }
 
-async fn health() -> &'static str {
-    "ok"
+/// What `/health` reports.
+///
+/// Tier 5 (H2). This used to be the string `"ok"`, unconditionally. The
+/// round loop runs in its own task, so when it stopped, this endpoint
+/// carried on saying the process was fine — which it was, in the narrow
+/// sense that it was still accepting connections, and not at all in the
+/// sense anyone polling `/health` means.
+#[derive(Serialize)]
+struct HealthResponse {
+    /// `"ok"` or `"unhealthy"`. Kept as the first field, and `"ok"` kept
+    /// as its value, because the previous endpoint returned exactly that
+    /// string and something out there may be matching on it.
+    status: &'static str,
+    /// `starting`, `running`, `degraded`, or `stopped`.
+    round_loop: &'static str,
+    /// The last round that completed, or `0` if none has yet.
+    last_completed_round: u64,
+    /// Failed rounds since the last success. Non-zero means the loop is
+    /// retrying, not that it has given up.
+    consecutive_failures: u32,
+    /// Why the loop is degraded or stopped. `None` when it is fine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+}
+
+/// Returns `200` while the round loop is alive — **including while it is
+/// degraded and retrying** — and `503` once it has stopped.
+///
+/// The distinction is deliberate and is the whole point of the endpoint: a
+/// restart does not fix an unreachable Redis, so reporting a retrying loop
+/// as unhealthy would turn a backend outage into a crash loop on top of a
+/// backend outage. A *stopped* loop is the state a restart or a config
+/// change is the only remedy for, so that is the one this reports.
+async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
+    let health = &state.round_loop_health;
+    let loop_state = health.state();
+    let code = if loop_state.is_healthy() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        code,
+        Json(HealthResponse {
+            status: if loop_state.is_healthy() {
+                "ok"
+            } else {
+                "unhealthy"
+            },
+            round_loop: loop_state.as_str(),
+            last_completed_round: health.last_completed_round(),
+            consecutive_failures: health.consecutive_failures(),
+            last_error: health.last_error(),
+        }),
+    )
 }
 
 #[derive(Serialize)]

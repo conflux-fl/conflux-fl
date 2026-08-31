@@ -231,47 +231,127 @@ async fn main() {
         );
     }
 
+    // One `watch` channel, three consumers: the two servers stop accepting
+    // work, and the round loop finishes the round it is in and then exits
+    // (Tier 5, H3). `watch` rather than `broadcast` because the value is a
+    // latch — a late subscriber must still see that shutdown was requested,
+    // which a missed broadcast message would not give it.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+
     let grpc_state = Arc::clone(&state);
+    // Read before the spawn: `state` is moved into the round loop below,
+    // and the bound is a plain `u64`.
+    let max_update_bytes = state.config.max_update_bytes.value;
+    let mut grpc_shutdown = shutdown_rx.clone();
     let grpc = tokio::spawn(async move {
         let mut builder = tonic::transport::Server::builder();
         if let Some(tls_config) = tls_config {
             builder = builder.tls_config(tls_config).expect("invalid TLS config");
         }
         builder
-            .add_service(FlTransportServer::new(FlTransportService::new(grpc_state)))
-            .serve(grpc_addr)
+            .add_service(FlTransportServer::new(
+                FlTransportService::new(grpc_state).with_max_update_bytes(max_update_bytes),
+            ))
+            .serve_with_shutdown(grpc_addr, async move {
+                // `changed()` waits for the next send, so a shutdown that
+                // fired before this task got scheduled would be missed —
+                // hence the initial `borrow()` check.
+                if *grpc_shutdown.borrow() {
+                    return;
+                }
+                let _ = grpc_shutdown.changed().await;
+            })
             .await
             .expect("grpc server failed");
+        tracing::info!("grpc server stopped accepting connections");
     });
 
     let http_state = Arc::clone(&state);
     let http_token = admin_token.clone();
+    let mut http_shutdown = shutdown_rx.clone();
     let http = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(http_addr)
             .await
             .expect("http bind failed");
         axum::serve(listener, conflux_server::router(http_state, http_token))
+            .with_graceful_shutdown(async move {
+                if *http_shutdown.borrow() {
+                    return;
+                }
+                let _ = http_shutdown.changed().await;
+            })
             .await
             .expect("http server failed");
+        tracing::info!("http server stopped accepting connections");
     });
 
     let round_state = Arc::clone(&state);
+    let health = Arc::clone(&state.round_loop_health);
+    let mut round_shutdown = shutdown_rx.clone();
     let rounds = tokio::spawn(async move {
         loop {
+            // Checked between rounds, never during one. `run_round` is
+            // awaited as a unit below, so a shutdown that arrives mid-round
+            // waits for that round to finish rather than abandoning
+            // buffered submissions and a half-written checkpoint (Tier 5,
+            // H3).
+            if *round_shutdown.borrow() {
+                tracing::info!("shutdown requested; round loop exiting between rounds");
+                health.record_stopped(None);
+                break;
+            }
+
             match run_round(&round_state).await {
-                Ok(summary) => tracing::info!(?summary, "round completed"),
-                // No client has submitted yet (often: none have registered
-                // yet) — retryable, not fatal. Every other error (a
-                // genuinely exhausted privacy budget, a store/registry
-                // failure) stops the loop.
-                Err(conflux_server::ServerError::Aggregator(
-                    conflux_core::AggregatorError::EmptyBatch,
-                )) => {
-                    tracing::info!("no submissions yet this round; retrying shortly");
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                Ok(summary) => {
+                    tracing::info!(?summary, "round completed");
+                    health.record_success(summary.round);
+                }
+                // Tier 5 (H2). This used to `break` on everything but
+                // `EmptyBatch`, so one Redis reconnect ended the
+                // experiment permanently while the process stayed up.
+                // `is_transient` draws the line — see `ServerError` for
+                // why it falls where it does.
+                Err(e) if e.is_transient() => {
+                    let failures = health.record_transient_failure(&e.to_string());
+                    let delay = conflux_server::backoff_secs(failures);
+                    // `EmptyBatch` is the ordinary "nobody has registered
+                    // yet" case and would be alarming at warn level every
+                    // two seconds on a freshly-started server.
+                    if matches!(
+                        e,
+                        conflux_server::ServerError::Aggregator(
+                            conflux_core::AggregatorError::EmptyBatch
+                        )
+                    ) {
+                        tracing::info!(
+                            retry_in_secs = delay,
+                            "no submissions yet this round; retrying"
+                        );
+                    } else {
+                        tracing::warn!(
+                            error = %e,
+                            consecutive_failures = failures,
+                            retry_in_secs = delay,
+                            "round failed with a retryable error; backing off"
+                        );
+                    }
+                    // Racing the sleep against shutdown, so Ctrl-C during a
+                    // 60-second backoff doesn't wait out the backoff.
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
+                        _ = round_shutdown.changed() => {}
+                    }
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "round loop stopped");
+                    // Fatal: an exhausted privacy budget. Stopping is the
+                    // specified behavior here, not a failure to handle
+                    // something — but `/health` now reports it.
+                    tracing::error!(error = %e, "round loop stopped: unrecoverable");
+                    health.record_stopped(Some(&e.to_string()));
                     break;
                 }
             }
@@ -279,6 +359,46 @@ async fn main() {
     });
 
     let _ = tokio::join!(grpc, http, rounds);
+    tracing::info!("shutdown complete");
+}
+
+/// Resolves when the process is asked to stop: Ctrl-C on any platform, or
+/// `SIGTERM` on Unix.
+///
+/// `SIGTERM` is the one that matters in production and the one that was
+/// missing (Tier 5, H3) — it is what `docker stop`, a Kubernetes eviction,
+/// and systemd all send first, with `SIGKILL` following after a grace
+/// period. Without a handler the default disposition terminates the process
+/// immediately, so the grace period was being spent doing nothing and the
+/// round in flight was lost either way.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Failing to install the handler must not take the server
+            // down — it just means SIGTERM keeps its default disposition,
+            // which is what happened before this function existed.
+            Err(e) => {
+                tracing::warn!(error = %e, "could not install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("received Ctrl-C; shutting down"),
+        _ = terminate => tracing::info!("received SIGTERM; shutting down"),
+    }
 }
 
 /// Reads a handful of `conflux-config` `Overrides` fields from their own
@@ -303,6 +423,7 @@ fn overrides_from_env() -> Overrides {
         min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
         reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),
         quorum: var("CONFLUX_QUORUM"),
+        max_update_bytes: var("CONFLUX_MAX_UPDATE_BYTES"),
         round_timeout_secs: var("CONFLUX_ROUND_TIMEOUT_SECS"),
         clip_norm: var("CONFLUX_CLIP_NORM"),
         noise_multiplier: var("CONFLUX_NOISE_MULTIPLIER"),

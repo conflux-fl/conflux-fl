@@ -31,7 +31,7 @@ fn honest_batch() -> Vec<ClientDelta> {
             ClientDelta {
                 client_id: format!("honest-{i}"),
                 round: 1,
-                weights: encode_weights(&vec![1.0 + jitter; DIM]),
+                weights: encode_weights(&[1.0 + jitter; DIM]),
                 num_samples: 10,
             }
         })
