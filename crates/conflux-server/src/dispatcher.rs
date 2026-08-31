@@ -48,19 +48,43 @@ impl RoundDispatcher for AppState {
         let client_id = first.client_id.clone();
         let round = first.round;
         let num_samples = first.num_samples;
+        // ADR 0012's scalar field follows `num_samples`'s convention
+        // exactly: a client repeats it on every chunk, so it is read from
+        // whichever chunk arrived first rather than requiring chunk 0.
+        let local_steps = first.local_steps;
 
         let mut sorted = chunks;
         sorted.sort_by_key(|c| c.chunk_index);
         let mut data = Vec::new();
+        // ADR 0012's vector field is chunked exactly like `data` — chunk
+        // i carries slice i — so it reassembles the same way, in the same
+        // pass, under the same ordering.
+        let mut control_variate: Option<Vec<u8>> = None;
         for chunk in &sorted {
             data.extend_from_slice(&chunk.data);
+            if let Some(slice) = &chunk.control_variate {
+                control_variate
+                    .get_or_insert_with(Vec::new)
+                    .extend_from_slice(slice);
+            }
         }
 
+        // Deliberately *not* checking that the reassembled control
+        // variate decodes to as many weights as `weights` does. That
+        // check is real and necessary, but it belongs to whichever
+        // aggregator reads the field: this server is opaque to model
+        // architecture by design (ADR 0004), so it has no basis for
+        // deciding what length is correct. A client that populated the
+        // field on only some of its chunks therefore produces a short
+        // vector here, and the aggregator rejects it — see
+        // `ClientDelta.control_variate` in the schema.
         let delta = conflux_proto::ClientDelta {
             client_id: client_id.clone(),
             round,
             weights: data,
             num_samples,
+            local_steps,
+            control_variate,
         };
 
         let buffer = self

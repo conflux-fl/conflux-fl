@@ -126,6 +126,51 @@ message DeltaChunk {
   // entirely — both of which matter, because a client that inflates it
   // buys proportional influence over the aggregate.
   uint64 num_samples = 6;
+
+  // --- ADR 0012 -------------------------------------------------------
+  // Two optional per-client fields, for methods that need more than a
+  // weight vector and a sample count. Both are `optional` with explicit
+  // presence: absent means "this client is not running that method,"
+  // which is a different fact from zero or empty. Every existing client
+  // sets neither, and every existing aggregator ignores both.
+  //
+  // ADR 0012's own snippet adds these to `ClientDelta` only. They are
+  // here as well because `ClientDelta` is never sent on the wire — it is
+  // what the server *builds* from these chunks — so a field that exists
+  // only there could never be populated by a client at all.
+
+  // How many local optimization steps this client took this round.
+  // FedNova's normalization input (Wang, Wang, Nusrat, Poor & Rajan,
+  // 2020): clients that train longer produce larger updates, and
+  // averaging them unnormalized silently weights whoever ran the most
+  // steps.
+  //
+  // A scalar, so it follows `num_samples`'s convention exactly —
+  // repeated identically on every chunk of one client's stream, and read
+  // from whichever chunk arrives first rather than requiring chunk 0.
+  // Self-reported and unauthenticated, on the same terms.
+  optional uint32 local_steps = 7;
+
+  // This chunk's slice of the client's control-variate vector.
+  // SCAFFOLD's client correction term (Karimireddy, Kale, Mohri, Reddi,
+  // Stich & Suresh, 2020), same dimensionality and same little-endian
+  // f32 encoding as the model update itself, so no second codec exists.
+  //
+  // Unlike `local_steps`, this is a full vector and therefore *chunked*,
+  // exactly like `data`: chunk i carries slice i, and the server
+  // concatenates in `chunk_index` order. A client splitting its update
+  // across N chunks splits its control variate in lockstep. Populate it
+  // on every chunk or on none — a partial population reassembles into a
+  // short vector, which the consuming aggregator rejects on a length
+  // check, because the server itself cannot know what length is correct
+  // (ADR 0004: it is opaque to model architecture).
+  //
+  // These bytes count toward `max_update_bytes` along with `data`. They
+  // have to: the bound exists so that one client cannot grow the
+  // server's heap without limit, and a ceiling that ignored a
+  // client-controlled byte field would simply relocate the flood into
+  // it.
+  optional bytes control_variate = 8;
 }
 
 // The server's answer to a completed submission.
@@ -160,4 +205,19 @@ message ClientDelta {
   // FedAvg's SampleCountWeighting input (McMahan et al., 2017). See
   // DeltaChunk.num_samples for what trusting this costs.
   uint64 num_samples = 4;
+
+  // --- ADR 0012 -------------------------------------------------------
+  // Reassembled from the correspondingly-named DeltaChunk fields; see
+  // those for what each means and what trusting it costs. Absent here
+  // means no chunk carried one.
+
+  // FedNova's local step count, taken from the first chunk received.
+  optional uint32 local_steps = 5;
+
+  // SCAFFOLD's control variate: every chunk's slice concatenated in
+  // `chunk_index` order, the same little-endian f32 encoding as
+  // `weights`. An aggregator that reads this must check it decodes to
+  // the same length as `weights` — the transport cannot, being opaque to
+  // model architecture.
+  optional bytes control_variate = 6;
 }

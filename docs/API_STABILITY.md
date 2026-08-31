@@ -73,7 +73,12 @@ These hold across every crate and are not expected to change:
 - **No public function panics on caller input.** Aggregators may reject a
   batch, but must never panic and must never return a non-finite value;
   `conflux-core/tests/adversarial_input.rs` enforces this against every
-  shipped method. Startup functions in the binaries *do* panic on
+  shipped method. For the four aggregators that carry state across rounds,
+  the promise extends to that state:
+  `conflux-core/tests/stateful_adversarial_input.rs` enforces that no
+  sequence of accepted batches can leave an aggregator unable to handle a
+  clean one. Tier 6 added it because the single-batch suite could not
+  express that failure, and four real defects were living in the gap. Startup functions in the binaries *do* panic on
   misconfiguration, deliberately — failing to start is the correct
   response to a deployment that would be unsafe.
 - **Adding a strategy is additive.** A new aggregator, selector, or

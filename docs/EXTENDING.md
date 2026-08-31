@@ -106,6 +106,115 @@ no topology/mode ownership, unless your parameter genuinely is a
 research-vs-production posture rather than an algorithm-tuning value —
 if it is, follow `require_node_auth`'s mode-owned precedent instead).
 
+### If your method needs memory across rounds (ADR 0012)
+
+Some published methods cannot work from a single batch: FedOpt keeps
+moment estimates, Centered Clipping keeps a running reference, FoolsGold
+keeps per-client history. **Hold that state in a `Mutex` field on your
+aggregator. Do not reach for `&mut self`.**
+
+```rust
+pub struct MyStatefulAggregator {
+    // `Mutex` because `aggregate` takes `&self`: one aggregator serves
+    // every round behind an `Arc`, so interior mutability is what lets a
+    // method carry memory without changing the trait for the twelve
+    // methods that don't need any.
+    history: std::sync::Mutex<HashMap<String, Vec<f32>>>,
+}
+```
+
+Why not `&mut self`: it would force every *existing* stateless
+aggregator behind a `Box<dyn Aggregator>` to be called through exclusive
+access as well, which is a change to `conflux-server`'s whole round
+pipeline, in exchange for a capability a minority of methods need. Four
+shipped methods already use the `Mutex` pattern — `FoolsGoldAggregator`,
+`CenteredClippingAggregator`, `DssAggregator`, and whatever you are
+about to write — so copy one of them rather than inventing a third
+approach.
+
+**Two obligations come with statefulness**, both of which Tier 6 found
+the hard way:
+
+1. **Validate what you store, not only what you receive.**
+   `decode_and_validate` guards the batch in front of you. Nothing
+   re-checks the reference or history you derived from an earlier batch.
+   A single finite, validation-passing update drove Centered Clipping's
+   stored reference to `NaN` — and because that reference is what every
+   later round clips against, no honest round afterwards could recover.
+2. **Add cross-round tests.** `tests/adversarial_input.rs` hands each
+   aggregator one batch and cannot express "round N poisons round N+1",
+   which is the whole failure class you have just opted into. Add your
+   method to `tests/stateful_adversarial_input.rs` instead — it submits
+   sequences, and it exists because four real defects were living in
+   that gap.
+
+### If your method needs a field `ClientDelta` doesn't have (ADR 0012)
+
+FedNova needs each client's local step count; SCAFFOLD needs a full
+control-variate vector. Both already exist on the wire as **optional**
+fields:
+
+| Field | Type | Shape |
+|---|---|---|
+| `local_steps` | `Option<u32>` | scalar — a client repeats it on every chunk, and the server reads it from whichever chunk arrives first |
+| `control_variate` | `Option<Vec<u8>>` | vector — chunked exactly like `weights`, concatenated in `chunk_index` order, same little-endian f32 codec |
+
+Read them straight off `ClientDelta`. `None` means "this client is not
+running your method", which is deliberately distinct from `Some(0)` or
+`Some(vec![])`.
+
+If you read `control_variate`, **check its decoded length against
+`weights`' length and reject a mismatch**. The transport deliberately
+does not: `conflux-server` is opaque to model architecture (ADR 0004), so
+it has no basis for knowing what length is correct, and a client that
+populated the field on only some of its chunks produces a short vector
+that reaches you intact rather than being silently padded.
+
+Adding a *third* such field is the same three edits — the `.proto`
+message pair, the reassembly in `conflux-server`'s `submit_delta`, and
+the byte count in `conflux-net`'s `submit_delta` (any client-controlled
+payload field must count toward `max_update_bytes`, or the bound simply
+moves aside). Construct `ClientDelta`/`DeltaChunk` literals with
+`..Default::default()` so the next addition doesn't break yours.
+
+### If your method needs a signal the server computes (ADR 0011)
+
+FLTrust and Zeno score clients against something the *server* produces
+from its own data, not against anything in the batch. That needs a
+training capability `conflux-server` deliberately does not have (ADR
+0004), so it lives in the optional `conflux-trusted-reference` sidecar.
+
+To add another such method:
+
+1. Implement `Aggregator` as usual, and override two defaulted methods:
+
+   ```rust
+   fn requires_trusted_reference(&self) -> bool { true }
+   fn set_trusted_reference(&self, r: TrustedReference) { /* store it */ }
+   ```
+
+   The round pipeline calls the first to decide whether to contact a
+   sidecar at all, then the second before `aggregate`. Store what you are
+   given behind a `Mutex`, per ADR 0012.
+
+2. **Refuse to run without it.** Return
+   `AggregatorError::MissingTrustedReference` rather than falling back to
+   anything. The obvious fallback — an unweighted mean — is FedAvg, which
+   is the method these exist to replace, and substituting it silently at
+   the moment the defense should engage produces a checkpoint that looks
+   healthy and is not.
+
+3. If you need a signal the sidecar does not already serve, add an RPC to
+   `conflux-proto/proto/trusted_reference.proto` and a method to the
+   `TrustedModel` trait. `ScoreUpdates` already exists and is unused by
+   any aggregator — Zeno's, waiting for Zeno.
+
+**Do not add `conflux-trusted-reference` as a dependency of anything
+`conflux-server` builds.** The server calls a sidecar over gRPC using the
+client in `conflux-net`; it must never *be* one, or the model-runtime
+dependency ADR 0004 keeps out of the server comes back in through the
+side door. CI's `isolation` job fails the build if that edge appears.
+
 ## Adding a new client selector
 
 Same shape, in `conflux-selector`:

@@ -1,10 +1,17 @@
 # 0011 — FLTrust/Zeno need server-side training: revisiting ADR 0004's boundary
 
-**Status: proposed — pending project-owner review.** This is a scoping
-ADR, not an implementation plan: it records the boundary question and a
-recommendation, the way `docs/AGGREGATION_LANDSCAPE.md`'s "Update
-(2026-08-23)" section already flagged was needed before FLTrust/Zeno
-could move past being a name in a table.
+**Status: accepted and implemented (2026-08-31) — option 2.** Approved
+by the project owner. The sidecar exists
+(`crates/conflux-trusted-reference`), FLTrust ships as an ordinary
+`Aggregator` family member consuming it, and the boundary is enforced in
+CI rather than asserted in prose. See "What was actually built" at the
+end for what landed and what deliberately did not.
+
+Originally a scoping ADR rather than an implementation plan: it recorded
+the boundary question and a recommendation, the way
+`docs/AGGREGATION_LANDSCAPE.md`'s "Update (2026-08-23)" section already
+flagged was needed before FLTrust/Zeno could move past being a name in a
+table.
 
 ## Context
 
@@ -73,7 +80,7 @@ Three shapes this could take, none free:
    most expensive in the whole tracked landscape. Catalog completeness
    is a nice-to-have, not a requirement.
 
-## Recommendation (not yet decided)
+## Recommendation (adopted)
 
 Option 2, if FLTrust/Zeno get prioritized at all: a
 `conflux-trusted-reference` sidecar, gRPC-adjacent to `conflux-server`
@@ -116,3 +123,55 @@ uncoupled from the production binary's own dependency graph.
   paper's own combine/scoring formula) can be drafted independently; only
   wiring up a *real* trusted dataset/training signal needs the sidecar
   question resolved.
+
+## What was actually built (2026-08-31)
+
+Option 2, as recommended. The pieces, and where each lives:
+
+| Piece | Where | Why there |
+|---|---|---|
+| The hop's schema | `conflux-proto/proto/trusted_reference.proto` | Its own file, not folded into `fl_transport.proto`, so a reader can see at a glance that it is a separate contract and not part of the client-facing surface |
+| The client the server uses | `conflux-net::TrustedReferenceTransport` | **`conflux-server` gains zero new dependencies**, exactly as this ADR promised. It already depends on `conflux-net`, so it can *call* a sidecar without ever linking one |
+| The sidecar itself | `crates/conflux-trusted-reference` (lib + bin) | A separate process. Never a `conflux-server` dependency, at any depth |
+| FLTrust | `conflux-core::FlTrustAggregator`, family `trusted` | An ordinary `Aggregator` family member (ADR 0002), as this ADR said it would be |
+
+### Three decisions this ADR left open
+
+**1. How the reference reaches a synchronous `aggregate`.**
+`Aggregator::aggregate` takes `&self` and does no I/O; fetching a
+reference is `async` network work. Resolved with **ADR 0012's
+interior-mutability pattern**, which had landed hours earlier: the round
+pipeline fetches the reference, then calls
+`Aggregator::set_trusted_reference` — a new trait method with a default
+no-op, so the twelve existing methods were untouched. The two ADRs turned
+out to need each other, which neither anticipated.
+
+**2. What happens when the reference is missing.** The obvious fallback
+— aggregate by unweighted mean — *is* FedAvg, the method FLTrust exists
+to replace, substituted at exactly the moment the defense was supposed to
+engage, producing a checkpoint indistinguishable from a healthy one.
+`FlTrustAggregator` returns `MissingTrustedReference` instead, and
+`conflux-server` refuses to start when a `trusted`-family aggregator is
+configured with no sidecar. Both are tested.
+
+**3. Whether the boundary is enforced or merely stated.** ADR 0010 has
+asserted the same kind of invariant about `conflux-attacks` since Phase
+12, in prose only — and an invariant a build does not check is a comment.
+CI now has an `isolation` job that fails if `cargo tree -p conflux-server
+-e normal` contains either crate. It covers ADR 0010's older claim too.
+
+### What deliberately did not land
+
+- **Zeno.** The `ScoreUpdates` RPC exists, the sidecar implements it, and
+  a test exercises it over the real hop — but no `Aggregator` consumes it
+  yet. Zeno's own combine (score, then keep a top-scoring subset) is its
+  own phase brief, exactly as this ADR's last bullet says.
+- **A deep-learning runtime.** The shipped `TrustedModel` implementation
+  is `LinearLeastSquares` — real gradient descent, tested to recover
+  known coefficients from a wrong start, and honestly a *linear* model.
+  A deployment training a convnet implements `TrustedModel` against
+  `ort`/`tch`/a Python sidecar. That is the extension this design exists
+  to enable, and precisely the dependency it kept out of
+  `conflux-server`.
+- **Option 3 is no longer live** for FLTrust, which is built. It remains
+  live for Zeno.

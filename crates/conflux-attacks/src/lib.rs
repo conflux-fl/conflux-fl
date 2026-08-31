@@ -8,6 +8,41 @@
 //! See `docs/phases/phase-12-attack-simulation.md` for the full source
 //! list, and `docs/EXTENDING.md`'s "Adding a new attack" section for how
 //! to add another one.
+//!
+//! # Example
+//!
+//! An attack sees the honest submissions before crafting its own — the
+//! omniscient adversary most robustness papers evaluate against.
+//!
+//! ```
+//! use conflux_attacks::{Attack, SignFlippingAttack};
+//! use conflux_proto::{ClientDelta, decode_weights, encode_weights};
+//!
+//! let honest: Vec<ClientDelta> = [[1.0_f32, 2.0, 3.0], [1.1, 2.1, 2.9]]
+//!     .iter()
+//!     .enumerate()
+//!     .map(|(i, w)| ClientDelta {
+//!         client_id: format!("honest-{i}"),
+//!         round: 1,
+//!         weights: encode_weights(w),
+//!         num_samples: 10,
+//!         ..Default::default()
+//!     })
+//!     .collect();
+//!
+//! let attack = SignFlippingAttack { scale: 2.0 };
+//! let malicious = attack.craft(&honest, 3);
+//! assert_eq!(malicious.len(), 3);
+//!
+//! // Negated and scaled: the honest mean points one way, this points
+//! // the other, harder.
+//! let crafted = decode_weights(&malicious[0].weights).unwrap();
+//! assert!(crafted.iter().all(|w| *w < 0.0));
+//!
+//! // Zero attackers is an empty vector, not a panic — sweeps iterate
+//! // attacker counts starting at zero.
+//! assert!(attack.craft(&honest, 0).is_empty());
+//! ```
 
 #![warn(missing_docs)]
 

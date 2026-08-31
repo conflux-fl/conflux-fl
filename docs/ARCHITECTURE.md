@@ -19,7 +19,7 @@ stronger global model (ADR 0009).
 
 ## Workspace layout
 
-Thirteen crates, dependency graph is acyclic:
+Fourteen crates, dependency graph is acyclic:
 
 ```mermaid
 graph TD

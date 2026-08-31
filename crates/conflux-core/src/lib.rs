@@ -6,15 +6,85 @@
 //! family member varies, so a new method is typically a short trait impl
 //! reusing the family's existing accumulation logic rather than a whole
 //! new implementation written from scratch.
+//!
+//! # Example
+//!
+//! Config names a method; this crate builds it. `conflux-server` never
+//! learns what "krum" is — that is the whole point of the registry
+//! (ADR 0002).
+//!
+//! ```
+//! use conflux_core::{AggregatorParams, build_aggregator};
+//! use conflux_proto::{ClientDelta, encode_weights};
+//!
+//! fn delta(id: &str, w: &[f32]) -> ClientDelta {
+//!     ClientDelta {
+//!         client_id: id.to_string(),
+//!         round: 1,
+//!         weights: encode_weights(w),
+//!         num_samples: 10,
+//!         ..Default::default()
+//!     }
+//! }
+//!
+//! // Three clients agreeing, and one that is not.
+//! let batch = [
+//!     delta("a", &[1.0, 1.0, 1.0]),
+//!     delta("b", &[1.1, 0.9, 1.0]),
+//!     delta("c", &[0.9, 1.1, 1.0]),
+//!     delta("attacker", &[50.0, 50.0, 50.0]),
+//! ];
+//!
+//! // FedAvg averages everyone, so the attacker pulls the result.
+//! let fedavg = build_aggregator("fedavg", AggregatorParams::default()).unwrap();
+//! let out = fedavg.aggregate(&batch).unwrap();
+//! assert!(out[0] > 10.0);
+//!
+//! // Krum selects the single most representative update instead.
+//! let krum = build_aggregator("krum", AggregatorParams::default()).unwrap();
+//! let out = krum.aggregate(&batch).unwrap();
+//! assert!(out[0] < 2.0);
+//! ```
+//!
+//! Hostile input is a typed `Err`, never a panic and never a `NaN` in
+//! the checkpoint — see `tests/adversarial_input.rs`:
+//!
+//! ```
+//! # use conflux_core::{AggregatorError, AggregatorParams, build_aggregator};
+//! # use conflux_proto::{ClientDelta, encode_weights};
+//! # fn delta(id: &str, w: &[f32], n: u64) -> ClientDelta {
+//! #     ClientDelta { client_id: id.into(), round: 1, weights: encode_weights(w),
+//! #         num_samples: n, ..Default::default() }
+//! # }
+//! let fedavg = build_aggregator("fedavg", AggregatorParams::default()).unwrap();
+//!
+//! // A client submitting NaN is named, along with the coordinate.
+//! let err = fedavg
+//!     .aggregate(&[delta("a", &[1.0], 10), delta("hostile", &[f32::NAN], 10)])
+//!     .unwrap_err();
+//! assert!(matches!(err, AggregatorError::NonFiniteWeights { .. }));
+//!
+//! // So is one claiming an impossible sample count. `num_samples` is
+//! // unauthenticated, and FedAvg weights by it.
+//! let err = fedavg
+//!     .aggregate(&[delta("a", &[1.0], 10), delta("liar", &[99.0], u64::MAX)])
+//!     .unwrap_err();
+//! assert!(matches!(err, AggregatorError::ImplausibleSampleCount { .. }));
+//! ```
 
 #![warn(missing_docs)]
 
 mod averaging;
+mod flanders;
+mod optimization;
 mod robust;
 mod temporal;
+mod trusted;
 mod weights;
 
 pub use averaging::{AveragingWeighting, FedAvg, SampleCountWeighting, WeightedAverageAggregator};
+pub use flanders::{ClientFlandersDiagnostic, FlandersAggregator};
+pub use optimization::{FedOptAggregator, FedOptParams, FedOptVariant};
 pub use robust::{
     BulyanFilter, CoordinateWiseAggregator, CoordinateWiseRobustStatistic, DistanceMatrix,
     DivideAndConquerFilter, FabaFilter, FilteredAggregator, GeometricMedianStatistic, KrumFilter,
@@ -24,6 +94,7 @@ pub use robust::{
 pub use temporal::{
     CenteredClippingAggregator, ClientDssDiagnostic, DssAggregator, FoolsGoldAggregator,
 };
+pub use trusted::{FlTrustAggregator, TrustedReference};
 
 use conflux_config::{StrategyEntry, StrategyKind};
 use conflux_proto::ClientDelta;
@@ -50,7 +121,70 @@ pub trait Aggregator: Send + Sync {
     /// an `Arc`, and methods that carry state across rounds (the
     /// `temporal` family) use interior mutability rather than changing
     /// this signature for everyone.
+    ///
+    /// # Cross-round state: the standing pattern (ADR 0012)
+    ///
+    /// **A method that needs memory across rounds holds it in a `Mutex`
+    /// field on itself. It does not get a `&mut self` signature.** This
+    /// was decided rather than defaulted into: `&mut self` would force
+    /// every *existing* stateless aggregator behind a
+    /// `Box<dyn Aggregator>` to be called through exclusive access too,
+    /// which is a change to `conflux-server`'s whole round pipeline (it
+    /// treats a boxed aggregator as freely shareable) in exchange for a
+    /// capability a minority of methods need.
+    ///
+    /// Four shipped methods already follow it, and they are the worked
+    /// examples to copy from:
+    ///
+    /// | Method | State it keeps |
+    /// |---|---|
+    /// | [`FoolsGoldAggregator`] | per-client update history |
+    /// | [`CenteredClippingAggregator`] | the running reference vector |
+    /// | [`DssAggregator`] | per-client deviation traces |
+    /// | (future) FedOpt | first/second-moment estimates |
+    ///
+    /// Two obligations come with it, both learned the hard way in Tier 6
+    /// rather than anticipated:
+    ///
+    /// - **Validate what you store, not just what you receive.**
+    ///   `decode_and_validate` guards the batch in front of you; nothing
+    ///   re-checks the state you derived from an earlier one. A finite,
+    ///   accepted update drove `CenteredClippingAggregator`'s reference
+    ///   to `NaN` permanently, and every later round with it.
+    /// - **A stateful method needs cross-round tests.** Single-batch
+    ///   tests cannot express "round N poisons round N+1", which is the
+    ///   entire failure class statefulness introduces. See
+    ///   `tests/stateful_adversarial_input.rs`.
     fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError>;
+
+    /// Whether this method needs a server-computed trusted reference
+    /// each round (ADR 0011).
+    ///
+    /// `false` for every method that reads only the batch, which is all
+    /// of them except the `trusted` family. The round pipeline calls
+    /// this to decide whether to contact a sidecar at all — so a
+    /// deployment running `fedavg` opens no sidecar connection even if
+    /// one happens to be configured, and a deployment running `fltrust`
+    /// without one fails loudly rather than quietly averaging.
+    fn requires_trusted_reference(&self) -> bool {
+        false
+    }
+
+    /// Supplies this round's trusted reference, before [`Self::aggregate`]
+    /// is called.
+    ///
+    /// A default no-op, so adding the `trusted` family changed nothing
+    /// for the twelve methods that ignore it — the additive-extension
+    /// rule ADR 0002 exists to protect. `&self` for the same reason
+    /// `aggregate` takes it: the aggregator is shared behind an `Arc`,
+    /// and a member that stores this uses interior mutability (ADR
+    /// 0012), exactly as `FlTrustAggregator` does.
+    ///
+    /// Split from `aggregate` rather than passed as an argument because
+    /// the reference arrives over the network: fetching it is `async`
+    /// and `aggregate` is not, so the server does the I/O first and
+    /// hands the result across.
+    fn set_trusted_reference(&self, _reference: TrustedReference) {}
 }
 
 // Registers every shipped, config-selectable family member into
@@ -64,6 +198,21 @@ pub trait Aggregator: Send + Sync {
 // string.
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "fedavg" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "fltrust" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "flanders" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedyogi" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadam" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadagrad" }
 }
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "krum" }
@@ -140,6 +289,34 @@ pub struct AggregatorParams {
     /// `centered_clipping`. Problem-scale dependent: see
     /// [`CenteredClippingAggregator`]'s own fidelity notes.
     pub clip_radius: f32,
+    /// The `optimization` family's server learning rate `η`, and its
+    /// adaptivity floor `τ`. `None` for either means "use the paper's
+    /// own default for the selected variant" — which is the right
+    /// behavior, because Reddi et al. publish a `τ` (`1e-3`) and
+    /// deliberately do not publish an `η`: the server learning rate is
+    /// the parameter their whole experimental section sweeps, so a
+    /// framework that invented one would be making a recommendation the
+    /// literature declines to make.
+    ///
+    /// Read only by `fedadagrad`/`fedadam`/`fedyogi`; every other method
+    /// ignores them, exactly as they ignore `byzantine_fraction`.
+    pub server_learning_rate: Option<f32>,
+    /// The `optimization` family's `τ`. See
+    /// [`Self::server_learning_rate`].
+    pub server_tau: Option<f32>,
+}
+
+/// Builds a variant's parameters, letting config override the paper's
+/// defaults per field rather than all-or-nothing.
+fn fedopt_params(variant: FedOptVariant, params: &AggregatorParams) -> FedOptParams {
+    let mut p = FedOptParams::for_variant(variant);
+    if let Some(eta) = params.server_learning_rate {
+        p.server_learning_rate = eta;
+    }
+    if let Some(tau) = params.server_tau {
+        p.tau = tau;
+    }
+    p
 }
 
 impl Default for AggregatorParams {
@@ -147,6 +324,8 @@ impl Default for AggregatorParams {
         Self {
             byzantine_fraction: 0.2,
             clip_radius: 1.0,
+            server_learning_rate: None,
+            server_tau: None,
         }
     }
 }
@@ -154,6 +333,22 @@ impl Default for AggregatorParams {
 /// Constructs the `Aggregator` named by a resolved `config.aggregator.value`.
 /// Every match arm mirrors one `inventory::submit!` above — adding a
 /// family member means adding both, not restructuring this function.
+///
+/// ```
+/// use conflux_core::{AggregatorParams, build_aggregator};
+///
+/// // Parameters are a struct rather than positional arguments, so a
+/// // third one is a new field instead of a signature break.
+/// let params = AggregatorParams {
+///     byzantine_fraction: 0.25,
+///     ..Default::default()
+/// };
+/// assert!(build_aggregator("trimmed_mean", params).is_ok());
+///
+/// // An unknown name is a typed error, not a panic or a silent default
+/// // — a config typo must not quietly become FedAvg.
+/// assert!(build_aggregator("fedavgg", AggregatorParams::default()).is_err());
+/// ```
 pub fn build_aggregator(
     name: &str,
     params: AggregatorParams,
@@ -161,6 +356,7 @@ pub fn build_aggregator(
     let AggregatorParams {
         byzantine_fraction,
         clip_radius,
+        ..
     } = params;
     match name {
         "fedavg" => Ok(Box::new(FedAvg::default())),
@@ -199,6 +395,46 @@ pub fn build_aggregator(
         ))),
         "foolsgold" => Ok(Box::new(FoolsGoldAggregator::default())),
         "centered_clipping" => Ok(Box::new(CenteredClippingAggregator::new(clip_radius))),
+        // Selectable by config like any other method, but it is the one
+        // entry here that will not run on its own: it refuses to
+        // aggregate until the round pipeline injects a trusted reference
+        // from a sidecar (ADR 0011). Selecting it without running one is
+        // a startup-time failure, not a silent fallback.
+        "fltrust" => Ok(Box::new(FlTrustAggregator::new())),
+        // FLANDERS is a pre-aggregation *filter*, so it needs something
+        // to aggregate what survives. The paper names its own choice —
+        // "ϕ = Krum or any other existing robust aggregation heuristic"
+        // — and the catalog follows it rather than pairing with `fedavg`.
+        //
+        // That is not a stylistic preference. `docs/research/` §5.14
+        // measured `flanders_fedavg` scoring *worse than undefended
+        // FedAvg* against every Sybil attack tested (24.5 vs 17.2 at 20%
+        // malicious, 84.0 vs 67.9 at 80%), because a colluder that
+        // repeats itself is the easiest client in the batch to forecast
+        // and therefore the last one the filter drops. Paired with Krum
+        // as the paper specifies, it holds (0.33 on the same rows). A
+        // catalog entry that shipped the harmful pairing would be
+        // misrepresenting the method.
+        "flanders" => Ok(Box::new(FlandersAggregator::new(build_aggregator(
+            "krum", params,
+        )?))),
+        // The `optimization` family (Reddi et al., 2021). Three names,
+        // one type: the variants differ in exactly one line of the
+        // paper's Algorithm 2, so a discriminant is the honest shape.
+        // They read `AggregatorParams::server_learning_rate` and friends
+        // rather than the robust family's `byzantine_fraction`.
+        "fedadagrad" => Ok(Box::new(FedOptAggregator::with_params(
+            FedOptVariant::Adagrad,
+            fedopt_params(FedOptVariant::Adagrad, &params),
+        ))),
+        "fedadam" => Ok(Box::new(FedOptAggregator::with_params(
+            FedOptVariant::Adam,
+            fedopt_params(FedOptVariant::Adam, &params),
+        ))),
+        "fedyogi" => Ok(Box::new(FedOptAggregator::with_params(
+            FedOptVariant::Yogi,
+            fedopt_params(FedOptVariant::Yogi, &params),
+        ))),
         other => Err(AggregatorBuildError::Unknown(other.to_string())),
     }
 }
@@ -280,6 +516,34 @@ pub enum AggregatorError {
         client_id: String,
         /// The buffer's length in bytes, which is not a multiple of 4.
         len: usize,
+    },
+    /// A `trusted`-family aggregator was asked to run without a
+    /// reference (ADR 0011).
+    ///
+    /// A hard error rather than a fallback, and deliberately so. The
+    /// obvious fallback — an unweighted mean — *is* FedAvg, the method
+    /// FLTrust exists to replace, and it would be substituted at exactly
+    /// the moment the defense was supposed to engage, producing a
+    /// plausible aggregate with no indication anything was wrong.
+    #[error(
+        "no trusted reference was supplied for this round — a trusted-family aggregator \
+         cannot run without one, and falling back to an unweighted mean would silently \
+         replace the defense with the method it exists to replace (ADR 0011)"
+    )]
+    MissingTrustedReference,
+    /// The supplied trusted reference does not match the batch's model
+    /// dimension.
+    #[error(
+        "trusted reference does not fit this batch: batch has {expected} weights, \
+         global model has {global}, reference has {reference}"
+    )]
+    TrustedReferenceDimension {
+        /// The batch's dimension.
+        expected: usize,
+        /// The supplied global model's dimension.
+        global: usize,
+        /// The supplied reference's dimension.
+        reference: usize,
     },
     #[error("batch weights sum to zero — cannot normalize")]
     /// Every client's weight came out zero, so normalizing would divide

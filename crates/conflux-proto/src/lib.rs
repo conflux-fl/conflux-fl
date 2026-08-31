@@ -23,6 +23,36 @@
 //! `conflux-net`, `conflux-buffer`, `conflux-core`, both binaries — can
 //! depend on `conflux-proto` without risking a cycle, because
 //! `conflux-proto` never depends back on anything built on top of it.
+//!
+//! # Example
+//!
+//! A round trip through the weight codec, which is the part of this
+//! crate every other crate touches:
+//!
+//! ```
+//! use conflux_proto::{ClientDelta, decode_weights, encode_weights};
+//!
+//! let weights = vec![1.0_f32, -2.5, 3.75];
+//! let bytes = encode_weights(&weights);
+//! assert_eq!(bytes.len(), weights.len() * 4); // 4 bytes per f32, no header
+//! assert_eq!(decode_weights(&bytes).unwrap(), weights);
+//!
+//! // What a client actually submits. `weights` is the encoded buffer;
+//! // `num_samples` is self-reported and unauthenticated, which is why
+//! // aggregators bound it rather than trusting it.
+//! // `..Default::default()` rather than naming every field: ADR 0012
+//! // added two optional ones (`local_steps`, `control_variate`) and more
+//! // may follow, so a literal that spells out only what it cares about
+//! // keeps compiling when the schema grows.
+//! let delta = ClientDelta {
+//!     client_id: "node-1".to_string(),
+//!     round: 7,
+//!     weights: bytes,
+//!     num_samples: 128,
+//!     ..Default::default()
+//! };
+//! assert_eq!(decode_weights(&delta.weights).unwrap().len(), 3);
+//! ```
 
 #![warn(missing_docs)]
 
@@ -66,6 +96,13 @@ pub enum WeightsCodecError {
 /// on the format without needing to ask — Protobuf's own `repeated float`
 /// would work too, but costs more to encode/decode at the sizes a real
 /// model's weights reach, for a format this simple to hand-roll instead.
+///
+/// ```
+/// # use conflux_proto::encode_weights;
+/// // Little-endian, 4 bytes each, in order, with nothing around them.
+/// assert_eq!(encode_weights(&[1.0_f32]), vec![0x00, 0x00, 0x80, 0x3f]);
+/// assert_eq!(encode_weights(&[]), Vec::<u8>::new());
+/// ```
 pub fn encode_weights(weights: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(weights.len() * 4);
     for w in weights {
@@ -81,6 +118,17 @@ pub fn encode_weights(weights: &[f32]) -> Vec<u8> {
 /// needs to reject non-finite weights (a client submitting `NaN` after a
 /// diverged local training run, say) checks for that separately, after
 /// decoding.
+///
+/// ```
+/// # use conflux_proto::{decode_weights, encode_weights};
+/// // Any multiple-of-4 buffer decodes, including non-finite values —
+/// // the codec cannot know which bit patterns a given model means.
+/// let nan = encode_weights(&[f32::NAN]);
+/// assert!(decode_weights(&nan).unwrap()[0].is_nan());
+///
+/// // A length that is not a multiple of 4 is the only failure.
+/// assert!(decode_weights(&[0x00, 0x01, 0x02]).is_err());
+/// ```
 pub fn decode_weights(bytes: &[u8]) -> Result<Vec<f32>, WeightsCodecError> {
     // `% 4 != 0` rather than `is_multiple_of`, which is stable only
     // since 1.87. This crate promises 1.85 (edition 2024's own floor),
@@ -123,6 +171,7 @@ mod tests {
             round: 3,
             weights: vec![0, 0, 128, 63, 0, 0, 0, 64], // f32 1.0, 2.0 little-endian
             num_samples: 128,
+            ..Default::default()
         };
 
         let mut buf = Vec::new();
@@ -198,6 +247,7 @@ mod tests {
             round: 3,
             weights: vec![0, 0, 128, 63],
             num_samples: 1,
+            ..Default::default()
         };
         let mut buf = Vec::new();
         original.encode(&mut buf).expect("encode");

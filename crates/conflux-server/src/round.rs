@@ -105,6 +105,20 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     let num_submitted = flush.deltas.len();
     let num_passed = filtered.len();
 
+    // ADR 0011: a `trusted`-family aggregator is scored against a signal
+    // the server computes for itself rather than one derived from the
+    // batch. Fetching it is network I/O and `aggregate` is synchronous,
+    // so it happens here and is handed across via ADR 0012's
+    // interior-mutability pattern.
+    //
+    // Guarded by the aggregator's own answer, not by whether a sidecar
+    // happens to be configured: a deployment running `fedavg` opens no
+    // connection and enters none of this, even with a sidecar running
+    // beside it.
+    if state.aggregator.requires_trusted_reference() {
+        fetch_and_inject_trusted_reference(state, round, &weights).await?;
+    }
+
     let new_weights = state.aggregator.aggregate(&filtered)?;
     state.store.save_checkpoint(round, &new_weights).await?;
 
@@ -279,6 +293,7 @@ fn reencode_passing_deltas(
             round: delta.round,
             weights: encode_weights(weights),
             num_samples: delta.num_samples,
+            ..Default::default()
         })
         .collect()
 }
@@ -352,4 +367,65 @@ fn mean_vector(decoded: &[(String, Vec<f32>)]) -> Vec<f32> {
         *s /= n;
     }
     sum
+}
+
+/// Fetches this round's trusted reference from the sidecar and hands it
+/// to the aggregator (ADR 0011).
+///
+/// Every failure here is fatal to the round rather than something to
+/// continue past, and that is the whole point. A `trusted`-family method
+/// with no reference has nothing to be trusted *against*; continuing
+/// would mean aggregating by some other rule at exactly the moment the
+/// defense was supposed to engage, and producing a checkpoint that looks
+/// no different from a healthy one. `ServerError::is_transient` still
+/// decides whether the round loop retries or stops — a sidecar that is
+/// briefly unreachable is a transient backend fault like any other.
+async fn fetch_and_inject_trusted_reference(
+    state: &AppState,
+    round: u64,
+    global_weights: &[f32],
+) -> Result<(), ServerError> {
+    let Some(transport) = &state.trusted_reference else {
+        return Err(ServerError::TrustedReferenceUnavailable {
+            round,
+            reason: format!(
+                "aggregator {:?} requires a trusted reference, but no sidecar is configured \
+                 (set CONFLUX_TRUSTED_REFERENCE_ADDR)",
+                state.config.aggregator.value
+            ),
+        });
+    };
+
+    let reference_bytes = {
+        let mut client = transport.lock().await;
+        client
+            .reference_update(round, conflux_proto::encode_weights(global_weights))
+            .await
+            .map_err(|e| ServerError::TrustedReferenceUnavailable {
+                round,
+                reason: e.to_string(),
+            })?
+    };
+
+    let reference_weights = conflux_proto::decode_weights(&reference_bytes).map_err(|e| {
+        ServerError::TrustedReferenceUnavailable {
+            round,
+            reason: format!("the sidecar returned an undecodable reference: {e}"),
+        }
+    })?;
+
+    tracing::info!(
+        round,
+        dim = reference_weights.len(),
+        "fetched a trusted reference from the sidecar"
+    );
+
+    state
+        .aggregator
+        .set_trusted_reference(conflux_core::TrustedReference {
+            global_weights: global_weights.to_vec(),
+            reference_weights,
+        });
+
+    Ok(())
 }

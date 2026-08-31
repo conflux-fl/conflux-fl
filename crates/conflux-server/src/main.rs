@@ -189,12 +189,27 @@ async fn main() {
 
     let initial_weights = vec![0.0f32; initial_weights_dim];
     let backends = backend_selection_from_env();
-    let state = Arc::new(
-        AppState::connect(config, mode, initial_weights, backends)
-            .await
-            .expect("backend connection failed")
-            .with_jwt_key(jwt_key),
-    );
+    let mut state = AppState::connect(config, mode, initial_weights, backends)
+        .await
+        .expect("backend connection failed")
+        .with_jwt_key(jwt_key);
+
+    // ADR 0011: connect to the trusted-reference sidecar, but only if the
+    // configured aggregator actually needs one. Asking the aggregator
+    // rather than checking whether the env var is set keeps the two
+    // failure directions symmetric — a sidecar configured for `fedavg` is
+    // ignored, and `fltrust` without a sidecar refuses to start.
+    if state.aggregator.requires_trusted_reference() {
+        state = connect_trusted_reference(state, initial_weights_dim).await;
+    } else if std::env::var("CONFLUX_TRUSTED_REFERENCE_ADDR").is_ok() {
+        tracing::warn!(
+            aggregator = %state.config.aggregator.value,
+            "CONFLUX_TRUSTED_REFERENCE_ADDR is set, but this aggregator does not use a \
+             trusted reference — no sidecar connection will be opened"
+        );
+    }
+
+    let state = Arc::new(state);
 
     let grpc_addr: SocketAddr = std::env::var("CONFLUX_GRPC_ADDR")
         .ok()
@@ -420,6 +435,8 @@ fn overrides_from_env() -> Overrides {
         privacy_mechanism: std::env::var("CONFLUX_PRIVACY_MECHANISM").ok(),
         robust_byzantine_fraction: var("CONFLUX_ROBUST_BYZANTINE_FRACTION"),
         clip_radius: var("CONFLUX_CLIP_RADIUS"),
+        server_learning_rate: var("CONFLUX_SERVER_LEARNING_RATE"),
+        server_tau: var("CONFLUX_SERVER_TAU"),
         min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
         reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),
         quorum: var("CONFLUX_QUORUM"),
@@ -519,4 +536,77 @@ fn jwt_key_from_env() -> Option<JwtKeyMaterial> {
         JwtKeyMaterial::from_public_key_pem(&pem)
             .unwrap_or_else(|e| panic!("CONFLUX_JWT_PUBLIC_KEY_PATH ({path}) is unusable: {e}")),
     )
+}
+
+/// Connects to the trusted-reference sidecar and verifies it can serve
+/// the configured aggregator (ADR 0011).
+///
+/// Panics on every failure, deliberately, and in the same register as
+/// `validate_production_backends` and `allow_stub_client`: a server that
+/// starts without the signal its aggregator is defined in terms of would
+/// accept clients, run rounds, and write checkpoints that look healthy
+/// while the defense it was configured for is simply absent. Failing to
+/// start is the correct response.
+///
+/// The `Describe` handshake is why this is a startup check rather than a
+/// round-one discovery: a deployer who points `fltrust` at a
+/// scoring-only sidecar finds out before any client has connected.
+async fn connect_trusted_reference(state: AppState, initial_weights_dim: usize) -> AppState {
+    let addr = std::env::var("CONFLUX_TRUSTED_REFERENCE_ADDR").unwrap_or_else(|_| {
+        panic!(
+            "aggregator = {:?} requires a trusted-reference sidecar (ADR 0011), but \
+             CONFLUX_TRUSTED_REFERENCE_ADDR is not set. Start one — \
+             `cargo run -p conflux-trusted-reference` — or choose an aggregator that \
+             scores from the batch alone.",
+            state.config.aggregator.value
+        )
+    });
+
+    let mut transport = conflux_net::TrustedReferenceTransport::connect(addr.clone())
+        .await
+        .unwrap_or_else(|e| panic!("could not reach the trusted-reference sidecar at {addr}: {e}"));
+
+    let capabilities = transport
+        .describe()
+        .await
+        .unwrap_or_else(|e| panic!("the sidecar at {addr} did not answer Describe: {e}"));
+
+    if !capabilities.supports_reference_update {
+        panic!(
+            "the sidecar at {addr} ({}) does not implement reference updates, so it cannot \
+             serve aggregator {:?}",
+            capabilities.description, state.config.aggregator.value
+        );
+    }
+
+    // The dimension check is advisory rather than fatal: a sidecar that
+    // builds its model lazily legitimately answers `None`, and refusing
+    // to start on "did not say" would rule out a valid implementation.
+    // A mismatch it *did* state, though, is a misconfiguration worth
+    // stopping for — the alternative is discovering it as a length error
+    // in round one.
+    let experiment_dim = initial_weights_dim;
+    match capabilities.model_dim {
+        Some(dim) if dim as usize != experiment_dim => {
+            panic!(
+                "the sidecar at {addr} serves a {dim}-weight model, but this experiment's \
+                 model has {experiment_dim} weights"
+            );
+        }
+        Some(_) => {}
+        None => tracing::info!(
+            %addr,
+            "the sidecar did not state a model dimension; a mismatch will surface at \
+             the first round instead of now"
+        ),
+    }
+
+    tracing::info!(
+        %addr,
+        model = %capabilities.description,
+        supports_scoring = capabilities.supports_scoring,
+        "connected to the trusted-reference sidecar"
+    );
+
+    state.with_trusted_reference(transport)
 }

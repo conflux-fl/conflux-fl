@@ -14,11 +14,29 @@ use conflux_proto::ClientDelta;
 use crate::weights::{accumulate_scaled_difference, accumulate_weighted, decode_and_validate};
 use crate::{Aggregator, AggregatorError};
 
-fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
+/// L2 distance, accumulated in `f64`.
+///
+/// The `f64` is not precision fussiness — it is the difference between
+/// a number and `NaN`. Two *finite* `f32` weights can be up to
+/// `2 · f32::MAX` apart, and squaring that overflows `f32` to infinity
+/// long before any input is unreasonable. An infinite distance then
+/// poisons everything downstream of it: a variance becomes `inf - inf`
+/// (`NaN`), and a clip scale becomes `τ / inf` (`0`), which multiplied
+/// back against the infinite deviation is `NaN` again.
+///
+/// `f64` has the range to hold every one of these intermediates
+/// exactly — the largest possible squared difference is about `4.6e77`,
+/// against `f64`'s `1.8e308` ceiling — so nothing here can overflow for
+/// any finite `f32` input. Callers keep the `f64` for arithmetic and
+/// narrow only a final, bounded result.
+fn l2_distance_f64(a: &[f32], b: &[f32]) -> f64 {
     a.iter()
         .zip(b)
-        .map(|(x, y)| (x - y) * (x - y))
-        .sum::<f32>()
+        .map(|(x, y)| {
+            let d = *x as f64 - *y as f64;
+            d * d
+        })
+        .sum::<f64>()
         .sqrt()
 }
 
@@ -199,20 +217,23 @@ impl Aggregator for FoolsGoldAggregator {
         let dim = decoded[0].len();
         let mut combined = vec![0.0f32; dim];
         let all_zero = weights.iter().all(|&w| w == 0.0);
+        // The `1/n` both branches used to apply afterwards is folded into
+        // each term instead: `accumulate_weighted` multiplies before it
+        // adds, so scaling here keeps the running total inside the range
+        // of the values feeding it. Dividing a total that has already
+        // overflowed to infinity does nothing.
+        let share = 1.0 / n as f32;
         if all_zero {
             // Degenerate case `foolsgold_weights` itself falls back on
             // (see its own doc comment) — an unweighted mean rather than
             // producing an all-zero aggregate.
             for w in &decoded {
-                accumulate_weighted(&mut combined, w, 1.0);
+                accumulate_weighted(&mut combined, w, share);
             }
         } else {
             for (i, w) in weights.iter().enumerate() {
-                accumulate_weighted(&mut combined, &decoded[i], *w);
+                accumulate_weighted(&mut combined, &decoded[i], *w * share);
             }
-        }
-        for c in &mut combined {
-            *c /= n as f32;
         }
 
         Ok(combined)
@@ -242,7 +263,7 @@ impl Aggregator for FoolsGoldAggregator {
 /// translation of the FoolsGold authors' own reference implementation
 /// (ADR 0008). Changing its arithmetic would silently make this
 /// codebase's FoolsGold something other than the published FoolsGold.
-fn cosine_similarity_traces_f64(a: &[f32], b: &[f32]) -> f64 {
+fn cosine_similarity_traces_f64(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
     if n == 0 {
         return 0.0;
@@ -253,9 +274,9 @@ fn cosine_similarity_traces_f64(a: &[f32], b: &[f32]) -> f64 {
     let a = &a[a.len() - n..];
     let b = &b[b.len() - n..];
 
-    let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
-    let norm_a = a.iter().map(|x| *x as f64 * *x as f64).sum::<f64>().sqrt();
-    let norm_b = b.iter().map(|x| *x as f64 * *x as f64).sum::<f64>().sqrt();
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let norm_a = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let norm_b = b.iter().map(|x| x * x).sum::<f64>().sqrt();
     if norm_a == 0.0 || norm_b == 0.0 {
         return 0.0;
     }
@@ -360,7 +381,7 @@ pub struct DssAggregator {
     /// non-firing gate now degrades to *the base method*, which is the
     /// floor a wrapper should have had all along.
     pub combine_through_base: bool,
-    history: Mutex<HashMap<String, VecDeque<f32>>>,
+    history: Mutex<HashMap<String, VecDeque<f64>>>,
     /// Per-client (stability, collusion, weight) from the most recent
     /// `aggregate()` call — pure diagnostics, read by
     /// `last_diagnostics()`, never consulted by `aggregate()` itself.
@@ -453,7 +474,7 @@ impl Aggregator for DssAggregator {
         let base_result = self.base.aggregate(updates)?;
         let n = updates.len();
 
-        let traces: Vec<Vec<f32>> = {
+        let traces: Vec<Vec<f64>> = {
             let mut history = self
                 .history
                 .lock()
@@ -462,7 +483,7 @@ impl Aggregator for DssAggregator {
                 .iter()
                 .zip(&decoded)
                 .map(|(u, w)| {
-                    let deviation = l2_distance(w, &base_result);
+                    let deviation = l2_distance_f64(w, &base_result);
                     let entry = history.entry(u.client_id.clone()).or_default();
                     entry.push_back(deviation);
                     if entry.len() > self.window {
@@ -481,10 +502,19 @@ impl Aggregator for DssAggregator {
                     // client we've only just started observing.
                     return 1.0;
                 }
-                let mean = trace.iter().sum::<f32>() / trace.len() as f32;
+                // In `f64` for the same reason `l2_distance_f64` is.
+                // Before this, an overflowed deviation made `mean`
+                // infinite, `(x - mean)` `NaN`, and `stability` `NaN` —
+                // and every comparison against `NaN` is false, so
+                // `stability < stability_threshold` said "stable" for
+                // the most erratic client in the batch. A client could
+                // evade the stability gate by submitting *larger*
+                // updates, which is precisely backwards.
+                let mean = trace.iter().sum::<f64>() / trace.len() as f64;
                 let variance =
-                    trace.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / trace.len() as f32;
-                1.0 / (1.0 + variance)
+                    trace.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / trace.len() as f64;
+                // Bounded in (0, 1], so narrowing is always exact enough.
+                (1.0 / (1.0 + variance)) as f32
             })
             .collect();
 
@@ -540,12 +570,12 @@ impl Aggregator for DssAggregator {
                 // Every client fully distrusted — the same degenerate
                 // case the original combine had, answered the same way:
                 // a stable unweighted mean beats returning nothing.
+                // `1/n` applied per term, not after summing — see the
+                // note on `CenteredClippingAggregator`'s seed.
                 let mut mean = vec![0.0f32; dim];
+                let share = 1.0 / n as f32;
                 for w in &decoded {
-                    accumulate_weighted(&mut mean, w, 1.0);
-                }
-                for m in &mut mean {
-                    *m /= n as f32;
+                    accumulate_weighted(&mut mean, w, share);
                 }
                 mean
             } else {
@@ -563,17 +593,25 @@ impl Aggregator for DssAggregator {
 
         // Original combine (`combine_through_base = false`), kept for
         // the A/B comparison in `docs/research/`'s Experiment 2.8.
+        // Two passes, deliberately. Accumulating `weight * num_samples`
+        // and dividing by the total afterwards overflows on the *first
+        // term* — `f32::MAX` weighted by a sample count of 10 is already
+        // infinity, and no later division brings it back. Computing the
+        // normalizer first and accumulating each client's already-
+        // normalized share keeps every intermediate inside the range of
+        // the values that produced it. `averaging.rs` does the same,
+        // which is why `fedavg` never had this bug.
         let mut combined = vec![0.0f32; dim];
-        let mut weight_sum = 0.0f32;
-        for (i, w) in weights.iter().enumerate() {
-            let effective = w * updates[i].num_samples as f32;
-            weight_sum += effective;
-            accumulate_weighted(&mut combined, &decoded[i], effective);
-        }
+        let effective: Vec<f32> = weights
+            .iter()
+            .enumerate()
+            .map(|(i, w)| w * updates[i].num_samples as f32)
+            .collect();
+        let weight_sum: f32 = effective.iter().sum();
 
         if weight_sum > 0.0 {
-            for c in &mut combined {
-                *c /= weight_sum;
+            for (i, e) in effective.iter().enumerate() {
+                accumulate_weighted(&mut combined, &decoded[i], e / weight_sum);
             }
         } else {
             // Nothing meaningfully distinguishes any client — fall back
@@ -586,11 +624,9 @@ impl Aggregator for DssAggregator {
             // so the branch is correct on its own terms rather than
             // because of what the condition above happens to imply.
             combined.iter_mut().for_each(|c| *c = 0.0);
+            let share = 1.0 / n as f32;
             for w in &decoded {
-                accumulate_weighted(&mut combined, w, 1.0);
-            }
-            for c in &mut combined {
-                *c /= n as f32;
+                accumulate_weighted(&mut combined, w, share);
             }
         }
 
@@ -714,36 +750,55 @@ impl Aggregator for CenteredClippingAggregator {
         let v: Vec<f32> = match reference.as_ref() {
             Some(prev) if prev.len() == dim => prev.clone(),
             _ => {
+                // Scale each update by `1/n` *before* adding it, not
+                // after summing. Summing first overflows to infinity
+                // once the batch total exceeds `f32::MAX` — four clients
+                // near `f32::MAX` is enough — and `inf / n` is still
+                // infinity, so the reference starts the experiment
+                // already destroyed. This is the same defect that was
+                // fixed in `robust.rs`'s geometric median; the pattern
+                // survived here because it was written separately.
                 let mut mean = vec![0.0f32; dim];
+                let share = 1.0 / n as f32;
                 for w in &decoded {
-                    accumulate_weighted(&mut mean, w, 1.0);
-                }
-                for m in &mut mean {
-                    *m /= n as f32;
+                    accumulate_weighted(&mut mean, w, share);
                 }
                 mean
             }
         };
 
-        let mut clipped_sum = vec![0.0f32; dim];
+        // Accumulated in `f64`, and this is load-bearing rather than
+        // tidy. In `f32` the deviation `u_i − v` overflows to infinity
+        // whenever a client is far from the reference, which makes
+        // `distance` infinite, which makes `scale` exactly `0.0` — and
+        // `inf * 0.0` is `NaN`. So the clipping step decided correctly
+        // that this client should move the model by nothing, and then
+        // wrote `NaN` into the stored reference, permanently: every
+        // later round clips against `NaN`, every aggregate is `NaN`, and
+        // no subsequent honest round can recover it. A finite,
+        // validation-passing update was enough to trigger it.
+        let mut clipped_sum = vec![0.0f64; dim];
         for w in &decoded {
-            let distance = l2_distance(w, &v);
+            let distance = l2_distance_f64(w, &v);
             // `min(1, τ/d)`, with the `d == 0` case handled separately
             // because `τ/0` is a division by zero — though the deviation
             // it would scale is the zero vector either way, so the value
             // chosen there cannot affect the result.
             let scale = if distance > 0.0 {
-                (self.clip_radius / distance).min(1.0)
+                (self.clip_radius as f64 / distance).min(1.0)
             } else {
                 1.0
             };
             accumulate_scaled_difference(&mut clipped_sum, w, &v, scale);
         }
 
+        // Each client contributes at most `τ`-worth of pull, so this sum
+        // is bounded by `n · τ` and `v + sum/n` stays within `τ` of a
+        // finite `v` — the narrowing back to `f32` cannot overflow.
         let next: Vec<f32> = v
             .iter()
             .zip(&clipped_sum)
-            .map(|(vi, acc)| vi + acc / n as f32)
+            .map(|(vi, acc)| (*vi as f64 + acc / n as f64) as f32)
             .collect();
 
         *reference = Some(next.clone());
@@ -765,6 +820,7 @@ mod tests {
             round: 1,
             weights: bytes,
             num_samples: 1,
+            ..Default::default()
         }
     }
 

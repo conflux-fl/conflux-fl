@@ -29,6 +29,7 @@ fn make_delta(client_id: String, round: u64, num_samples: u64, weights: &[f32]) 
         round,
         weights: conflux_proto::encode_weights(weights),
         num_samples,
+        ..Default::default()
     }
 }
 
@@ -572,6 +573,7 @@ mod tests {
             round,
             weights: conflux_proto::encode_weights(weights),
             num_samples,
+            ..Default::default()
         }
     }
 
@@ -581,6 +583,7 @@ mod tests {
             round: 3,
             weights: conflux_proto::encode_weights(weights),
             num_samples: 10,
+            ..Default::default()
         }
     }
 

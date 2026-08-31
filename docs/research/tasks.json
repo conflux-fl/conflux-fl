@@ -1,17 +1,19 @@
 {
   "updated": "2026-08-31",
   "note": "Atomic tasks for the DSS research line only. Framework work (crates, phases) is tracked in /docs/STATUS.md, not here. Each task states what would count as done, because 'investigate X' is not a task anyone can finish.",
-
   "tasks": [
     {
       "id": "r1",
       "title": "Make DSS's deviation reference robust",
       "status": "todo",
       "priority": "high",
-      "why": "The last unresolved cause of a measured DSS failure. §5.8.1 isolated it: DSS measures every client's deviation against `base.aggregate(updates)`, and when the base is fragile (fedavg) a lone attacker drags that reference around every round, so every honest client's trace becomes volatile too and every collusion score saturates near ceiling (measured 0.999998 across 9 honest clients). The clients aren't misbehaving; the yardstick is.",
-      "approach": "Decouple the reference from the base method: compute it with a robust statistic (coordinate-wise median or a trimmed mean over the batch) regardless of which base is being wrapped. The base method would then inform only the combine step, which is where §5.11 already moved it. Costs one extra reduction per round.",
+      "why": "The last unresolved cause of a measured DSS failure. \u00a75.8.1 isolated it: DSS measures every client's deviation against `base.aggregate(updates)`, and when the base is fragile (fedavg) a lone attacker drags that reference around every round, so every honest client's trace becomes volatile too and every collusion score saturates near ceiling (measured 0.999998 across 9 honest clients). The clients aren't misbehaving; the yardstick is.",
+      "approach": "Decouple the reference from the base method: compute it with a robust statistic (coordinate-wise median or a trimmed mean over the batch) regardless of which base is being wrapped. The base method would then inform only the combine step, which is where \u00a75.11 already moved it. Costs one extra reduction per round.",
       "done_when": "Experiment 2.6 re-run shows dss_fedavg vs solo adaptive_evasion materially below its current 36.34, with the honest-client collusion saturation in run_dss_diagnostics dropping well below 0.999. If it doesn't move, that is also a finding -- write it up.",
-      "touches": ["crates/conflux-core/src/temporal.rs", "docs/research/scripts/experiment_2_6_solo_attacker.sh"],
+      "touches": [
+        "crates/conflux-core/src/temporal.rs",
+        "docs/research/scripts/experiment_2_6_solo_attacker.sh"
+      ],
       "blocked_by": []
     },
     {
@@ -19,21 +21,32 @@
       "title": "Decide the stability/collusion combination rule",
       "status": "blocked-on-decision",
       "priority": "high",
-      "why": "§5.12 established the AND-gate is trading away something real: collusion-only scores 1.09 against non-identical stable colluders where stability-only scores 17.13 (no better than undefended fedavg). The gate's conservatism has a measured cost.",
-      "approach": "Do NOT simply flip to OR. The AND-gate exists to protect legitimately-noisy honest clients from being penalized for instability alone -- Claim 2's problem, which §5.4 measured as real. §5.12's scenario contains no non-IID minority, so it cannot see that cost. First run the ablation against the §5.4 fairness scenario WITH a non-IID minority present; then decide between AND, OR, and a weighted combination.",
+      "why": "\u00a75.12 established the AND-gate is trading away something real: collusion-only scores 1.09 against non-identical stable colluders where stability-only scores 17.13 (no better than undefended fedavg). The gate's conservatism has a measured cost.",
+      "approach": "Do NOT simply flip to OR. The AND-gate exists to protect legitimately-noisy honest clients from being penalized for instability alone -- Claim 2's problem, which \u00a75.4 measured as real. \u00a75.12's scenario contains no non-IID minority, so it cannot see that cost. First run the ablation against the \u00a75.4 fairness scenario WITH a non-IID minority present; then decide between AND, OR, and a weighted combination.",
       "done_when": "A fairness-scenario ablation exists (stability-only vs collusion-only vs AND, with a non-IID minority and no attackers), and the combination rule is either changed with evidence or documented as deliberately conservative with the measured cost stated.",
-      "touches": ["crates/conflux-core/src/temporal.rs", "crates/conflux-attacks/examples/run_fairness_experiment.rs"],
-      "blocked_by": ["user decision on whether to change a mechanism §6.1 defined"]
+      "touches": [
+        "crates/conflux-core/src/temporal.rs",
+        "crates/conflux-attacks/examples/run_fairness_experiment.rs"
+      ],
+      "blocked_by": [
+        "user decision on whether to change a mechanism \u00a76.1 defined"
+      ],
+      "notes": "Evidence strengthened 2026-09-01 (section 5.14): collusion-only DSS is best or tied-best on all six attacks at 20% malicious and holds at 60%, one to two orders of magnitude ahead of the shipped gate. Third independent finding pointing the same way after 5.6 and 5.12. Still blocked on the same thing: none of these attacks includes a legitimately-noisy honest majority, which is exactly what the stability conjunct protects."
     },
     {
       "id": "r3",
       "title": "Fix or document the centered_clipping default",
       "status": "todo",
       "priority": "high",
-      "why": "§5.13: at the shipped default clip_radius=1.0, Centered Clipping scored 0.078 on poisoned MNIST -- worse than no defense (fedavg 0.163) and far below krum (0.844). A sweep 1->5->20->100 rises monotonically toward FedAvg with no optimum. The default is a placeholder that a deployment could reasonably mistake for a recommendation.",
-      "approach": "Two options, not exclusive. (a) Document loudly: the config field's doc comment and USAGE.md say tau MUST be tuned to the model's weight scale, with §5.13's numbers as the warning. (b) Investigate a dimension-aware default, e.g. scaling tau by sqrt(dim) or by the observed inter-client deviation norm -- but that would deviate from Karimireddy et al., so it needs ADR 0008 justification or must live behind an explicit opt-in.",
+      "why": "\u00a75.13: at the shipped default clip_radius=1.0, Centered Clipping scored 0.078 on poisoned MNIST -- worse than no defense (fedavg 0.163) and far below krum (0.844). A sweep 1->5->20->100 rises monotonically toward FedAvg with no optimum. The default is a placeholder that a deployment could reasonably mistake for a recommendation.",
+      "approach": "Two options, not exclusive. (a) Document loudly: the config field's doc comment and USAGE.md say tau MUST be tuned to the model's weight scale, with \u00a75.13's numbers as the warning. (b) Investigate a dimension-aware default, e.g. scaling tau by sqrt(dim) or by the observed inter-client deviation norm -- but that would deviate from Karimireddy et al., so it needs ADR 0008 justification or must live behind an explicit opt-in.",
       "done_when": "Either the default is changed with a cited justification, or clip_radius's documentation states the failure mode and the measured numbers in the places an operator would actually look (config doc comment, USAGE.md, aggregation-catalog).",
-      "touches": ["crates/conflux-config/src/lib.rs", "crates/conflux-core/src/temporal.rs", "docs/USAGE.md", "docs/AGGREGATION_LANDSCAPE.md"],
+      "touches": [
+        "crates/conflux-config/src/lib.rs",
+        "crates/conflux-core/src/temporal.rs",
+        "docs/USAGE.md",
+        "docs/AGGREGATION_LANDSCAPE.md"
+      ],
       "blocked_by": []
     },
     {
@@ -41,10 +54,13 @@
       "title": "Multi-seed the real-data validation",
       "status": "todo",
       "priority": "medium",
-      "why": "§5.13 is one seed per cell. That is adequate for its negative result about clip_radius (a default losing to no-defense at every tested tau doesn't need many seeds) but not for the comparative krum/trimmed_mean claims, which are currently corroboration rather than evidence.",
+      "why": "\u00a75.13 is one seed per cell. That is adequate for its negative result about clip_radius (a default losing to no-defense at every tested tau doesn't need many seeds) but not for the comparative krum/trimmed_mean claims, which are currently corroboration rather than evidence.",
       "approach": "benchmark.py already sweeps (aggregator x split x attack); it needs a --seeds dimension, and run_demo.sh needs to thread a seed through partition_data.py. Then 5 seeds over the existing grid.",
-      "done_when": "Experiment 3.1 re-run with >=5 seeds per cell and confidence intervals in the summary, matching §7.3's discipline for the synthetic experiments.",
-      "touches": ["python/conflux_client/examples/benchmark.py", "python/conflux_client/examples/e2e_pytorch_mnist/run_demo.sh"],
+      "done_when": "Experiment 3.1 re-run with >=5 seeds per cell and confidence intervals in the summary, matching \u00a77.3's discipline for the synthetic experiments.",
+      "touches": [
+        "python/conflux_client/examples/benchmark.py",
+        "python/conflux_client/examples/e2e_pytorch_mnist/run_demo.sh"
+      ],
       "blocked_by": []
     },
     {
@@ -52,10 +68,12 @@
       "title": "Run the non-IID and adaptive-attack cells on real data",
       "status": "todo",
       "priority": "medium",
-      "why": "§5.13 covers IID + one persistent Byzantine attacker. The findings most at risk of not transferring are the non-IID fairness result (§5.4) and the adaptive-attacker results (§5.7) -- neither has been checked against a real model.",
+      "why": "\u00a75.13 covers IID + one persistent Byzantine attacker. The findings most at risk of not transferring are the non-IID fairness result (\u00a75.4) and the adaptive-attacker results (\u00a75.7) -- neither has been checked against a real model.",
       "approach": "No new code: benchmark.py already accepts --splits dirichlet:<alpha>, and e2e_pytorch_shakespeare provides a NATURAL non-IID partition (one client per speaking role) that doesn't depend on a synthetic knob at all. This is runs, not redesign.",
-      "done_when": "A results file covering (>=2 aggregators x IID vs non-IID x attack/no-attack) on at least MNIST and Shakespeare, written up as a §5.13 successor.",
-      "touches": ["python/conflux_client/examples/benchmark.py"],
+      "done_when": "A results file covering (>=2 aggregators x IID vs non-IID x attack/no-attack) on at least MNIST and Shakespeare, written up as a \u00a75.13 successor.",
+      "touches": [
+        "python/conflux_client/examples/benchmark.py"
+      ],
       "blocked_by": []
     },
     {
@@ -63,10 +81,13 @@
       "title": "Report FoolsGold's degradation against non-identical colluders",
       "status": "todo",
       "priority": "medium",
-      "why": "§5.12 found FoolsGold drops 1.35 -> 9.93 (5.6x) when colluders share an objective but not a byte stream. This is a limitation of a published method under a threat model its own paper doesn't test, found incidentally. It is currently one paragraph inside a section about something else.",
+      "why": "\u00a75.12 found FoolsGold drops 1.35 -> 9.93 (5.6x) when colluders share an objective but not a byte stream. This is a limitation of a published method under a threat model its own paper doesn't test, found incidentally. It is currently one paragraph inside a section about something else.",
       "approach": "Either promote it to its own experiment with a divergence sweep (0.0 -> identical, through to fully independent), or explicitly scope it as an observation not a claim. A sweep would establish whether the degradation is gradual or has a threshold.",
-      "done_when": "Either a divergence-sweep experiment exists, or §5.12 states plainly that the single divergence value tested makes this an observation rather than a characterization.",
-      "touches": ["docs/research/scripts/", "docs/research/temporal-consistency-aggregation.md"],
+      "done_when": "Either a divergence-sweep experiment exists, or \u00a75.12 states plainly that the single divergence value tested makes this an observation rather than a characterization.",
+      "touches": [
+        "docs/research/scripts/",
+        "docs/research/temporal-consistency-aggregation.md"
+      ],
       "blocked_by": []
     },
     {
@@ -78,27 +99,37 @@
       "approach": "Only worth doing if a second naturally-partitioned dataset is needed. e2e_pytorch_shakespeare already provides one.",
       "done_when": "n/a -- revisit only if Shakespeare proves insufficient.",
       "touches": [],
-      "blocked_by": ["cost/benefit -- reconsider only if a second natural partition is needed"]
+      "blocked_by": [
+        "cost/benefit -- reconsider only if a second natural partition is needed"
+      ]
     },
     {
       "id": "p1",
       "title": "Decide whether DSS is going toward publication",
       "status": "blocked-on-decision",
       "priority": "medium",
-      "why": "§6.5 already positions DSS against the closest prior art (FoolsGold, Centered Clipping, FLTrust/Zeno) and concludes it is a genuine but narrow contribution -- a specific synthesis of existing ideas, not a new primitive. Whether that clears a venue's bar is a judgment call nobody has made, and it determines whether p2/p3 are worth any effort.",
+      "why": "\u00a76.5 already positions DSS against the closest prior art (FoolsGold, Centered Clipping, FLTrust/Zeno) and concludes it is a genuine but narrow contribution -- a specific synthesis of existing ideas, not a new primitive. Whether that clears a venue's bar is a judgment call nobody has made, and it determines whether p2/p3 are worth any effort.",
       "done_when": "A decision is recorded in PROGRESS.json.",
-      "touches": ["docs/research/PROGRESS.json"],
-      "blocked_by": ["user decision"]
+      "touches": [
+        "docs/research/PROGRESS.json"
+      ],
+      "blocked_by": [
+        "user decision"
+      ]
     },
     {
       "id": "p2",
       "title": "Consolidate figures for the results narrative",
       "status": "todo",
       "priority": "low",
-      "why": "docs/research/figures/ exists but the strongest results (§5.11's Finding 3 repair, §5.12's ablation separation, §5.13's tau curve) are tables only. The Finding-3 before/after in particular is a single memorable chart.",
+      "why": "docs/research/figures/ exists but the strongest results (\u00a75.11's Finding 3 repair, \u00a75.12's ablation separation, \u00a75.13's tau curve) are tables only. The Finding-3 before/after in particular is a single memorable chart.",
       "done_when": "At least the three named results have plots generated by a committed script, not by hand.",
-      "touches": ["docs/research/scripts/"],
-      "blocked_by": ["p1"]
+      "touches": [
+        "docs/research/scripts/"
+      ],
+      "blocked_by": [
+        "p1"
+      ]
     },
     {
       "id": "p3",
@@ -108,8 +139,19 @@
       "why": "temporal-consistency-aggregation.md is now ~1,700 lines and interleaves hypothesis, method, thirteen experiments, and running self-correction. That structure is excellent as a lab notebook and wrong for a reader who wants the result.",
       "approach": "Do not restructure the notebook -- its chronology is what makes the self-corrections legible. Extract a separate short document that states the claims and points into it.",
       "done_when": "A standalone summary exists that a reader can finish in ten minutes.",
-      "touches": ["docs/research/"],
-      "blocked_by": ["p1"]
+      "touches": [
+        "docs/research/"
+      ],
+      "blocked_by": [
+        "p1"
+      ]
+    },
+    {
+      "id": "r8",
+      "title": "Re-run the FLANDERS comparison on a real model",
+      "status": "todo",
+      "why": "Section 5.14 is entirely at dim=3. FLANDERS's cost and signal both scale with model dimension in a way DSS's scalar traces do not, so the comparison that most favours DSS is also the one least tested at scale. Section 5.13 is the standing caution.",
+      "how": "benchmark.py against e2e_pytorch_mnist, aggregators dss_fedavg / flanders_krum / krum, >=5 seeds."
     }
   ]
 }

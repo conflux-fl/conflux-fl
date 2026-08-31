@@ -89,6 +89,7 @@ fn chunk(index: u32, total: u32, weights: &[f32]) -> DeltaChunk {
         total_chunks: total,
         data: encode_weights(weights),
         num_samples: 10,
+        ..Default::default()
     }
 }
 

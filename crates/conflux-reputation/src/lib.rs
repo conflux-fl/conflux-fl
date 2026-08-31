@@ -10,6 +10,31 @@
 //! a privacy transform (if any) and aggregation: a caller scores and
 //! filters the already-decoded, already-privatized updates, then passes
 //! only the surviving client ids' updates on to the aggregator.
+//!
+//! # Example
+//!
+//! ```
+//! use conflux_reputation::{CosineScorer, filter_by_threshold};
+//!
+//! // The direction the server expects this round to move in.
+//! let reference = vec![1.0_f32, 1.0, 1.0];
+//!
+//! let updates = vec![
+//!     ("aligned".to_string(), vec![0.9_f32, 1.1, 1.0]),
+//!     ("orthogonal".to_string(), vec![1.0_f32, -1.0, 0.0]),
+//!     ("inverted".to_string(), vec![-1.0_f32, -1.0, -1.0]),
+//! ];
+//!
+//! let kept = filter_by_threshold(&updates, &reference, &CosineScorer, 0.5);
+//! assert_eq!(kept, vec!["aligned".to_string()]);
+//!
+//! // Cosine similarity, so the score is direction-only: magnitude does
+//! // not buy influence, and a client pointing the opposite way scores
+//! // negative rather than merely small.
+//! use conflux_reputation::ContributionScorer;
+//! assert!((CosineScorer.score(&[2.0, 2.0, 2.0], &reference) - 1.0).abs() < 1e-6);
+//! assert!(CosineScorer.score(&[-1.0, -1.0, -1.0], &reference) < 0.0);
+//! ```
 
 #![warn(missing_docs)]
 

@@ -19,6 +19,7 @@ fn delta(client_id: &str, round: u64, num_samples: u64) -> ClientDelta {
         round,
         weights: vec![],
         num_samples,
+        ..Default::default()
     }
 }
 

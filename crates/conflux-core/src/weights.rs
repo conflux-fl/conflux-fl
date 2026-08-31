@@ -158,22 +158,34 @@ pub(crate) fn accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
     }
 }
 
-/// `acc[i] += (src[i] - reference[i]) * scale`.
+/// `acc[i] += (src[i] - reference[i]) * scale`, accumulated in `f64`.
 ///
 /// Centered Clipping's combine step — the same element-wise shape as
 /// [`accumulate_weighted`] with one extra subtraction, and the only
 /// combine step in the crate that isn't a plain weighted sum.
+///
+/// The accumulator is `f64` while the inputs stay `f32`, and that
+/// asymmetry is the point. `src[i] - reference[i]` overflows `f32` to
+/// infinity whenever a client sits far from the reference — two finite
+/// `f32` weights can be `2 · f32::MAX` apart — and the caller's own
+/// clip scale is near zero in exactly that case, because a distant
+/// client is what clipping exists to damp. `inf * 0.0` is `NaN`, so the
+/// step that correctly decided "this client moves the model by nothing"
+/// wrote `NaN` into the running reference instead, and every later
+/// round clipped against it. Subtracting in `f64` cannot overflow for
+/// any finite `f32` pair, which removes the infinity the `NaN` was made
+/// from.
 pub(crate) fn accumulate_scaled_difference(
-    acc: &mut [f32],
+    acc: &mut [f64],
     src: &[f32],
     reference: &[f32],
-    scale: f32,
+    scale: f64,
 ) {
     debug_assert_eq!(acc.len(), src.len());
     debug_assert_eq!(acc.len(), reference.len());
 
     for (a, (s, r)) in acc.iter_mut().zip(src.iter().zip(reference)) {
-        *a += (s - r) * scale;
+        *a += (*s as f64 - *r as f64) * scale;
     }
 }
 
@@ -192,13 +204,13 @@ mod tests {
     }
 
     fn scalar_accumulate_scaled_difference(
-        acc: &mut [f32],
+        acc: &mut [f64],
         src: &[f32],
         reference: &[f32],
-        scale: f32,
+        scale: f64,
     ) {
         for (a, (s, r)) in acc.iter_mut().zip(src.iter().zip(reference)) {
-            *a += (s - r) * scale;
+            *a += (*s as f64 - *r as f64) * scale;
         }
     }
 
@@ -247,7 +259,7 @@ mod tests {
             for scale in [0.0, 1.0, 0.125, -3.5] {
                 let src = sample(len, 1.0);
                 let reference = sample(len, 0.5);
-                let start = sample(len, -2.0);
+                let start: Vec<f64> = sample(len, -2.0).iter().map(|x| *x as f64).collect();
 
                 let mut helper = start.clone();
                 accumulate_scaled_difference(&mut helper, &src, &reference, scale);
@@ -255,8 +267,8 @@ mod tests {
                 let mut reference_out = start;
                 scalar_accumulate_scaled_difference(&mut reference_out, &src, &reference, scale);
 
-                let helper_bits: Vec<u32> = helper.iter().map(|f| f.to_bits()).collect();
-                let reference_bits: Vec<u32> = reference_out.iter().map(|f| f.to_bits()).collect();
+                let helper_bits: Vec<u64> = helper.iter().map(|f| f.to_bits()).collect();
+                let reference_bits: Vec<u64> = reference_out.iter().map(|f| f.to_bits()).collect();
                 assert_eq!(helper_bits, reference_bits, "len={len} scale={scale}");
             }
         }

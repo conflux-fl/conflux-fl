@@ -105,6 +105,7 @@ async fn pull_transport_round_trips_every_rpc() {
             total_chunks: 1,
             data: vec![],
             num_samples: 10,
+            ..Default::default()
         }])
         .await
         .unwrap();

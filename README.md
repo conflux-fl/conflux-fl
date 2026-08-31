@@ -99,7 +99,7 @@ doing exactly what Blanchard et al. (2017) says it should.
 
 ## The crates
 
-Thirteen crates, dependency graph is acyclic. Full reference — purpose,
+Fourteen crates, dependency graph is acyclic. Full reference — purpose,
 why each is its own crate, and how to extend it — in
 **[docs/CRATES.md](docs/CRATES.md)**; architecture and build history in
 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.

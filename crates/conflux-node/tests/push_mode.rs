@@ -214,6 +214,7 @@ async fn push_mode_delivers_a_task_over_two_hops_and_forwards_the_submission_bac
             total_chunks: 1,
             data: encode_weights(&[2.0, 3.0]),
             num_samples: 42,
+            ..Default::default()
         }])
         .await
         .unwrap();

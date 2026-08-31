@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-08-31 — **stabilization Tiers 1–5 complete**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, and the three production-hardening defects a post-Tier-4 audit found now closed. 387 tests, clippy clean under `-D warnings`, fmt clean. Version 0.2.0.
+Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then FedAdagrad/FedAdam/FedYogi, closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **17 aggregation methods across five families.** 469 tests (21 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fourteen crates. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -953,11 +953,61 @@ and a `ClientDelta` arrives from the network.
   what let CI point them at its own service containers. Verified the
   override takes effect by aiming one at a dead port.
 - **S12 — env configuration via [evnx](https://evnx.dev).**
-  `.env.example` documents all 32 variables; `.env` is gitignored.
-  Optional variables are **commented out rather than set empty**: unset
-  lets `conflux-config` resolve through its chain and log the source
-  (ADR 0007), while empty is an explicit override to nothing. That
-  distinction is also what took `evnx validate` from 10 errors to 0.
+  `.env.example` documents all **43** variables the code reads; `.env`
+  is gitignored. Optional variables are **commented out rather than set
+  empty**: unset lets `conflux-config` resolve through its chain and log
+  the source (ADR 0007), while empty is an explicit override to nothing.
+  That distinction is also what took `evnx validate` from 10 errors to 0.
+
+  **Corrected 2026-08-31**: this said "all 32", and it was wrong — the
+  binaries read 43. The ten undocumented ones were found by diffing
+  `grep -rhoE '"CONFLUX_[A-Z0-9_]+"' crates/*/src/` against the file
+  rather than by reading it, which is the only way this stays true.
+  The omission mattered more than a count: `CONFLUX_REGISTRY_BACKEND`,
+  `CONFLUX_STORE_BACKEND`, and `CONFLUX_ACCOUNTING_PERSISTENCE` are the
+  three switches `validate_production_backends` fails fast without, so
+  a deployer who copied `.env.example` to `.env` got a file that could
+  not start a production server — the exact task the file exists for.
+  Also added: the four `CONFLUX_S3_*` store credentials (commented, with
+  a note that the two key values belong in `.env` and nowhere else),
+  `CONFLUX_MIN_REPUTATION_SCORE`, `CONFLUX_REPUTATION_FILTER_ENABLED`,
+  and `conflux-node`'s `CONFLUX_SEED_VALUE`. Parity is now exact in both
+  directions — 43 read, 43 documented, nothing stale.
+
+  **`docs/USAGE.md` had the same drift, plus two stale claims.** It
+  documented 36 of the 43 and now documents all of them
+  (`CONFLUX_CONNECTION_MODE`, `CONFLUX_CLIENT_SIDE_PRIVACY_TRANSFORM`,
+  and `CONFLUX_SEED_VALUE` into the node table;
+  `CONFLUX_REPUTATION_FILTER_ENABLED` into the resolved-parameters
+  table; the three `CONFLUX_TEST_*` URLs into "Building and testing").
+  The two stale claims were worth more than the count:
+
+  - The listen-address row still said "the admin API has no auth of its
+    own" — written before Tier 2 added `CONFLUX_ADMIN_TOKEN`, and
+    contradicted by the row two lines above it in the same table.
+  - It told readers to run `evnx scan .env .env.example`. **That command
+    silently scans nothing for the template**: evnx excludes that
+    filename by design, so it prints `Scanned 0 files` above a green
+    `✓ No secrets detected` — a false all-clear on the one file that is
+    tracked. This is the same defect the CI step hit during Tier 3; the
+    doc kept recommending it. Now stated outright, along with why local
+    usage (`evnx scan .env`) and CI (`evnx scan .`) correctly differ:
+    `.venv` exists here and not in a fresh checkout.
+
+  Three behavioral claims written into these tables were checked against
+  the code rather than assumed, and **one of the three was wrong**: the
+  first draft said a `pull` node against a push-mode server never
+  receives a task. It does — `FlTransportService` implements both RPCs
+  unconditionally, so connection mode is the node's own choice. The
+  mismatch that *is* real is on the local hop, and that is what the row
+  now says. (The other two held: `apply_server_side_privacy` runs
+  unconditionally, so enabling the node-side transform really does clip
+  twice; and `round.rs`'s filter gates on `reputation_filter_enabled`,
+  so `min_reputation_score` alone genuinely does nothing.)
+
+  Verified by running CI's whole `env-files` job locally against a
+  `git archive` checkout: 0 high- and 0 medium-confidence findings,
+  `.env` untracked, `evnx validate` 0 errors.
 - **S8 — CI.** Five jobs: `fmt`, `clippy` (`--all-targets`, warnings
   denied), `test` (with Redis/Postgres/MinIO service containers, so the
   three durable backends are actually exercised), `msrv` (checks the
@@ -1151,6 +1201,352 @@ here per `API_STABILITY.md`'s promise that breaking changes are disclosed
 in `STATUS.md`. The bar that justifies it: the previous shape could not
 express the failure it was being polled to detect.
 
+## Tier 6 — the audit's own follow-ups (2026-08-31)
+
+Four gaps found by auditing what Tiers 1–5 had *not* looked at. T1 was
+the one that mattered: it found four real defects, three of them
+remotely triggerable, in code 387 tests already covered.
+
+### T1 — stateful aggregators, tested across rounds
+
+`tests/adversarial_input.rs` builds a fresh aggregator for every
+assertion and hands it exactly one batch. Correct for the nine stateless
+methods; structurally blind for the four that carry state. The sequence
+it cannot express:
+
+1. Round N is hostile but **finite**, so `decode_and_validate` accepts
+   it — correctly, since the codec cannot know a model's plausible scale.
+2. The aggregator folds it into its stored reference or history.
+3. Round N+1 is an ordinary batch from honest clients, and the poisoned
+   state turns it into garbage.
+
+Nobody sent a bad update in round N+1. The output is wrong anyway, and
+it is the checkpoint. New suite:
+[`tests/stateful_adversarial_input.rs`](../crates/conflux-core/tests/stateful_adversarial_input.rs),
+9 tests. **All four defects were found by writing it, and each was
+confirmed by a failing test before any fix existed.**
+
+- **D1 — `centered_clipping`'s stored reference went `NaN`, permanently.**
+  The worst of the four. `u_i − v` overflows `f32` to infinity whenever a
+  client sits far from the reference (two finite `f32` weights can be
+  `2 · f32::MAX` apart), so `‖u_i − v‖` is infinite, so the clip scale
+  `min(1, τ/‖·‖)` is exactly `0.0` — and `inf * 0.0` is `NaN`. The
+  clipping step decided *correctly* that this client should move the
+  model by nothing, and wrote `NaN` into the running reference doing it.
+  Every later round then clips against `NaN`, every aggregate is `NaN`,
+  and **no subsequent honest round can recover it**. One finite,
+  validation-passing update was enough. Traced to the exact arithmetic
+  before fixing, not guessed at.
+- **D2 — the seed mean overflowed.** `CenteredClippingAggregator` seeded
+  `v` by summing the first batch and dividing by `n` afterwards. Four
+  clients near `f32::MAX` overflow the running total to infinity, and
+  `inf / n` is still infinity. Identical in shape to the geometric-median
+  defect already fixed in `robust.rs`; the pattern had simply been
+  written a second time somewhere else.
+- **D3 — a client could evade DSS's stability gate by submitting
+  *larger* updates.** `l2_distance` overflowed to infinity, making the
+  trace mean infinite, `(x − mean)` `NaN`, and `stability` `NaN`. Every
+  comparison against `NaN` is false, so `stability < stability_threshold`
+  evaluated to "stable" — for the single most erratic client in the
+  batch. Precisely backwards, and invisible in any result table, because
+  the client simply received full weight and nothing was logged.
+- **D4 — `DssAggregator` returned `[inf, inf, inf]` on a single batch.**
+  Its own combine path (`combine_through_base = false`) multiplied each
+  update by `weight × num_samples` *before* normalizing, and
+  `f32::MAX × 10` is already infinity. This one is single-round: the
+  existing suite would have caught it years earlier if DSS had ever been
+  in it, which is exactly T2.
+
+**Root cause, shared by all four: `f32` intermediate overflow.** Fixed by
+computing distances and difference-accumulation in `f64` — which cannot
+overflow for any finite `f32` pair, the largest possible squared
+difference being ~`4.6e77` against `f64`'s `1.8e308` — and by folding
+`1/n` into each term instead of dividing a total that has already
+overflowed. Both fixes have precedent in this codebase (the `f64`
+collusion score, the geometric-median normalization); neither pattern had
+been applied everywhere it belonged.
+
+A sweep for the remaining instances found **three more latent ones** and
+fixed them the same way: FABA's iterative mean, Divide-and-Conquer's
+centering mean, and FoolsGold's combine. None was reachable by the
+existing tests, all were the identical defect.
+
+**One thing the new suite got wrong, and it is worth recording.** Two
+assertions initially demanded that `centered_clipping` recover to the
+honest consensus after a hostile round. It does not, and it says so: its
+own fidelity note (ADR 0008) documents that `v` is seeded from round
+one's *plain mean*, so a round-one attacker drags the reference and
+clipping then holds it there — "the defense compounds over rounds rather
+than arriving fully formed in round one". The test was asserting against
+a deliberate, published property. Replaced with
+`centered_clipping_movement_stays_bounded_by_the_clip_radius`, which
+checks the guarantee the method actually makes: after seeding, no single
+round may move the reference by more than `τ`. That is the whole defense,
+and it now has a test.
+
+Worth noting how D1 and the documented seed-drag *composed*: the
+documented cost (an attacker drags the seed) put the reference far from
+every honest client, which is exactly the condition that triggered the
+undocumented `NaN`. A known tradeoff and an unknown arithmetic defect met
+and produced something worse than either.
+
+### T2 — `DssAggregator` had no adversarial coverage at all
+
+`ALL_AGGREGATORS` iterates `build_aggregator`'s catalog, and DSS is
+deliberately not in it (an unvalidated hypothesis — ADR 0008,
+`API_STABILITY.md`), so a name-driven suite could not see it. It is also
+the aggregator every DSS research run drives. It now faces the same ten
+hostile-input scenarios the twelve catalog methods do, on both combine
+paths. That test is what found D4.
+
+### T3 — runnable doc examples, 0 → 21
+
+341 public items were documented and `cargo doc` rendered prose with no
+code: two ```` ```text ```` fences workspace-wide and **zero** doc-tests.
+Every one of the 13 crates now has at least one runnable example, 21
+total, all compile-checked by `cargo test`. Doc-tests are the only test
+kind that cannot silently drift from the API — they fail to compile when
+a signature moves — which matters most for the two projects building on
+these crates.
+
+Writing them immediately caught one API error (`evict_stale` for
+`evict_expired`) and one real safety property the author had not
+expected: `RoundBuffer` refuses a delta whose round does not match, so a
+slow client resubmitting last round's work cannot corrupt this round's
+batch. That is now an assertion rather than an accident.
+
+### T4 — two docs contradicted the code
+
+`CLAUDE.md` described `docs/E2E_TESTING.md` as planning a harness "not
+yet built"; four have existed and run since 2026-08-22. `CLI_DESIGN.md`
+gated the CLI on "Tier 5 (production hardening) is still open"; it
+shipped. Both corrected.
+
+### Disclosure: the arithmetic changed, and results are not bit-identical
+
+Folding `1/n` into each term rather than dividing afterwards changes
+floating-point rounding. Every exact-value unit test passes unchanged,
+so no *tested* result moved — but measured directly on 15,378
+coordinates at realistic FL magnitudes: **44.8% bit-identical, worst
+relative difference `3.4e-7`**, about 2.8× `f32::EPSILON`. Last-bit
+territory, four orders of magnitude below the smallest effect
+`docs/research/` reports (its conclusions turn on differences like
+`16.99 → 0.297`). The 28,331 existing result rows were computed with the
+old ordering; a re-run will differ in the last bits and in nothing that
+changes a conclusion. Flagged rather than assumed, because the DSS line
+reads these numbers.
+
+**Verification.** 387 → **417 tests**, 0 failed, 0 ignored, against real
+Redis/Postgres/MinIO. `cargo fmt --check` clean, `cargo clippy
+--workspace --all-targets` clean under `-D warnings`.
+
+## F1 + F2 — the two deferred plumbing ADRs, built (2026-08-31)
+
+Both were "proposed — pending project-owner review". Approved and
+implemented. They turned out to need each other, which neither
+anticipated.
+
+### F1 — ADR 0012: cross-round state and per-client extra fields
+
+Unblocks FedNova, SCAFFOLD and FedOpt, which share this plumbing. **No
+aggregator reads either new field yet** — each method is still its own
+phase brief, exactly as the ADR says. What changed is that none of them
+is blocked on a schema decision any more.
+
+- **Two optional proto fields**, `local_steps` (FedNova) and
+  `control_variate` (SCAFFOLD), on `ClientDelta` *and* `DeltaChunk`.
+- **The `Mutex` state pattern is now documented rather than incidental**
+  — on `Aggregator::aggregate` and in `EXTENDING.md`, with the two
+  obligations Tier 6 learned the hard way attached to it.
+
+Three corrections to the ADR, all found by building it and recorded in
+the ADR itself:
+
+1. **`ClientDelta` never travels.** The ADR's snippet extends it alone,
+   but it is what the server *builds* from a chunk stream — fields added
+   only there could never be populated by any client. Both messages now
+   carry them, and they reassemble differently: `local_steps` is a scalar
+   read from the first chunk to *arrive* (as `num_samples` always has),
+   `control_variate` is chunked like `data` and concatenated in
+   `chunk_index` order. Different rules, so every reassembly test submits
+   out of order — one that did not would pass with them confused.
+2. **Tier 5's `max_update_bytes` bound had to learn about the new
+   field.** It counted `data` only, because `data` was the only
+   client-controlled payload when it was written. Left alone, the H1 fix
+   would still have *existed* and been trivially bypassable: put the
+   flood in `control_variate`, keep `data` tiny. Confirmed by neutralising
+   the fix and watching the new test go red.
+3. **"No producer needs to change" is true of bytes, not of Rust.** On
+   the wire, yes — and now proven at the byte level against a hand-built
+   expected encoding rather than against the type under test. In Rust it
+   broke 75 struct literals across 37 files, which now end in
+   `..Default::default()` so the next field breaks none of them.
+
+### F2 — ADR 0011: the trusted-reference sidecar
+
+Accepted as **option 2**. FLTrust ships; the server gained zero new
+dependencies, exactly as the ADR promised.
+
+| Piece | Where |
+|---|---|
+| Hop schema | `conflux-proto/proto/trusted_reference.proto` (its own file — a separate contract, not part of the client-facing surface) |
+| The client the server uses | `conflux-net::TrustedReferenceTransport` |
+| The sidecar | `crates/conflux-trusted-reference` — the fourteenth crate, lib + binary |
+| FLTrust | `conflux-core::FlTrustAggregator`, a new `trusted` family |
+
+**This is the first method in the catalog that can resist a colluding
+majority.** Every other family derives "normal" from the batch, so a
+majority is normal by construction — this document's own research line
+measured that (§5.1). FLTrust never asks the batch. Asserted directly:
+`a_colluding_majority_does_not_win` puts three attackers against one
+honest client and the honest direction still wins.
+
+Three things the ADR left open, decided while building:
+
+- **How an async reference reaches a synchronous `aggregate`.** Via
+  **F1's pattern**, which had landed hours earlier: a new
+  `set_trusted_reference` trait method with a default no-op, so the
+  twelve existing methods were untouched. The two ADRs needed each other.
+- **What happens when the reference is missing.** The obvious fallback is
+  an unweighted mean — which *is* FedAvg, the method FLTrust replaces,
+  substituted at exactly the moment the defense should engage, producing
+  a checkpoint indistinguishable from a healthy one. It errors instead,
+  and the server refuses to start.
+- **Whether the boundary is enforced or merely stated.** ADR 0010 has
+  asserted the same kind of invariant about `conflux-attacks` since Phase
+  12 — in prose only. CI now has an `isolation` job that fails if
+  `cargo tree -p conflux-server -e normal` contains either crate.
+
+**What deliberately did not land.** Zeno: the `ScoreUpdates` RPC exists,
+the sidecar serves it, a test drives it over the real hop — but no
+aggregator consumes it. And no deep-learning runtime: the shipped
+`TrustedModel` is `LinearLeastSquares`, real gradient descent tested to
+recover known coefficients from a wrong start, and honestly a *linear*
+model. Anything else implements the trait against `ort`/`tch`/a Python
+process. That extension point is the whole reason the capability lives
+outside the server.
+
+**Verification.** 430 → **451 tests** (F1: 13, F2: 8), 0 failed, 0
+ignored. Clippy clean under `-D warnings`, fmt clean. Beyond the suite,
+the real binaries were run together: the sidecar loads a CSV root dataset
+and serves, the server completes the `Describe` handshake and fetches a
+reference in round 1. All three startup paths were checked by hand —
+`fltrust` with no sidecar refuses to start, `fltrust` against a dead port
+refuses to start, and `fedavg` with a sidecar configured warns and opens
+no connection. `.env.example` and `USAGE.md` are both back at exact
+parity with the code (48 variables).
+
+**One thing not verified locally.** `conflux-trusted-reference` declares
+the workspace MSRV of 1.85 and is now in CI's `msrv` job, but there is no
+1.85 toolchain on this machine, so that job will be its first real check.
+The evidence that exists is `clippy::incompatible_msrv` running clean
+against the declared version — which is what caught `is_multiple_of` in
+Tier 3, so it is not nothing, but it is not a 1.85 build either.
+
+## Phase 22 + Experiment 2.10 — the optimization family, and FLANDERS (2026-09-01)
+
+Prompted by a comparison against Flower, Xaynet and OpenFL. Two of those
+three are dead — Xaynet archived 2022, OpenFL "no longer under active
+development", pointing users at Flower — so the comparison is really
+against Flower, and it found one large gap and one urgent research
+problem.
+
+### The gap: `optimization`, the framework's largest catalog hole
+
+Conflux shipped ten robust methods against Flower's five built-in, and
+**zero** optimization methods against its six. Adaptive server
+optimization is the axis that makes federated training converge on
+non-IID data, and it was entirely absent.
+
+**FedAdagrad, FedAdam and FedYogi now ship** — Reddi et al. (2021)
+Algorithm 2, one type with a discriminant since the three differ in
+exactly one line. New config keys `server_learning_rate` (`η`) and
+`server_tau` (`τ`), both with full ADR 0007 provenance logging. `τ =
+1e-3` is the paper's value; **`η` has no honest default** and its `1.0`
+is documented as a placeholder in the same sense `clip_radius = 1.0` is,
+because the paper deliberately publishes no universal value.
+
+[`docs/phases/phase-22-optimization-family.md`](phases/phase-22-optimization-family.md)
+scopes the four that remain. The short version: **FedAvgM and QFedAvg
+are buildable now** (QFedAvg needs one more optional proto field, which
+ADR 0012's recipe already covers); **FedProx and SCAFFOLD are gated on
+ADR 0005**, because FedProx's server side *is* FedAvg and its whole
+substance is a client-side loss term. FedNova sits between — its
+server-side half is small, but it needs a client that populates
+`local_steps`.
+
+One test failure worth recording: the first version of
+`yogis_second_moment_decays_more_slowly_than_adams` asserted the
+opposite, that Yogi would recover *faster* after a shock. The
+implementation was right and the assertion was backwards — Yogi's `v`
+moves additively and therefore decays more slowly than Adam's
+multiplicative rule, which is the entire point of Yogi.
+
+### The urgent one: DSS had never been positioned against its closest prior art
+
+**FLANDERS** (Gabrielli, Belli, Matrullo, Miori & Tolomei, 2024, arXiv
+2303.16668) is a cross-round pre-aggregation filter that wraps an
+arbitrary base and targets >50% malicious under non-IID. That is DSS's
+shape, DSS's Claim 1 and DSS's Claim 2. It was cited **nowhere** in
+`docs/research/` or in `dss.tex`, and it is reproduced as a Flower
+baseline, so it is the first thing a reviewer would reach for.
+
+Implemented faithfully in `conflux-core` (`flanders.rs` — MAR(1) fitted
+by alternating least squares each round, `δ = ‖·‖²₂`, top-`k`, the
+paper's cold-start branch) and compared head to head: **10,800 rows, 5
+seeds, 6 attacks, malicious ratios from 20% to 80%**
+([§5.14](research/temporal-consistency-aggregation.md)).
+
+Four findings:
+
+1. **On the attack DSS was validated against, DSS wins by ~15×** —
+   0.64 ± 0.34 vs 9.41 ± 7.46, against undefended FedAvg's 553.0.
+   Non-overlapping intervals.
+2. **In FLANDERS's own headline regime, it fails and DSS holds.** At 60%
+   malicious it scores 1901.7 where undefended FedAvg scores 1659.1 —
+   worse than no defense; at 80% it collapses entirely. DSS holds at
+   0.44 and 7.19.
+3. **FLANDERS is worse than plain FedAvg against every Sybil attack
+   tested** (24.2 vs 17.0 at 20% malicious), and the mechanism is
+   structural rather than a defect: a colluder that repeats itself is
+   the *most forecastable* client in the batch, so a forecast-
+   consistency filter keeps it and drops the noisier honest majority.
+   Pinned as a unit test. Its own paper's attacks all perturb or
+   optimize, so this failure mode cannot arise there.
+4. **Collusion-only DSS dominates everything**, including the shipped
+   AND-gate, by one to two orders of magnitude across all six attacks —
+   the third independent finding pointing at the gate after §5.6 and
+   §5.12. Still does not license flipping it: none of these attacks
+   includes a legitimately-noisy honest majority, which is exactly what
+   the stability conjunct protects.
+
+**DSS's contribution 3 was withdrawn.** "Composability with any existing
+`Aggregator`" is FLANDERS's shape, published first. Withdrawn in both
+the research doc and `dss.tex` rather than defended. What survives is
+signal dimensionality (a `d × h` matrix forecast against a length-`w`
+scalar trace) and the measured finding that the two methods fail on
+*opposite* attack shapes.
+
+`dss.tex` gained a related-work paragraph, a results section
+(`sec:flanders`), two bibliography entries, and the withdrawal. Still
+not compiled — no TeX toolchain here — but checked structurally: braces
+balanced, all 17 `tabular` environments closed, every `\cite` resolving
+to a `\bibitem` and every `\ref` to a `\label`.
+
+**Fidelity correction found by measuring.** The catalog first paired
+`flanders` with FedAvg. The paper specifies `ϕ = Krum or any other
+existing robust aggregation heuristic`, and finding 3 shows the FedAvg
+pairing is actively harmful, so the catalog entry now pairs it with Krum
+as written. Shipping the harmful pairing would have misrepresented the
+method.
+
+**Verification.** 451 → **469 tests**, 0 failed, 0 ignored. Clippy clean
+under `-D warnings`, fmt clean. The 10,800-row results file was
+re-generated after a later refactor of the linear solver and came back
+**byte-identical**, which is the reproducibility rule
+`docs/research/AGENT.md` requires. `.env.example` and `USAGE.md` are both
+at exact 50/50 parity with the code.
+
 ## Research-line entry point
 
 The DSS research now has its own harness (scaffolded 2026-08-31 with the
@@ -1178,15 +1574,25 @@ produce drift, not clarity. `AGENT.md` maps each one to where it lives.
 
 ## Next
 
-**Stabilization: Tiers 1–5 are complete — `conflux-fl` is stable.**
+**Stabilization: Tiers 1–6 are complete — `conflux-fl` is stable.**
 What's left on the framework line, in the order it makes sense to take
-it:
+it. Note that every remaining item *adds* public API — ADR 0012 changes
+`conflux-proto`, the layer `API_STABILITY.md` calls the most stable of
+all — so taking them makes the framework more capable and less settled
+at the same time. That is a reason to sequence them deliberately, not a
+reason to avoid them.
 
-- **Tier 5 — feature gaps**, all deferred past "stable" deliberately:
-  ADR 0012's stateful-aggregator proto extension (unlocks
-  FedNova/SCAFFOLD/FedOpt together) · ADR 0011's trusted-reference
-  sidecar · ADR 0005's Python SDK interface question · Phase 21's
-  profile-file `inherits` · a `cflux` CLI.
+- ~~ADR 0012's stateful-aggregator proto extension~~ and ~~ADR 0011's
+  trusted-reference sidecar~~ — **both built (2026-08-31)**, see above.
+- **Methods the new plumbing unblocked, none built yet**, each its own
+  phase brief: **FedNova** (`local_steps` is on the wire; the ADR calls
+  it a straightforward `AveragingWeighting` member) · **SCAFFOLD**
+  (`control_variate` is on the wire and reassembles) · **FedOpt**
+  (needs no proto change at all, only the state pattern, which is now
+  documented) · **Zeno** (the sidecar already serves its scoring RPC and
+  a test drives it; nothing consumes it).
+- **Remaining feature gaps**: ADR 0005's Python SDK interface question ·
+  Phase 21's profile-file `inherits` · a `cflux` CLI.
 - **Publishing (P1–P3), gated on a decision that hasn't been made.**
   Whether crates.io publishing is intended is still open. If yes:
   **P1** every internal path dependency needs a `version` alongside its

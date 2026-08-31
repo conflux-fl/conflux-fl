@@ -150,6 +150,7 @@ async fn main() {
             total_chunks: 2,
             data: conflux_proto::encode_weights(&[1.0, 2.0]),
             num_samples: 64,
+            ..Default::default()
         },
         DeltaChunk {
             client_id: "client-1".to_string(),
@@ -158,6 +159,7 @@ async fn main() {
             total_chunks: 2,
             data: conflux_proto::encode_weights(&[3.0]),
             num_samples: 64,
+            ..Default::default()
         },
     ];
     let ack = pull.submit_delta(chunks).await.unwrap();

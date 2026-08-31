@@ -34,6 +34,7 @@ fn delta(id: &str, w: &[f32], num_samples: u64) -> ClientDelta {
         round: 1,
         weights: encode_weights(w),
         num_samples,
+        ..Default::default()
     }
 }
 

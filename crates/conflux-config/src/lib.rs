@@ -29,6 +29,66 @@
 //! implementation in another crate become selectable by name from
 //! config, without this crate ever importing that other crate.
 
+//! # Example
+//!
+//! The two axes decide most values; an explicit override wins over both,
+//! and every resolved value carries the tier it came from.
+//!
+//! ```
+//! use conflux_config::{ConfigSource, Mode, Overrides, Topology, resolve};
+//!
+//! let config = resolve(
+//!     Topology::CrossSilo,
+//!     Mode::Production,
+//!     None,
+//!     &Overrides::default(),
+//!     &Overrides::default(),
+//! )
+//! .unwrap();
+//!
+//! // cross_silo's topology profile sets a 600s round timeout, and says
+//! // so — this provenance is what ADR 0007 exists for.
+//! assert_eq!(config.round_timeout_secs.value, 600);
+//! assert!(matches!(
+//!     config.round_timeout_secs.source,
+//!     ConfigSource::TopologyProfile(_)
+//! ));
+//! ```
+//!
+//! ```
+//! # use conflux_config::{ConfigSource, Mode, Overrides, Topology, resolve};
+//! // A later tier wins, and the source changes with it.
+//! let config = resolve(
+//!     Topology::CrossSilo,
+//!     Mode::Production,
+//!     None,
+//!     &Overrides { round_timeout_secs: Some(45), ..Default::default() },
+//!     &Overrides::default(),
+//! )
+//! .unwrap();
+//!
+//! assert_eq!(config.round_timeout_secs.value, 45);
+//! assert!(matches!(config.round_timeout_secs.source, ConfigSource::EnvVar(_)));
+//! ```
+//!
+//! The two axes own disjoint parameter sets (ADR 0001), so layering them
+//! never conflicts — topology answers "what kind of participants?", mode
+//! answers "am I iterating, or deployed?":
+//!
+//! ```
+//! # use conflux_config::{Mode, Overrides, Topology, resolve};
+//! let research = resolve(Topology::CrossDevice, Mode::Research, None,
+//!     &Overrides::default(), &Overrides::default()).unwrap();
+//! let production = resolve(Topology::CrossDevice, Mode::Production, None,
+//!     &Overrides::default(), &Overrides::default()).unwrap();
+//!
+//! // Same topology, so the topology-owned value is identical...
+//! assert_eq!(research.round_timeout_secs.value, production.round_timeout_secs.value);
+//! // ...while the mode-owned one differs.
+//! assert!(!research.require_node_auth.value);
+//! assert!(production.require_node_auth.value);
+//! ```
+
 #![warn(missing_docs)]
 
 mod file;
@@ -159,6 +219,29 @@ pub struct Overrides {
     /// Tune it against your own model, or use a selection-based robust
     /// aggregator, which has no equivalent parameter to get wrong.
     pub clip_radius: Option<f32>,
+    /// The `optimization` family's server learning rate `η` (FedAdagrad,
+    /// FedAdam, FedYogi — Reddi et al., 2021).
+    ///
+    /// Builtin fallback `1.0`, and that is a placeholder rather than a
+    /// recommendation. Reddi et al. deliberately publish no universal
+    /// `η`: it is the parameter their entire experimental section
+    /// sweeps, per task. At `η = 1.0` the server moves roughly as far as
+    /// the aggregate suggested, which makes the optimizer's adaptivity
+    /// visible without silently rescaling anything — a starting point to
+    /// sweep from. Same honest-placeholder posture as `clip_radius`, and
+    /// for the same reason.
+    ///
+    /// Ignored by every aggregator outside the `optimization` family.
+    pub server_learning_rate: Option<f32>,
+    /// The `optimization` family's adaptivity floor `τ`.
+    ///
+    /// Builtin fallback `1e-3`, which unlike `η` *is* the paper's own
+    /// value — Reddi et al. use it throughout and report that it "works
+    /// almost as well as all other values" across their tasks. Smaller
+    /// means more adaptive.
+    ///
+    /// Ignored by every aggregator outside the `optimization` family.
+    pub server_tau: Option<f32>,
     /// Whether `conflux-reputation`'s pre-aggregation contribution filter
     /// runs at all, independent of which aggregator is selected. Builtin
     /// fallback `false`: every shipped aggregator's default behavior
@@ -285,6 +368,14 @@ pub struct ResolvedConfig {
     ///
     /// See the same field on [`Overrides`] for the full description.
     pub clip_radius: Resolved<f32>,
+    /// The `optimization` family's server learning rate `η`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub server_learning_rate: Resolved<f32>,
+    /// The `optimization` family's adaptivity floor `τ`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub server_tau: Resolved<f32>,
     /// Whether the pre-aggregation reputation filter runs.
     ///
     /// See the same field on [`Overrides`] for the full description.
@@ -621,6 +712,35 @@ pub fn resolve(
         &file_source,
         &env_var!("CLIP_RADIUS"),
     );
+    // Owned by neither axis: an optimizer hyperparameter is a property
+    // of the training problem, not a claim about what kind of
+    // participants a deployment has (topology) or whether it is being
+    // iterated on (mode) — the same reasoning `clip_radius` and
+    // `max_update_bytes` follow, keeping ADR 0001's disjointness intact.
+    let server_learning_rate = layer(
+        1.0_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.server_learning_rate),
+        env.server_learning_rate,
+        cli.server_learning_rate,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("SERVER_LEARNING_RATE"),
+    );
+    let server_tau = layer(
+        1e-3_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.server_tau),
+        env.server_tau,
+        cli.server_tau,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("SERVER_TAU"),
+    );
     let reputation_filter_enabled = layer(
         false,
         None,
@@ -782,6 +902,8 @@ pub fn resolve(
         aggregator,
         robust_byzantine_fraction,
         clip_radius,
+        server_learning_rate,
+        server_tau,
         reputation_filter_enabled,
         client_side_privacy_transform,
         privacy_mechanism,
@@ -894,6 +1016,18 @@ impl ResolvedConfig {
             "clip_radius",
             LoggedValue::Number(self.clip_radius.value.to_string()),
             &self.clip_radius.source,
+        ));
+        lines.push(log_line(
+            format,
+            "server_learning_rate",
+            LoggedValue::Number(self.server_learning_rate.value.to_string()),
+            &self.server_learning_rate.source,
+        ));
+        lines.push(log_line(
+            format,
+            "server_tau",
+            LoggedValue::Number(self.server_tau.value.to_string()),
+            &self.server_tau.source,
         ));
         lines.push(log_line(
             format,

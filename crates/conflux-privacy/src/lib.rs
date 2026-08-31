@@ -3,6 +3,55 @@
 //! aggregates it), plus an accountant that tracks how much cumulative
 //! privacy loss ("epsilon") has been spent across rounds so a caller can
 //! stop once a configured budget runs out.
+//!
+//! # Example
+//!
+//! Clipping bounds any one client's influence; the noise is what buys
+//! the privacy guarantee.
+//!
+//! ```
+//! use conflux_privacy::build_privacy_mechanism;
+//!
+//! // No noise, so the clipping step is visible on its own.
+//! let clip_only = build_privacy_mechanism("gaussian_clipping", 1.0, 0.0).unwrap();
+//!
+//! let mut weights = [3.0_f32, 4.0, 12.0]; // L2 norm is exactly 13
+//! let mut rng = rand::rng();
+//! clip_only.transform(&mut weights, &mut rng);
+//!
+//! let norm = weights.iter().map(|w| w * w).sum::<f32>().sqrt();
+//! assert!((norm - 1.0).abs() < 1e-5, "clipped to the unit ball");
+//!
+//! // An update already inside the radius is left alone — clipping is a
+//! // ceiling, not a normalization.
+//! let mut small = [0.1_f32, 0.1, 0.1];
+//! clip_only.transform(&mut small, &mut rng);
+//! assert!((small[0] - 0.1).abs() < 1e-6);
+//! ```
+//!
+//! The accountant tracks what has been spent, and stores the raw
+//! per-round parameters rather than a running total — epsilon depends on
+//! the `delta` a caller asks about:
+//!
+//! ```
+//! use conflux_privacy::{PrivacyAccountant, RdpAccountant};
+//!
+//! let mut accountant = RdpAccountant::new();
+//! assert_eq!(accountant.current_epsilon(1e-5), 0.0);
+//!
+//! for _ in 0..10 {
+//!     accountant.record_round(1.0, 0.01);
+//! }
+//!
+//! let spent = accountant.current_epsilon(1e-5);
+//! assert!(spent > 0.0);
+//! // Composition only accumulates: more rounds never cost less.
+//! accountant.record_round(1.0, 0.01);
+//! assert!(accountant.current_epsilon(1e-5) > spent);
+//!
+//! assert!(accountant.budget_exhausted(spent, 1e-5));
+//! assert!(!accountant.budget_exhausted(1e9, 1e-5));
+//! ```
 
 #![warn(missing_docs)]
 

@@ -27,6 +27,24 @@ pub enum ServerError {
     /// The batch could not be aggregated — see `AggregatorError` for
     /// which validation rejected it.
     Aggregator(#[from] conflux_core::AggregatorError),
+    /// A `trusted`-family aggregator's reference could not be obtained
+    /// this round (ADR 0011) — no sidecar configured, unreachable,
+    /// answering for the wrong round, or returning something
+    /// undecodable.
+    ///
+    /// Fatal to the round rather than something to continue past. A
+    /// trusted-family method with no reference has nothing to be trusted
+    /// *against*; aggregating anyway would mean falling back to some
+    /// other rule at exactly the moment the defense was supposed to
+    /// engage, and writing a checkpoint indistinguishable from a healthy
+    /// one.
+    #[error("no trusted reference available for round {round}: {reason}")]
+    TrustedReferenceUnavailable {
+        /// The round that could not proceed.
+        round: u64,
+        /// What went wrong, for the operator.
+        reason: String,
+    },
 }
 
 impl ServerError {
@@ -67,6 +85,15 @@ impl ServerError {
             // experiment. `EmptyBatch` in particular is the ordinary
             // "nobody has registered yet" startup case.
             ServerError::Aggregator(_) => true,
+            // Transient for the same reason `Registry`/`Store` are: a
+            // sidecar is a backend, and one that was unreachable a moment
+            // ago may be reachable now. The loop backs off and reports
+            // itself degraded rather than stopping — which is right even
+            // for the "no sidecar configured" case, since that is a
+            // misconfiguration an operator fixes by starting one, and a
+            // crash-looping server is a worse way to say so than a
+            // degraded health endpoint that names the problem.
+            ServerError::TrustedReferenceUnavailable { .. } => true,
         }
     }
 }

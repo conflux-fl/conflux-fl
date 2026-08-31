@@ -68,6 +68,7 @@ async fn explicit_aggregator_and_selector_overrides_resolve_through_the_registry
             total_chunks: 1,
             data: encode_weights(&[10.0, 20.0]),
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();

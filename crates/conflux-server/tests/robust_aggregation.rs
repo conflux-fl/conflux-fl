@@ -71,6 +71,7 @@ async fn run_single_client_round(aggregator_name: &str) -> Vec<f32> {
             total_chunks: 1,
             data: encode_weights(&[10.0, 20.0]),
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();

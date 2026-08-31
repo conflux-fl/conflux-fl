@@ -106,6 +106,7 @@ mod tests {
             round: 1,
             weights: bytes,
             num_samples,
+            ..Default::default()
         }
     }
 

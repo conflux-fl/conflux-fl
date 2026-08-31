@@ -95,7 +95,19 @@ impl<D: RoundDispatcher> FlTransport for FlTransportService<D> {
         let mut chunks: Vec<DeltaChunk> = Vec::new();
         let mut received_bytes: u64 = 0;
         while let Some(chunk) = stream.message().await? {
-            received_bytes = received_bytes.saturating_add(chunk.data.len() as u64);
+            // Every client-controlled byte in the chunk counts, not just
+            // `data`. ADR 0012 added `control_variate`, which is also an
+            // arbitrary-length client-supplied buffer — counting only
+            // `data` would leave the ceiling intact while relocating the
+            // flood one field to the left, which is not a bound at all.
+            // Any future payload field belongs in this sum for the same
+            // reason.
+            let chunk_bytes = chunk.data.len() as u64
+                + chunk
+                    .control_variate
+                    .as_ref()
+                    .map_or(0, |cv| cv.len() as u64);
+            received_bytes = received_bytes.saturating_add(chunk_bytes);
             if received_bytes > self.max_update_bytes {
                 // Naming the client from the chunk in hand: this runs
                 // before any identity check, because a check that ran

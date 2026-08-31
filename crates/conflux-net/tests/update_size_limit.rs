@@ -93,6 +93,7 @@ fn chunk(index: u32, total: u32, bytes: usize) -> DeltaChunk {
         total_chunks: total,
         data: vec![0u8; bytes],
         num_samples: 10,
+        ..Default::default()
     }
 }
 
@@ -202,4 +203,78 @@ fn the_default_bound_is_finite_and_not_zero() {
         "the default must stay in step with conflux-config's own \
          max_update_bytes builtin — the two are mirrored, not shared"
     );
+}
+
+/// ADR 0012 added `control_variate`, a second arbitrary-length,
+/// client-controlled byte field. H1's bound counts every such field, not
+/// just `data`.
+///
+/// Without this, the Tier 5 fix would still *exist* and still be
+/// bypassable: a client that puts its flood in `control_variate` and
+/// leaves `data` tiny allocates exactly as much server memory as before,
+/// while every byte counted against the limit stays near zero. A ceiling
+/// that a client can step around by choosing a different field is not a
+/// ceiling.
+#[tokio::test]
+async fn the_limit_counts_control_variate_bytes_not_just_data() {
+    // 1 KiB budget. Each chunk carries 16 bytes of `data` and 256 bytes
+    // of `control_variate`, so counting `data` alone would total 640
+    // bytes across 40 chunks — comfortably "within" the limit — while
+    // actually delivering ~10 KiB.
+    let (addr, chunks_seen) = spawn_server(1024).await;
+    let mut transport = PullTransport::connect(addr).await.unwrap();
+
+    let flood: Vec<DeltaChunk> = (0..40)
+        .map(|i| DeltaChunk {
+            data: vec![0u8; 16],
+            control_variate: Some(vec![0u8; 256]),
+            ..chunk(i, 40, 0)
+        })
+        .collect();
+
+    let result = transport.submit_delta(flood).await;
+
+    match result {
+        Err(TransportError::Rpc(status)) => assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "expected resource_exhausted, got {status:?}"
+        ),
+        Err(other) => panic!("expected an RPC rejection, got {other:?}"),
+        Ok(_) => panic!(
+            "the server accepted ~10 KiB against a 1 KiB budget because the \
+             bytes were in `control_variate` rather than `data`"
+        ),
+    }
+
+    assert_eq!(
+        chunks_seen.load(Ordering::SeqCst),
+        0,
+        "the stream must be cut before delivery, not rejected after buffering"
+    );
+}
+
+/// The other half: `control_variate` bytes must not be *over*-counted
+/// either. A legitimate SCAFFOLD client sends roughly twice the payload
+/// of a plain one, and it has to fit.
+#[tokio::test]
+async fn a_scaffold_sized_submission_within_the_limit_is_accepted() {
+    // 4 KiB budget; 8 chunks x (128 data + 128 control variate) = 2 KiB.
+    let (addr, chunks_seen) = spawn_server(4096).await;
+    let mut transport = PullTransport::connect(addr).await.unwrap();
+
+    let submission: Vec<DeltaChunk> = (0..8)
+        .map(|i| DeltaChunk {
+            data: vec![0u8; 128],
+            control_variate: Some(vec![0u8; 128]),
+            ..chunk(i, 8, 0)
+        })
+        .collect();
+
+    transport
+        .submit_delta(submission)
+        .await
+        .expect("a submission inside the budget must be accepted");
+
+    assert_eq!(chunks_seen.load(Ordering::SeqCst), 8);
 }

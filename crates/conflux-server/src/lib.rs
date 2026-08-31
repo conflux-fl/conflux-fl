@@ -3,6 +3,48 @@
 //! thin wrapper around this.
 //!
 //! See `docs/spec/conflux-spec-v1.md` §8, §10 (Phase 5).
+//!
+//! # Example
+//!
+//! One round, driven directly. `run_round` is the whole pipeline —
+//! select, dispatch, buffer, privacy, reputation, aggregate, checkpoint
+//! — and returns a summary of what actually happened rather than just
+//! succeeding silently.
+//!
+//! ```no_run
+//! use conflux_config::{Mode, Overrides, Topology};
+//! use conflux_server::{AppState, run_round};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let config = conflux_config::resolve(
+//!     Topology::CrossDevice,
+//!     Mode::Research,
+//!     None,
+//!     &Overrides::default(),
+//!     &Overrides { aggregator: Some("krum".into()), ..Default::default() },
+//! )?;
+//!
+//! // One process, one experiment — there is no tenant dimension here
+//! // (ADR 0003). Running two experiments means two processes.
+//! let state = Arc::new(AppState::new(config, vec![0.0; 3]));
+//!
+//! let summary = run_round(&state).await?;
+//! println!(
+//!     "round {} closed on {:?}: {} selected, {} submitted, {} aggregated",
+//!     summary.round,
+//!     summary.flush_reason,
+//!     summary.num_selected,
+//!     summary.num_submitted,
+//!     summary.num_passed,
+//! );
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! `conflux-server` never names an aggregator itself — it asks
+//! `conflux-core` to build whatever `config.aggregator.value` says, which
+//! is why adding a method never touches this crate (ADR 0002).
 
 #![warn(missing_docs)]
 

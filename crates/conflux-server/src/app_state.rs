@@ -10,6 +10,7 @@
 //! see `backend_selection.rs` for how a caller picks which backend each
 //! resolves to.
 
+use conflux_net::TrustedReferenceTransport;
 use conflux_net::jwt::JwtKeyMaterial;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,7 @@ use conflux_registry::{
 use conflux_reputation::CosineScorer;
 use conflux_selector::{ClientSelector, SelectionSeed};
 use conflux_store::{AnyStore, InMemoryStore, PostgresStore, PrivacyRoundLog, S3Store, StoreError};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::broadcast;
 
 use crate::backend_selection::{
@@ -80,6 +82,24 @@ pub struct AppState {
     /// The aggregation method, constructed by name from the resolved
     /// config.
     pub aggregator: Box<dyn Aggregator>,
+    /// The trusted-reference sidecar connection (ADR 0011), when the
+    /// configured aggregator needs one.
+    ///
+    /// `None` for every deployment that is not running a `trusted`-family
+    /// method, which is all of them by default — the sidecar is an
+    /// optional process, and a deployment that has not configured one
+    /// never opens this connection or enters the code path that uses it.
+    ///
+    /// `tokio::sync::Mutex`, not `std::sync::Mutex`: the transport's
+    /// calls are `async` and the guard is held across an `.await`, which
+    /// the std guard cannot be. Every other `Mutex` in this struct
+    /// guards purely synchronous state and stays `std`.
+    ///
+    /// Note the type: `conflux-server` holds a *client* from
+    /// `conflux-net`. It does not depend on `conflux-trusted-reference`
+    /// and must not be made to — ADR 0011, following ADR 0010's
+    /// precedent, and CI's `isolation` job checks it.
+    pub trusted_reference: Option<TokioMutex<TrustedReferenceTransport>>,
     /// Phase 11b: constructed by name from `config.privacy_mechanism.value`
     /// via `conflux_privacy::build_privacy_mechanism` — the third of the
     /// three spec §5 families now registry-wired (Phase 10b did the
@@ -286,6 +306,14 @@ impl AppState {
             conflux_core::AggregatorParams {
                 byzantine_fraction: config.robust_byzantine_fraction.value,
                 clip_radius: config.clip_radius.value,
+                // `Some` unconditionally: `conflux-config` has already
+                // resolved these through its own chain and logged where
+                // each came from (ADR 0007), so passing `None` here to
+                // mean "use the paper's default" would put a second,
+                // invisible default underneath the one the startup log
+                // just reported.
+                server_learning_rate: Some(config.server_learning_rate.value),
+                server_tau: Some(config.server_tau.value),
             },
         )
         .expect("unknown aggregator in resolved config");
@@ -311,8 +339,24 @@ impl AppState {
             round_loop_health: Arc::new(RoundLoopHealth::new()),
             push_sender,
             jwt_key: None,
+            trusted_reference: None,
             config,
         }
+    }
+
+    /// Attaches a trusted-reference sidecar connection (ADR 0011).
+    ///
+    /// A consuming builder, for the same reason `with_jwt_key` is one:
+    /// this is optional, startup-only, and needed by a small minority of
+    /// deployments, so it does not belong in `assemble`'s parameter list
+    /// where every caller would have to pass `None`.
+    ///
+    /// `main.rs` calls this only when the resolved aggregator reports
+    /// `requires_trusted_reference()`. A deployment running `fedavg`
+    /// never connects to a sidecar even if one is running.
+    pub fn with_trusted_reference(mut self, transport: TrustedReferenceTransport) -> Self {
+        self.trusted_reference = Some(TokioMutex::new(transport));
+        self
     }
 
     /// Attaches the JWT public key `register()` verifies against.

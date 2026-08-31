@@ -104,6 +104,7 @@ async fn concurrent_clients_across_multiple_rounds() {
                         total_chunks: 1,
                         data: encode_weights(&trained),
                         num_samples: 10,
+                        ..Default::default()
                     }])
                     .await
             }));

@@ -55,6 +55,7 @@ fn delta(client_id: &str, weights: &[f32], num_samples: u64) -> ClientDelta {
         round: 1,
         weights: encode_weights(weights),
         num_samples,
+        ..Default::default()
     }
 }
 
@@ -301,6 +302,7 @@ fn truncated_weight_bytes_are_rejected_not_silently_reinterpreted() {
             round: 1,
             weights: vec![0u8; 7],
             num_samples: 10,
+            ..Default::default()
         }])
         .expect_err("7 bytes is not a valid f32 vector");
     assert!(

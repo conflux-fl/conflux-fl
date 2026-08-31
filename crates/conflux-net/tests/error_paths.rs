@@ -119,6 +119,7 @@ async fn round_closed_maps_to_failed_precondition_not_internal() {
             total_chunks: 1,
             data: vec![],
             num_samples: 1,
+            ..Default::default()
         }])
         .await
         .unwrap_err();

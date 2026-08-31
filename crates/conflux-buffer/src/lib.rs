@@ -11,6 +11,61 @@
 //! caller, every later push must be rejected explicitly rather than
 //! silently landing in a batch nobody will ever read again.
 
+//! # Example
+//!
+//! A round closes on whichever comes first — quorum or timeout — and
+//! says which, because that difference is operationally significant.
+//!
+//! ```
+//! use conflux_buffer::{FlushReason, RoundBuffer};
+//! use conflux_proto::{ClientDelta, encode_weights};
+//! use std::time::Duration;
+//!
+//! fn delta(id: &str, round: u64) -> ClientDelta {
+//!     ClientDelta {
+//!         client_id: id.to_string(),
+//!         round,
+//!         weights: encode_weights(&[1.0, 2.0]),
+//!         num_samples: 10,
+//!         ..Default::default()
+//!     }
+//! }
+//!
+//! # fn block<F: std::future::Future>(f: F) -> F::Output {
+//! #     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f)
+//! # }
+//! # block(async {
+//! // Quorum of 2, and 2 arrive: the round closes without waiting out
+//! // its timeout, even though the timeout is generous.
+//! let buffer = RoundBuffer::new(1, 2);
+//! buffer.push(delta("a", 1)).unwrap();
+//! buffer.push(delta("b", 1)).unwrap();
+//!
+//! let flushed = buffer.await_flush(Duration::from_secs(60)).await;
+//! assert_eq!(flushed.reason, FlushReason::Quorum);
+//! assert_eq!(flushed.deltas.len(), 2);
+//! assert_eq!(flushed.round, 1);
+//!
+//! // Quorum of 5, only 1 arrives: the round still closes, on the
+//! // timeout, with a partial batch rather than blocking forever.
+//! let buffer = RoundBuffer::new(2, 5);
+//! buffer.push(delta("a", 2)).unwrap();
+//!
+//! // A submission for a round that has moved on is refused rather than
+//! // folded into the current one — a slow client resubmitting last
+//! // round's work must not corrupt this round's batch.
+//! assert!(buffer.push(delta("late", 1)).is_err());
+//!
+//! let flushed = buffer.await_flush(Duration::from_millis(20)).await;
+//! assert_eq!(flushed.reason, FlushReason::Timeout);
+//! assert_eq!(flushed.deltas.len(), 1);
+//!
+//! // A buffer that has already flushed rejects late arrivals rather
+//! // than folding them into a round that is over.
+//! assert!(buffer.push(delta("straggler", 2)).is_err());
+//! # });
+//! ```
+
 #![warn(missing_docs)]
 
 use std::sync::Mutex;
@@ -230,6 +285,7 @@ mod tests {
             round,
             weights: vec![],
             num_samples: 1,
+            ..Default::default()
         }
     }
 

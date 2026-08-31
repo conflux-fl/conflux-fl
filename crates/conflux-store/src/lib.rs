@@ -9,6 +9,39 @@
 //! runtime by the `AnyStore` enum so a caller can pick a backend by
 //! config without needing `Box<dyn Store>`.
 
+//! # Example
+//!
+//! ```
+//! use conflux_store::{FileStore, Store, StoreError};
+//!
+//! # fn block<F: std::future::Future>(f: F) -> F::Output {
+//! #     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f)
+//! # }
+//! # let dir = std::env::temp_dir().join(format!("conflux-doctest-{}", std::process::id()));
+//! # block(async {
+//! let store = FileStore::new(&dir).unwrap();
+//!
+//! // A fresh store has no checkpoint, and says so with a typed error
+//! // rather than an empty vector — "nothing saved yet" and "a model with
+//! // zero weights" are different facts.
+//! assert!(matches!(
+//!     store.load_latest_weights().await,
+//!     Err(StoreError::NoCheckpoint)
+//! ));
+//!
+//! store.save_checkpoint(1, &[1.0, 2.0, 3.0]).await.unwrap();
+//! store.save_checkpoint(2, &[4.0, 5.0, 6.0]).await.unwrap();
+//!
+//! // "Latest" is by round number, not by write order.
+//! assert_eq!(store.load_latest_weights().await.unwrap(), vec![4.0, 5.0, 6.0]);
+//!
+//! // Re-saving a round replaces it rather than appending.
+//! store.save_checkpoint(2, &[7.0, 8.0, 9.0]).await.unwrap();
+//! assert_eq!(store.load_latest_weights().await.unwrap(), vec![7.0, 8.0, 9.0]);
+//! # });
+//! # std::fs::remove_dir_all(&dir).ok();
+//! ```
+
 #![warn(missing_docs)]
 
 mod any_store;

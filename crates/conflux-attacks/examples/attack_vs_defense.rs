@@ -33,6 +33,7 @@ fn honest_batch() -> Vec<ClientDelta> {
                 round: 1,
                 weights: encode_weights(&[1.0 + jitter; DIM]),
                 num_samples: 10,
+                ..Default::default()
             }
         })
         .collect()

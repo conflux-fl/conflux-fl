@@ -32,6 +32,7 @@ fn main() {
         round: 3,
         weights: bytes,
         num_samples: 128,
+        ..Default::default()
     };
 
     let mut buf = Vec::new();

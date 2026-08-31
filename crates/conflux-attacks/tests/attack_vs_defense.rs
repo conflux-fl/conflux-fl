@@ -38,6 +38,7 @@ fn honest_batch(n: usize, seed: u64) -> Vec<ClientDelta> {
                 round: 1,
                 weights: encode_weights(&weights),
                 num_samples: 10,
+                ..Default::default()
             }
         })
         .collect()

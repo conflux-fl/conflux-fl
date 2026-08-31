@@ -70,6 +70,7 @@ async fn run_five_client_round(
                 total_chunks: 1,
                 data: encode_weights(weights),
                 num_samples: *num_samples,
+                ..Default::default()
             }])
             .await
             .unwrap();

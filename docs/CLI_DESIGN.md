@@ -9,10 +9,16 @@ not a decision already made.
 **Sequencing decision (2026-08-31, project owner):** the CLI comes
 *after* `conflux-fl` is stable, not before. The reasoning is that a CLI
 is a surface over functionality that already exists — building one over
-an unstable surface means rewriting it when the surface moves, and
-`docs/STATUS.md`'s Tier 5 (production hardening) is still open. Crate
+an unstable surface means rewriting it when the surface moves. Crate
 publication is likewise gated on stability, which matters here because
 `cargo install cflux` is one of the two distribution paths below.
+
+**Status update (2026-08-31):** stabilization Tiers 1–6 are complete,
+so the condition this sequencing waited on has been met. The CLI is
+still last in the order, now behind whichever of the deferred feature
+gaps (ADR 0012's proto extension in particular) land first — a CLI written against a surface that is about
+to gain stateful-aggregator plumbing would be rewritten for the same
+reason this paragraph was written to avoid.
 
 **Documentation model (2026-08-31):** `cflux` follows the
 [`evnx`](https://evnx.dev) pattern — same project owner, and a proven

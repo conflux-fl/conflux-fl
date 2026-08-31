@@ -213,6 +213,7 @@ fn chunk(w: &[f32]) -> DeltaChunk {
         total_chunks: 1,
         data: encode_weights(w),
         num_samples: 10,
+        ..Default::default()
     }
 }
 fn l2(w: &[f32]) -> f32 {

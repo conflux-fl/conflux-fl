@@ -166,6 +166,7 @@ async fn local_hop_forwards_fetch_task_and_submit_delta_to_upstream() {
             total_chunks: 1,
             data: trained,
             num_samples: 42,
+            ..Default::default()
         }])
         .await
         .unwrap();

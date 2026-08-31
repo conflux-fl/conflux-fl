@@ -1,6 +1,13 @@
 # 0012 — Cross-round aggregator state and per-client extra fields: FedNova/SCAFFOLD/FedOpt
 
-**Status: proposed — pending project-owner review.** Scopes the
+**Status: accepted and implemented (2026-08-31).** Approved by the
+project owner; both extensions have shipped. Three things had to be
+decided during implementation that this document did not settle — they
+are recorded in "Corrections found while implementing" at the end rather
+than silently folded into the text above, so the difference between what
+was decided and what was discovered stays visible.
+
+Originally scoped the
 architecture decision `docs/AGGREGATION_LANDSCAPE.md` Category 4 already
 flagged as needed before any of these three methods could be built —
 this ADR decides the shared plumbing question once, rather than each
@@ -70,7 +77,7 @@ message ClientDelta {
   string client_id = 1;
   uint64 round = 2;
   bytes weights = 3;
-  uint32 num_samples = 4;
+  uint64 num_samples = 4;                // uint64, not uint32 — see Correction 1
   optional uint32 local_steps = 5;       // FedNova
   optional bytes control_variate = 6;    // SCAFFOLD — same encoding as `weights`
 }
@@ -128,3 +135,76 @@ codec needed.
 - SCAFFOLD and FedOpt still each need their own dedicated phase brief
   after this ADR lands — this document unblocks the plumbing, it doesn't
   scope either method's own algorithm.
+
+## Corrections found while implementing (2026-08-31)
+
+Three things this ADR got wrong or left open. All were found by building
+it, none by re-reading it.
+
+### 1. `DeltaChunk` needed the fields too — `ClientDelta` never travels
+
+The snippet above extends `ClientDelta` only. But `ClientDelta` is not a
+wire message: it is what `conflux-server` *builds* by reassembling a
+client's `DeltaChunk` stream, as its own schema comment has always said
+("Never sent on the wire as-is"). Fields added only to `ClientDelta`
+could therefore never be populated by any client — the extension would
+have compiled, tested green against hand-built `ClientDelta`s, and
+carried nothing.
+
+Both fields are on `DeltaChunk` as well (7 and 8), and they reassemble
+differently because they are differently shaped:
+
+- **`local_steps`** is a scalar, so it follows `num_samples`'s existing
+  convention exactly: repeated on every chunk, read from whichever chunk
+  arrives *first*. Depending on chunk 0 arriving first would be
+  depending on network ordering.
+- **`control_variate`** is a full vector, so it is chunked exactly like
+  `data` — chunk *i* carries slice *i* — and concatenated in
+  `chunk_index` order, not arrival order. These two rules are different,
+  and a test that only ever submitted in-order chunks would pass with
+  them confused, so every reassembly test submits out of order.
+
+(The snippet also typed `num_samples` as `uint32`; the real schema has
+always used `uint64`. Corrected above rather than propagated.)
+
+### 2. `max_update_bytes` had to learn about the new field
+
+Tier 5's H1 bound counted `chunk.data.len()` and nothing else, because
+`data` was the only client-controlled payload field when it was written.
+`control_variate` is a second one. Left alone, the fix would still have
+*existed* and been trivially bypassable: put the flood in
+`control_variate`, keep `data` tiny, and allocate exactly as much server
+memory as before while every counted byte stays near zero.
+
+The bound now sums both, and
+`conflux-net/tests/update_size_limit.rs::the_limit_counts_control_variate_bytes_not_just_data`
+was confirmed to fail with the old accounting restored. **Any future
+payload field must be added to that sum** — a ceiling a client can step
+around by choosing a different field is not a ceiling. Recorded in
+`docs/EXTENDING.md` as one of the three edits a new field requires.
+
+### 3. "No existing producer needs to change" is true of bytes, not of Rust
+
+The Consequences section says no existing `ClientDelta` producer needs to
+change. That is exactly right *on the wire* — and it is now proven at the
+byte level rather than asserted: a delta with both fields absent encodes
+byte-for-byte identically to what the old schema produced, checked
+against a hand-built expected encoding rather than against the type under
+test.
+
+It is not true of Rust source. Adding a field to a `prost` struct breaks
+every literal that names fields exhaustively — 75 of them, across 37
+files in this workspace. They now end in `..Default::default()`, which is
+what makes the claim true *going forward*: the next optional field will
+break none of them. New code should follow that idiom for the same
+reason.
+
+### What is now unblocked, and what is not
+
+The plumbing is in place and tested. **No aggregator reads either field
+yet** — FedNova, SCAFFOLD, and FedOpt each still need their own phase
+brief, exactly as this ADR's "What this ADR does *not* decide" section
+says. What has changed is that none of them is blocked on a schema
+decision any more, and the obligations that come with statefulness are
+written down (`docs/EXTENDING.md`, and the `Aggregator::aggregate` doc
+comment) rather than left to be rediscovered.

@@ -123,6 +123,7 @@ mod tests {
             round: 1,
             weights: conflux_proto::encode_weights(weights),
             num_samples: 1,
+            ..Default::default()
         }
     }
 

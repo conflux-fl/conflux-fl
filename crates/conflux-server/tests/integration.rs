@@ -107,6 +107,7 @@ async fn end_to_end_single_round_pull_mode() {
             total_chunks: 1,
             data: encode_weights(&[10.0, 20.0]),
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();
@@ -173,6 +174,7 @@ async fn a_round_completes_when_the_client_already_applied_its_own_privacy_trans
             total_chunks: 1,
             data: encode_weights(&weights),
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();
@@ -326,6 +328,7 @@ async fn per_client_budget_excludes_only_the_exhausted_client_when_continuing() 
             total_chunks: 1,
             data: encode_weights(&[10.0, 20.0]),
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();
@@ -344,6 +347,7 @@ async fn per_client_budget_excludes_only_the_exhausted_client_when_continuing() 
             total_chunks: 1,
             data: encode_weights(&[1000.0, 2000.0]), // would be obvious if it leaked through
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();
@@ -410,6 +414,7 @@ async fn per_client_budget_halts_the_round_when_any_client_is_exhausted() {
             total_chunks: 1,
             data: encode_weights(&[10.0, 20.0]),
             num_samples: 5,
+            ..Default::default()
         }])
         .await
         .unwrap();
@@ -449,6 +454,7 @@ async fn submit_delta_reassembles_out_of_order_chunks() {
             total_chunks: 2,
             data: bytes[midpoint..].to_vec(),
             num_samples: 3,
+            ..Default::default()
         },
         DeltaChunk {
             client_id: "c1".to_string(),
@@ -457,6 +463,7 @@ async fn submit_delta_reassembles_out_of_order_chunks() {
             total_chunks: 2,
             data: bytes[..midpoint].to_vec(),
             num_samples: 3,
+            ..Default::default()
         },
     ];
 

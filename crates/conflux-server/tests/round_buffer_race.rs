@@ -57,6 +57,7 @@ async fn late_submission_against_an_already_flushed_round_is_rejected_not_lost()
             total_chunks: 1,
             data: encode_weights(&[3.0, 4.0]),
             num_samples: 1,
+            ..Default::default()
         }])
         .await;
 

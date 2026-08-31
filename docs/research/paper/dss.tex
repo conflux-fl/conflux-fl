@@ -218,6 +218,24 @@ and clips every update to radius $\tau$ around it, bounding influence
 rather than scoring clients against each other. These two are the closest
 prior art to this paper's proposal, and we compare against both directly.
 
+The closest prior art of all, however, is
+FLANDERS~\cite{gabrielli2024}, which we compare against in
+\S\ref{sec:flanders}. FLANDERS treats the sequence of local models as a
+matrix-valued time series $\Theta_t \in \mathbb{R}^{d \times h}$
+($d$ parameters $\times$ $h$ clients), fits a first-order matrix
+autoregressive model $\Theta_t = A\Theta_{t-1}B + E_t$ by alternating
+least squares, and retains the top-$k$ clients whose observed updates
+lie closest to the forecast. Like DSS it is a \emph{pre-aggregation
+filter} composing over an arbitrary base rule, and like DSS it derives
+its signal from cross-round history rather than from within-round
+geometry. It targets explicitly the regime where malicious clients
+outnumber legitimate ones. We therefore do not claim the
+filter-over-arbitrary-base shape as a contribution: FLANDERS has it.
+What separates the two is the \emph{dimensionality of the signal} --- a
+$d \times h$ matrix forecast against a length-$w$ scalar trace --- and,
+as \S\ref{sec:flanders} measures, the fact that the two methods fail on
+opposite attack shapes.
+
 \paragraph{Trusted-reference defenses.}
 FLTrust~\cite{cao2021} and Zeno~\cite{xie2019} score updates against a
 reference the server computes itself---from a small trusted root dataset,
@@ -471,8 +489,18 @@ motivated by and tested against Claim 2 specifically---no cited row
 combines a temporal-variance signal with a collusion signal under an
 explicit conjunction designed to avoid punishing a legitimately-noisy
 independent client; \textbf{(2)} a model-size-independent collusion
-signal; \textbf{(3)} composability with any existing rule rather than a
-fixed new one. We do \emph{not} claim DSS is a large algorithmic advance.
+signal, which distinguishes DSS from both FoolsGold's
+full-dimensionality gradient histories and FLANDERS's $d \times h$
+matrix forecast; and \textbf{(3)} the measured finding of
+\S\ref{sec:flanders} that DSS and the closest prior art fail on
+\emph{opposite} attack shapes, which is a result about the landscape
+rather than about DSS alone.
+
+We previously listed composability with any existing rule as a third
+contribution. We withdraw that claim: FLANDERS~\cite{gabrielli2024} is a
+pre-aggregation filter over an arbitrary base, so the shape is prior art.
+It remains a true and useful property of the design; it distinguishes it
+from nothing. We do \emph{not} claim DSS is a large algorithmic advance.
 Each ingredient has real precedent. What is new is the specific synthesis,
 evaluated against this paper's own Claim 1 / Claim 2 formalization---and
 that evaluation surfaced two implementation-level regressions, one
@@ -1322,6 +1350,103 @@ establishes is behavior over many rounds, under non-IID splits, or against
 adaptive attacks.
 
 % =====================================================================
+\section{Comparison Against the Closest Prior Art}
+\label{sec:flanders}
+
+FLANDERS~\cite{gabrielli2024} is the closest published method to DSS: a
+cross-round pre-aggregation filter composing over an arbitrary base,
+explicitly targeting the regime where malicious clients outnumber
+legitimate ones. An earlier draft of this paper did not cite it. That
+omission is corrected here, and the correction is empirical rather than
+textual: we implemented FLANDERS faithfully (MAR(1) fitted by
+alternating least squares each round, $\delta(u,v) = \|u-v\|_2^2$,
+top-$k$ selection, the paper's cold-start branch) and ran both methods on
+identical batches --- 10{,}800 rows, five seeds, twenty rounds, six
+attacks, and a malicious-ratio sweep from 20\% to 80\%.
+
+\paragraph{On the adaptive attacker, DSS wins by an order of magnitude.}
+Against \texttt{adaptive\_evasion} at 20\% malicious, with undefended
+FedAvg at $553.0 \pm 0.07$: DSS reaches $0.64 \pm 0.34$ and FLANDERS
+$9.41 \pm 7.46$. The intervals do not overlap.
+
+\paragraph{In FLANDERS's own headline regime, it fails and DSS holds.}
+FLANDERS's stated advantage is resilience when malicious clients far
+exceed legitimate participants. Against the adaptive attacker at the
+ratios its own evaluation uses:
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\hline
+malicious & FedAvg & DSS & FLANDERS & Krum \\
+\hline
+20\% & 553.0 & \textbf{0.64} & 9.4 & 0.30 \\
+60\% & 1659.1 & \textbf{0.44} & 1901.7 & 2765.0 \\
+80\% & 2212.1 & \textbf{7.19} & 2765.0 & 2765.0 \\
+\hline
+\end{tabular}
+\end{center}
+
+At 60\% malicious FLANDERS (1901.7) is worse than no defense at all
+(1659.1), and at 80\% it has collapsed to the value Krum reaches when
+Krum is selecting an attacker. We state this plainly because it cuts
+against us as readily as for us: this is the regime FLANDERS claims and
+DSS never claimed, and DSS is the method that survives it.
+
+\paragraph{FLANDERS is worse than undefended FedAvg against every Sybil
+attack we tested, and the mechanism is structural.} At 20\% malicious,
+FLANDERS scores $24.2$ against FedAvg's $17.0$ on
+\texttt{persistent\_sybil}, $24.5$ against $17.2$ on
+\texttt{correlated\_sybil}, and $25.7$ against $18.0$ on
+\texttt{correlated\_sybil\_unstable} --- consistently around 40\% worse.
+
+The cause is not an implementation defect. FLANDERS retains the clients
+whose updates best match a forecast of their own past. A colluder that
+submits the identical update in every round is therefore the
+\emph{easiest} client in the batch to forecast: its anomaly score is near
+zero by construction, while honest clients carry training noise and never
+forecast perfectly. Top-$k$ selection then keeps the attackers and
+discards the honest majority. This threat model does not appear in
+FLANDERS's own evaluation, which uses Gaussian, LIE, OPT and AGR-MM ---
+all attacks that perturb or optimize, and are therefore unpredictable by
+construction.
+
+\paragraph{The two methods fail on opposite shapes.} DSS's conjunction
+gate requires \emph{instability} and so misses stable colluders
+(\S\ref{sec:ablation}). FLANDERS rewards \emph{forecastability} and so
+actively prefers them. Neither dominates the other; they are
+complementary blind spots. We think saying so is more useful than either
+side claiming priority, and it is the finding this section exists to
+report.
+
+\paragraph{A fairness note.} The configuration above pairs FLANDERS with
+FedAvg, which is \emph{not} what its authors specify --- they write
+$\phi = $ Krum or any other existing robust aggregation heuristic. Paired
+as specified, FLANDERS+Krum scores $0.33 \pm 0.15$ on
+\texttt{persistent\_sybil} and holds throughout. The precise finding is
+therefore that FLANDERS's filter contributes negative value on this
+attack family and is carried by whatever robust base it is paired with,
+not that the method is broken.
+
+\paragraph{An unplanned finding: the collusion-only ablation dominates.}
+Across all six attacks at 20\% malicious, collusion-only DSS
+(\S\ref{sec:ablation}) scores $0.310$, $0.255$, $0.251$, $0.265$,
+$0.267$ and $0.160$ --- best or tied-best in every column, and one to two
+orders of magnitude better than the shipped conjunction gate on five of
+the six. It also holds at 60\% malicious. This is the third independent
+piece of evidence that the conjunction gate is the limiting component,
+after \S\ref{sec:ablation} and \S\ref{sec:correlated}. It does not
+license flipping the gate: none of these six attacks includes a
+legitimately-noisy honest majority, which is precisely the case the
+stability conjunct exists to protect, and Claim 2 would be reopened
+without it.
+
+\paragraph{Limits.} All of the above is at $d = 3$. FLANDERS's cost and
+signal scale with $d$ in a way DSS's do not, and nothing here measures
+that; \S\ref{sec:realdata} is the standing caution that a synthetic
+conclusion need not survive a real model. We also forecast every
+coordinate rather than subsampling 500 as the paper does, which is exact
+at this dimension and is not what a large-model deployment would run.
+
 \section{Conclusions Overturned by Measurement}
 \label{sec:overturned}
 
@@ -1538,6 +1663,18 @@ M.~Fang, X.~Cao, R.~Jia, N.~Z. Gong, and J.~Liu.
 C.~Fung, C.~J.~M. Yoon, and K.~Beznosov.
 \newblock The Limitations of Federated Learning in Sybil Settings.
 \newblock \emph{RAID}, 2020 (arXiv:1808.04866, 2018).
+
+\bibitem{gabrielli2024}
+E.~Gabrielli, D.~Belli, Z.~Matrullo, V.~Miori, and G.~Tolomei.
+\newblock Protecting Federated Learning from Extreme Model Poisoning
+  Attacks via Multidimensional Time Series Anomaly Detection.
+\newblock arXiv:2303.16668v3, December 2024.
+
+\bibitem{reddi2021}
+S.~Reddi, Z.~Charles, M.~Zaheer, Z.~Garrett, K.~Rush, J.~Kone\v{c}n\'y,
+  S.~Kumar, and H.~B. McMahan.
+\newblock Adaptive Federated Optimization.
+\newblock \emph{ICLR}, 2021 (arXiv:2003.00295, 2020).
 
 \bibitem{karimireddy2021}
 S.~P. Karimireddy, L.~He, and M.~Jaggi.

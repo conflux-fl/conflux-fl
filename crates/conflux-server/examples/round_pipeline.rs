@@ -131,6 +131,7 @@ async fn run_one_round(aggregator: &str) {
                     round: task.round,
                     weights: encode_weights(&weights),
                     num_samples: 10,
+                    ..Default::default()
                 }
                 .into_chunk(),
             ])
@@ -170,6 +171,7 @@ impl AsChunk for ClientDelta {
             total_chunks: 1,
             data: self.weights,
             num_samples: self.num_samples,
+            ..Default::default()
         }
     }
 }

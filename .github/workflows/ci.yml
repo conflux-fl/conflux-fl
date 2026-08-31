@@ -112,7 +112,47 @@ jobs:
           -p conflux-proto -p conflux-config -p conflux-registry
           -p conflux-selector -p conflux-net -p conflux-buffer
           -p conflux-privacy -p conflux-reputation -p conflux-core
-          -p conflux-node
+          -p conflux-node -p conflux-trusted-reference
+
+  isolation:
+    name: dependency isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Two ADRs state an invariant about `conflux-server`'s dependency
+      # graph, and until now both existed only as prose. An invariant a
+      # build does not check is a comment: the edge either crate forbids
+      # would be added by an ordinary-looking `Cargo.toml` line, compile
+      # cleanly, pass every test, and be noticed by nobody.
+      #
+      #   ADR 0010 — `conflux-attacks` is test/dev-only. The production
+      #   server binary must never link attack code, at any depth.
+      #   ADR 0011 — `conflux-trusted-reference` is the optional sidecar.
+      #   The server calls one over gRPC; it must never *be* one, or the
+      #   model-runtime dependency ADR 0004 keeps out of the server comes
+      #   back in through the side door.
+      #
+      # `-e normal` excludes dev-dependencies deliberately: both crates
+      # legitimately dev-depend on workspace crates for their own tests.
+      # What must not exist is an edge in what the binary actually ships.
+      - name: conflux-server must not depend on conflux-attacks (ADR 0010)
+        run: |
+          if cargo tree -p conflux-server -e normal | grep -q conflux-attacks; then
+            echo "::error::conflux-server depends on conflux-attacks — ADR 0010 forbids this"
+            cargo tree -p conflux-server -e normal -i conflux-attacks || true
+            exit 1
+          fi
+          echo "ok: no attack code in the server's dependency graph"
+      - name: conflux-server must not depend on conflux-trusted-reference (ADR 0011)
+        run: |
+          if cargo tree -p conflux-server -e normal | grep -q conflux-trusted-reference; then
+            echo "::error::conflux-server depends on conflux-trusted-reference — ADR 0011 \
+            keeps the sidecar a separate process; the server talks to one over gRPC"
+            cargo tree -p conflux-server -e normal -i conflux-trusted-reference || true
+            exit 1
+          fi
+          echo "ok: the sidecar stays out of the server's dependency graph"
 
   env-files:
     name: env hygiene

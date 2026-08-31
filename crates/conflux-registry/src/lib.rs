@@ -10,6 +10,35 @@
 //! deployment that needs the registry durable across restarts and shared
 //! across multiple server processes.
 
+//! # Example
+//!
+//! ```
+//! use conflux_registry::{ClientId, InMemoryRegistry, Registry};
+//!
+//! # tokio_test_block(async {
+//! let registry = InMemoryRegistry::new();
+//! registry.register(ClientId("node-1".into())).await.unwrap();
+//! registry.register(ClientId("node-2".into())).await.unwrap();
+//!
+//! assert_eq!(registry.active_clients().await.unwrap().len(), 2);
+//!
+//! // Registering twice is an error a caller is expected to treat as
+//! // success — a client retrying must not be punished for it.
+//! assert!(registry.register(ClientId("node-1".into())).await.is_err());
+//!
+//! // Heartbeating an unknown client is the other direction: it means
+//! // the client was evicted and should register again.
+//! assert!(registry.heartbeat(&ClientId("ghost".into())).await.is_err());
+//!
+//! // A TTL of zero evicts everything that has not heartbeat *now*.
+//! registry.evict_expired(std::time::Duration::from_secs(0)).await;
+//! assert!(registry.active_clients().await.unwrap().is_empty());
+//! # });
+//! # fn tokio_test_block<F: std::future::Future>(f: F) -> F::Output {
+//! #     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f)
+//! # }
+//! ```
+
 #![warn(missing_docs)]
 
 mod any_node_allowlist;

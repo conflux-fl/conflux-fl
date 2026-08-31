@@ -7,6 +7,32 @@
 //! random subset. This crate's whole job is picking that subset: given a
 //! pool of candidate client IDs, return up to `n` of them for round
 //! `round`.
+//!
+//! # Example
+//!
+//! ```
+//! use conflux_selector::{SelectionSeed, build_selector};
+//!
+//! let pool: Vec<String> = (0..100).map(|i| format!("client-{i}")).collect();
+//! let selector = build_selector("uniform_random", SelectionSeed::Fixed(42)).unwrap();
+//!
+//! let chosen = selector.select(&pool, 10, 1);
+//! assert_eq!(chosen.len(), 10);
+//!
+//! // A fixed seed is reproducible for a given round — which is what
+//! // makes a research run repeatable.
+//! let again = build_selector("uniform_random", SelectionSeed::Fixed(42))
+//!     .unwrap()
+//!     .select(&pool, 10, 1);
+//! assert_eq!(chosen, again);
+//!
+//! // ...but the round number is mixed in, so consecutive rounds do not
+//! // train the same subset forever.
+//! assert_ne!(chosen, selector.select(&pool, 10, 2));
+//!
+//! // Asking for more than exist yields everyone, not an error.
+//! assert_eq!(selector.select(&pool, 500, 1).len(), pool.len());
+//! ```
 
 #![warn(missing_docs)]
 

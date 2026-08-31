@@ -108,6 +108,7 @@ fn build_batch(args: &Args) -> (Vec<ClientDelta>, Vec<(String, usize)>) {
             round: 1,
             weights: encode_weights(&weights),
             num_samples: 10,
+            ..Default::default()
         });
         groups.push(("majority".to_string(), i));
     }
@@ -123,6 +124,7 @@ fn build_batch(args: &Args) -> (Vec<ClientDelta>, Vec<(String, usize)>) {
             round: 1,
             weights: encode_weights(&weights),
             num_samples: 10,
+            ..Default::default()
         });
         groups.push(("minority".to_string(), i));
     }

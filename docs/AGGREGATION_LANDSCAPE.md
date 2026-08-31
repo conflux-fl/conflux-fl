@@ -381,3 +381,92 @@ from the taxonomy alone.
 
 Remaining "Not built" rows are unchanged: FLTrust/Zeno (ADR 0011) and
 FedNova/FedOpt/SCAFFOLD (ADR 0012).
+
+## Update (2026-08-31, sixth) — FLTrust shipped; Category 3 is open
+
+Rows 11–12 ("still needs its own ADR-0004-revisiting scoping") no longer
+describe FLTrust. ADR 0011 was accepted as **option 2** — a separate,
+optional `conflux-trusted-reference` sidecar — and FLTrust now ships as
+an ordinary `Aggregator` family member in a new `trusted` family.
+
+What this changes about the analysis above, in one line: **the ceiling
+Category 2 was written to describe has a way over it now.** Every method
+in Categories 1 and 2 derives "normal" from the batch, so a colluding
+majority is normal by construction — which this document identified, and
+which `docs/research/` §5.1 then measured. FLTrust never asks the batch:
+its reference comes from data no client contributed to, so a unanimous
+batch of attackers is scored against the same reference an honest one
+would be. `conflux-core`'s own test suite asserts exactly that case
+(`a_colluding_majority_does_not_win`).
+
+The cost is an assumption swapped, not removed. FLTrust's guarantee is
+exactly as good as its root dataset: trained on unrepresentative data,
+the reference points somewhere honest clients do not, and `ReLU` zeroes
+*them*. That is a different failure mode from the ones Category 2 has,
+not a strictly smaller one — worth saying plainly, because
+"structurally immune to the Sybil problem" is easy to read as "better".
+
+**Zeno remains unbuilt.** The sidecar implements and serves its scoring
+RPC, and a test exercises it over the real hop, but no `Aggregator`
+consumes it yet — its combine (score, then keep a top-scoring subset) is
+its own phase brief. Option 3 ("don't build it") stays live for Zeno.
+
+## Update (2026-09-01, seventh) — the optimization family, and FLANDERS
+
+Two additions that change what this document's own gap analysis says.
+
+### Category 4 is no longer empty: FedAdagrad / FedAdam / FedYogi
+
+Category 4 (cross-round state and per-client extra fields) listed
+FedNova, SCAFFOLD and FedOpt as blocked on plumbing. ADR 0012 landed
+that plumbing, and **FedOpt is now built** — all three variants of Reddi
+et al. (2021) Algorithm 2, as a new `optimization` family.
+
+This closes what was, measured against every comparable framework, the
+largest hole in Conflux's catalog. The robust families ship ten methods
+where Flower's built-in strategies ship five; the optimization family
+shipped **zero** where Flower ships six. Adaptive server optimization is
+the axis that makes federated training converge on non-IID data, and it
+was entirely absent.
+
+FedNova and SCAFFOLD remain unbuilt, but their blocker is gone —
+`local_steps` and `control_variate` are both on the wire (ADR 0012).
+What FedNova now needs is a client that populates its field, which is
+the ADR 0005 SDK question, not an aggregation question.
+
+### Category 2's ceiling has a second answer, and it is not a strict improvement
+
+Category 3 (trusted-reference) was identified here as the structural
+answer to the Sybil/collusion ceiling, and FLTrust shipped under ADR
+0011. **FLANDERS** (Gabrielli, Belli, Matrullo, Miori & Tolomei, 2024,
+arXiv 2303.16668) is a second answer of a different kind: it keeps the
+cross-round history of each client and scores against a matrix
+autoregressive forecast, so like the Category 3 methods it does not ask
+the batch — but unlike them it needs no trusted data.
+
+It now ships (`conflux-core/src/flanders.rs`), paired with Krum per its
+own `ϕ`. Two things this document should record, both measured in
+`docs/research/` §5.14 rather than argued:
+
+- **It is not a strict improvement over the Category 1/2 methods.**
+  Paired with FedAvg it scores *worse than undefended FedAvg* against
+  every Sybil attack tested (24.2 vs 17.0 at 20% malicious). The reason
+  is structural and now pinned as a unit test: a colluder that repeats
+  itself is the most forecastable client in the batch, so a
+  forecast-consistency filter keeps it and drops the noisier honest
+  majority. Its own paper's evaluation uses attacks that perturb or
+  optimize, where that failure mode cannot arise.
+- **Its headline regime did not reproduce.** Against an adaptive
+  attacker at 60% malicious it scored 1901.7 where undefended FedAvg
+  scored 1659.1. Reported as what the numbers show, at `dim = 3`, on one
+  attack family — not as a refutation of the paper's own results.
+
+The useful generalization for this landscape: **a cross-round defense
+must choose what "normal" means over time**, and the two available
+choices fail on opposite attacks. Forecast-consistency (FLANDERS)
+rewards clients that repeat themselves, so stable collusion defeats it.
+Deviation-*instability* (DSS) requires clients to vary, so stable
+collusion defeats it too — for the opposite reason. Neither is a
+general answer, and the trusted-reference family (Category 3) remains
+the only one that sidesteps the question entirely, at the cost of
+needing trusted data.

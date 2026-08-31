@@ -394,12 +394,13 @@ impl UpdateFilter for FabaFilter {
             }
             let dim = decoded[remaining[0]].len();
             let mut mean = vec![0.0f32; dim];
+            // `1/n` per term rather than after summing: two clients near
+            // `f32::MAX` overflow the running total to infinity, and
+            // dividing infinity by the count leaves it infinite. Same
+            // defect as the geometric median's, same fix.
+            let share = 1.0 / remaining.len() as f32;
             for &i in &remaining {
-                accumulate_weighted(&mut mean, &decoded[i], 1.0);
-            }
-            let rn = remaining.len() as f32;
-            for m in &mut mean {
-                *m /= rn;
+                accumulate_weighted(&mut mean, &decoded[i], share);
             }
 
             let (worst_pos, _) = remaining
@@ -564,11 +565,12 @@ impl UpdateFilter for DivideAndConquerFilter {
 
         let dim = decoded[0].len();
         let mut mean = vec![0.0f32; dim];
+        // Normalized per term — summing first overflows to infinity on a
+        // batch of large-but-finite weights, and the centering below
+        // would then subtract infinity from every row.
+        let share = 1.0 / n as f32;
         for row in &decoded {
-            accumulate_weighted(&mut mean, row, 1.0);
-        }
-        for m in &mut mean {
-            *m /= n as f32;
+            accumulate_weighted(&mut mean, row, share);
         }
         let centered: Vec<Vec<f32>> = decoded
             .iter()
@@ -759,6 +761,7 @@ mod tests {
             round: 1,
             weights: bytes,
             num_samples: 1,
+            ..Default::default()
         }
     }
 

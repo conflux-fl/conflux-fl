@@ -106,6 +106,7 @@ fn make_delta(client_id: String, round: u64, num_samples: u64, weights: &[f32]) 
         round,
         weights: encode_weights(weights),
         num_samples,
+        ..Default::default()
     }
 }
 
