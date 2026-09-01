@@ -15,6 +15,7 @@ members = [
     "crates/conflux-node",
     "crates/conflux-attacks",
     "crates/conflux-trusted-reference",
+    "crates/conflux-client",
 ]
 
 # Shared metadata. Every crate inherits these with `field.workspace =
@@ -23,10 +24,21 @@ members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-# The language floor: `edition = "2024"` stabilized in 1.85, and nothing
-# in this workspace's own source needs anything newer. Two crates
-# override this upward — see `conflux-store` and `conflux-server`.
-rust-version = "1.85"
+# **Set by the dependencies, not by our own source.** `edition = "2024"`
+# stabilized in 1.85 and nothing this workspace *writes* needs anything
+# newer — but `tonic` 0.14, `jsonwebtoken` 11 and `time` 0.3.55 each
+# declare 1.88, and every crate above `conflux-proto` pulls at least one
+# of them. A 1.85 claim was carried here until a real 1.85 toolchain was
+# finally run against it and refused to resolve eight of the twelve
+# crates that made the promise.
+#
+# `clippy::incompatible_msrv` does not catch this: it checks whether the
+# *std APIs we call* exist at the declared version, not whether our
+# dependencies will build there. Only a real toolchain does.
+#
+# Two crates override this upward — see `conflux-store` and
+# `conflux-server`.
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/conflux-fl/conflux-fl"
 readme = "README.md"

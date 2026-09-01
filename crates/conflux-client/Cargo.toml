@@ -1,0 +1,23 @@
+[package]
+name = "conflux-client"
+description = "Rust-native ClientApp SDK for Conflux FL — train in Rust, with no Python hop (ADR 0005, phase 23)."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# The local hop to `conflux-node` speaks the same `FlTransport` schema as
+# every other hop (ADR 0004), so this needs no transport of its own —
+# `PullTransport` is already exactly the client half.
+conflux-net = { path = "../conflux-net" }
+conflux-proto = { path = "../conflux-proto" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true

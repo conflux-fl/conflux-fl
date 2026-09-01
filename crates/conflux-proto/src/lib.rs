@@ -130,12 +130,12 @@ pub fn encode_weights(weights: &[f32]) -> Vec<u8> {
 /// assert!(decode_weights(&[0x00, 0x01, 0x02]).is_err());
 /// ```
 pub fn decode_weights(bytes: &[u8]) -> Result<Vec<f32>, WeightsCodecError> {
-    // `% 4 != 0` rather than `is_multiple_of`, which is stable only
-    // since 1.87. This crate promises 1.85 (edition 2024's own floor),
-    // and a one-token convenience is not worth two minor versions of
-    // downstream compatibility. `clippy::incompatible_msrv` is what
-    // caught the mismatch.
-    if bytes.len() % 4 != 0 {
+    // `is_multiple_of` is stable since 1.87. This was written as
+    // `% 4 != 0` while the crate claimed an MSRV of 1.85 — a claim that
+    // turned out to be false, since `tonic` alone requires 1.88. With
+    // the MSRV corrected, `clippy::manual_is_multiple_of` fires on the
+    // old form, which is the toolchain noticing the constraint is gone.
+    if !bytes.len().is_multiple_of(4) {
         return Err(WeightsCodecError::Malformed { len: bytes.len() });
     }
     Ok(bytes

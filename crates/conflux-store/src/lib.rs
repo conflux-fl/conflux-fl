@@ -337,7 +337,7 @@ fn read_weights(path: &Path) -> Result<Vec<f32>, StoreError> {
         path: path.display().to_string(),
         source,
     })?;
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(StoreError::MalformedCheckpoint {
             path: path.display().to_string(),
             len: bytes.len(),

@@ -24,7 +24,7 @@ use crate::TrustedModel;
 /// dependency edge for four lines, and because the failure needs to
 /// become a `Status` either way.
 fn decode(bytes: &[u8], field: &str) -> Result<Vec<f32>, Status> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(Status::invalid_argument(format!(
             "{field} is {} bytes, which is not a whole number of f32s",
             bytes.len()

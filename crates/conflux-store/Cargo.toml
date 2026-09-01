@@ -3,7 +3,7 @@ name = "conflux-store"
 description = "Model checkpoint and experiment metadata persistence for Conflux FL (in-memory, file, Postgres, S3)."
 license.workspace = true
 repository.workspace = true
-# Overrides the workspace 1.85. `aws-sdk-s3` declares rust-version
+# Overrides the workspace 1.88. `aws-sdk-s3` declares rust-version
 # 1.94.1, and a declared MSRV that the dependency graph cannot
 # actually satisfy is worse than none — it would build here and
 # fail for anyone taking the claim at face value. Verified with

@@ -3,7 +3,7 @@ name = "conflux-server"
 description = "Conflux FL server binary — the full round pipeline over gRPC, with an authenticated HTTP admin surface."
 license.workspace = true
 repository.workspace = true
-# Overrides the workspace 1.85. `aws-sdk-s3` declares rust-version
+# Overrides the workspace 1.88. `aws-sdk-s3` declares rust-version
 # 1.94.1, and a declared MSRV that the dependency graph cannot
 # actually satisfy is worse than none — it would build here and
 # fail for anyone taking the claim at face value. Verified with

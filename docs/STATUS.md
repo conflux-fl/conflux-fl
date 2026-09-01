@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** 482 tests (21 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fourteen crates. Version 0.2.0.
+Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** Then Phase 23: the `ClientApp` SDK — ADR 0005's question (3), resolved in Python *and* in Rust, which is what finally lets a client populate ADR 0012's fields at all and takes FedNova/SCAFFOLD/FedProx/q-FedAvg from blocked to buildable. `crates/conflux-client` proves the loop closes with no Python process anywhere (0.67 local-only → 0.996 federated, on a problem no client can solve alone), and needed no server, node, or proto change to do it. Adding it to CI turned up a false published claim: the declared MSRV of 1.85 **did not build eight of the twelve crates that promised it** — corrected to 1.88. 490 tests (23 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fifteen crates. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -945,7 +945,11 @@ and a `ClientDelta` arrives from the network.
   assumed. Declaring an MSRV immediately paid for itself:
   `clippy::incompatible_msrv` caught `decode_weights` using
   `usize::is_multiple_of` (stable 1.87), which would have broken the
-  1.85 promise. Rewritten as `% 4 != 0`.
+  1.85 promise. Rewritten as `% 4 != 0`. **Superseded 2026-09-01: the
+  1.85 figure was wrong** — `cargo metadata` reports what a crate
+  *declares*, and eight crates' dependencies declare 1.88. Corrected to
+  1.88; see phase 23. "Measured rather than guessed" was true of the
+  1.94.1 overrides and false of the number it was written about.
 - **S12 — reproducible backends.** `docker-compose.yml` on the same
   non-standard ports `USAGE.md` already documented, so existing dev
   containers keep working. The seven hardcoded backend URLs became
@@ -1011,7 +1015,8 @@ and a `ClientDelta` arrives from the network.
 - **S8 — CI.** Five jobs: `fmt`, `clippy` (`--all-targets`, warnings
   denied), `test` (with Redis/Postgres/MinIO service containers, so the
   three durable backends are actually exercised), `msrv` (checks the
-  1.85 crates on a 1.85 toolchain), and `env-files` (`evnx scan` plus a
+  1.88 crates on a 1.88 toolchain — 1.85 as originally written, corrected
+  2026-09-01), and `env-files` (`evnx scan` plus a
   direct `git ls-files .env` guard).
 
 Every job was verified locally before being written down, and doing so
@@ -1443,6 +1448,13 @@ The evidence that exists is `clippy::incompatible_msrv` running clean
 against the declared version — which is what caught `is_multiple_of` in
 Tier 3, so it is not nothing, but it is not a 1.85 build either.
 
+> **Resolved 2026-09-01, and the answer was no.** A 1.85 toolchain was
+> finally installed: `conflux-trusted-reference` does not build there,
+> and neither do seven other crates that made the same promise. The
+> workspace MSRV is now **1.88**. See phase 23's entry below. The caveat
+> in this paragraph was the right one to write down; it just understated
+> how much was riding on it.
+
 ## Phase 22 + Experiment 2.10 — the optimization family, and FLANDERS (2026-09-01)
 
 Prompted by a comparison against Flower, Xaynet and OpenFL. Two of those
@@ -1767,6 +1779,141 @@ of the harness's residual variance, and the effect being reported is
 **9.1× larger than it**. Seeding the trainers is the remaining half of
 `r4`.
 
+## Phase 23 — the `ClientApp` SDK, in Python and in Rust (2026-09-01)
+
+ADR 0005 separates three questions the phrase "the SDK" usually
+conflates: (1) how a client learns what model to train, (2) how a
+participant *gets* the client code, (3) what the SDK wraps. It
+recommends resolving **(3) first**, because it is the only one this
+codebase can answer alone. That is what shipped, and nothing more.
+
+**`python/conflux_client/app.py`.** A `ClientApp` base class owning
+everything previously copy-pasted into every harness: connect, register,
+the fetch-until-a-new-round loop, placeholder-init detection, f32-aligned
+chunking, submit-with-retry, and treating a round that closed
+mid-training as ordinary rather than fatal. **Four separate copies of a
+`struct.pack`/`unpack` codec** existed across the harnesses and the stub;
+there is now one. The MNIST harness is migrated and verified end to end
+(0.142 → 0.858 held-out against a 0.750 centralized baseline, real gRPC,
+real training). CIFAR-10, Shakespeare and numpy-logreg still carry their
+own copies.
+
+**This is what unblocks four methods.** `TrainResult` carries
+`local_steps`, `local_loss` and `control_variate` — the ADR 0012 wire
+fields that have existed since 2026-08-31 and that **nothing has ever
+been able to populate**, which is exactly why FedNova, SCAFFOLD and
+q-FedAvg were shipped-but-inert. The migrated MNIST harness is the first
+client in the project's history to send any of them.
+
+### Two things found while building it
+
+**The generated Python stubs were stale.** `fl_transport_pb2.py` predated
+ADR 0012 entirely — no `local_steps`, no `control_variate`, no
+`local_loss`. The Python side had been silently out of sync with the
+schema since those fields landed, and nothing would have noticed:
+generated files are not committed and no test imports them. Regenerating
+is one command; *knowing to* was the problem. Still worth a CI step.
+
+**`absent` and `zero` are the same value in Python.** protobuf reads an
+unset `optional float` as `0.0`, so a client checking truthiness cannot
+distinguish "not running q-FedAvg" from "reported a loss of exactly
+zero" — and under `q > 0` a loss read as zero means *zero weight*,
+silently excluding every client not yet upgraded. `HasField` is the only
+correct check. Pinned as tests on both sides of the wire. This one cost
+a wrong test premise before it was understood.
+
+### The Rust client, built rather than argued about
+
+`crates/conflux-client` — the fifteenth crate, and the spike the phase
+brief proposed. Same contract as the Python SDK, field for field, so a
+divergence between them is a bug in one rather than a design choice.
+
+**It needed no new proto field, no server change, and no `conflux-node`
+change.** `PullTransport` already *was* the client half of the local hop,
+because ADR 0004 made both hops speak one schema — so the Rust client
+reuses the transport the Python client talks to rather than paralleling
+it. That is the architectural result: the loopback hop is a language
+boundary, not a design seam, and removing it removes a *process*, not a
+layer.
+
+Measured on a real federation — real `conflux-server`, four real
+`conflux-node`s, four Rust clients, eight rounds, no Python process
+anywhere:
+
+```
+rc-0 (sees feature 0): local-only 0.682 -> federated 0.996
+rc-1 (sees feature 1): local-only 0.666 -> federated 0.996
+rc-2 (sees feature 2): local-only 0.682 -> federated 0.996
+rc-3 (sees feature 3): local-only 0.676 -> federated 0.996
+```
+
+Round 2 scored 0.986, round 3 0.994, rounds 4–8 0.996.
+
+**The `local-only` column is what makes this evidence.** The first
+version of the example sharded IID and every client reached 1.000 on its
+own data *before* federating — proving the loop ran and nothing else. It
+was rebuilt so client *i* sees data where only feature *i* varies against
+a label of `sum(x) > 0`, so **no client can solve the problem alone**,
+and all four are scored on one shared held-out global test set.
+
+**What it does not decide: which ML framework.** Logistic regression
+needs none, which is why it is the right spike — it isolates the
+*architecture* from the *ML stack*. Hidden layers want Burn, which is
+pre-1.0 and says so, and that is a separate evaluation with a separate
+cost. And it does not replace Python: researchers want PyTorch, all four
+e2e harnesses are PyTorch, and the DSS line runs on them. It is a
+*second* path, permanently.
+
+### The MSRV was wrong, and had been for some time
+
+Found while adding `conflux-client` to CI's `msrv` job. Tier 3 recorded
+`rust-version = 1.85` as "measured rather than guessed", and the F1/F2
+entry above flagged honestly that no 1.85 toolchain existed on this
+machine so CI would be its first real check. Installing one gave the
+answer: **eight of the twelve crates making the 1.85 promise cannot
+resolve at 1.85.** `tonic` 0.14, `jsonwebtoken` 11 and `time` 0.3.55 each
+declare 1.88, and everything above `conflux-proto` pulls at least one.
+Only `conflux-config`, `conflux-selector`, `conflux-privacy` and
+`conflux-reputation` genuinely built there.
+
+`Cargo.lock` is committed, so CI would have resolved identically and the
+`msrv` job would have failed on its first run — the claim was false in
+the published metadata, not merely untested.
+
+**Why `clippy::incompatible_msrv` did not catch it**, despite catching
+`is_multiple_of` in Tier 3: it checks whether the *std APIs we call*
+exist at the declared version. It says nothing about whether our
+dependencies will build there. Only a real toolchain answers that, which
+is the general lesson — a lint that validates one half of a claim reads
+like it validates the whole one.
+
+Corrected to **1.88** in `[workspace.package]`, with the two
+`aws-sdk-s3` crates still overriding to 1.94.1. Verified by building all
+twelve on a real 1.88.0 toolchain, and `conflux-client` is now in the
+job.
+
+**The correction round-tripped Tier 3's own workaround.** Raising the
+floor past 1.87 made `usize::is_multiple_of` available again, so
+`clippy::manual_is_multiple_of` immediately fired on the `% 4 != 0` that
+Tier 3 had written *to avoid it* — in `conflux-proto`, and in two other
+crates that had copied the shape. Under `-D warnings` that is a build
+failure, so the toolchain refused to let the workaround outlive its
+reason. Three sites back to `is_multiple_of`.
+
+### Verification
+
+490 tests (467 unit/integration + 23 doc), fmt clean, clippy clean under
+`-D warnings`. One earlier run showed `sigterm_exits_cleanly_and_promptly`
+failing; it passed in isolation twice and in the clean full run, so it is
+a timing-sensitive test losing a race under machine load — worth knowing
+before it is read as a regression.
+
+**What remains deferred, deliberately:** ADR 0005's questions (1) model
+handoff and (2) code distribution. (2) is a product decision, but no
+longer one being made on incomplete information — "one static binary"
+for `crowdsource`/`edge` is now a demonstrated option rather than a
+claim.
+
 ## Research-line entry point
 
 The DSS research now has its own harness (scaffolded 2026-08-31 with the
@@ -1818,9 +1965,20 @@ remaining method work all converges on one decision:
 | **FedProx** | add a proximal term to its own loss — its server side *is* FedAvg, so there is nothing to build here at all |
 | **q-FedAvg** *(shipped, inert)* | report `local_loss` (already on the wire); with none reported it falls back to FedAvg |
 
-**Four methods, one blocker: ADR 0005's Python SDK question.** That is
-now the single highest-leverage open decision on the framework line, and
-it is a decision rather than a task.
+~~**Four methods, one blocker: ADR 0005's Python SDK question.**~~
+**Unblocked 2026-09-01** by phase 23's `ClientApp` SDK — in Python
+(`python/conflux_client/app.py`) and in Rust (`crates/conflux-client`).
+Both carry `local_steps`, `local_loss` and `control_variate`, so all four
+are now ordinary build tasks rather than a pending decision:
+
+- **q-FedAvg** stops being inert the moment a client reports a
+  `local_loss` — no server work at all.
+- **FedProx** is entirely client-side; its server half *is* FedAvg.
+- **FedNova** and **SCAFFOLD** need their server-side aggregators
+  written, against fields a client can now actually send.
+
+The decision that remains from ADR 0005 is (2), client code
+distribution — which blocks no method.
 
 **Zeno** is the exception — it needs no client change. The sidecar
 already serves its scoring RPC and a test drives it over the real hop;
@@ -1956,7 +2114,10 @@ proto extension:
   2026-08-23 "Update" section — Python SDK, decomposed into three
   separable questions (model handoff, code distribution, `ClientApp`
   interface); recommends resolving the interface question first since
-  it's the only one this codebase can answer alone.
+  it's the only one this codebase can answer alone. **The interface
+  question is now shipped** — see
+  [phase 23](phases/phase-23-client-app-sdk.md). (1) and (2) remain
+  deferred on purpose.
 - [`docs/adr/0011-server-trusted-reference-boundary.md`](adr/0011-server-trusted-reference-boundary.md)
   (new) — FLTrust/Zeno's server-training requirement vs. ADR 0004;
   recommends an optional sidecar process rather than a server-binary

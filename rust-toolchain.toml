@@ -8,9 +8,11 @@
 # would then disagree with them for reasons neither could see.
 #
 # The MSRV is a separate, stricter claim, declared per crate via
-# `rust-version` (1.85 for most, 1.94.1 for the two that pull the AWS
+# `rust-version` (1.88 for most, 1.94.1 for the two that pull the AWS
 # SDK). This file says what we build with; that says what we promise to
-# build on.
+# build on — and the second claim is only worth anything if something
+# actually compiles at that version, which is what CI's `msrv` job is
+# for.
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]

@@ -95,15 +95,19 @@ jobs:
       - run: cargo test --workspace
 
   msrv:
-    name: minimum supported Rust (1.85)
+    name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
-      # Only the crates that claim 1.85. `conflux-store` and
+      # Only the crates that claim 1.88. `conflux-store` and
       # `conflux-server` declare 1.94.1 because `aws-sdk-s3` requires it
       # — checking them here would test the claim we did not make.
+      # 1.88 rather than edition 2024's own 1.85 floor: `tonic`,
+      # `jsonwebtoken` and `time` each declare 1.88, so nothing above
+      # `conflux-proto` can honestly promise less. See the workspace
+      # `Cargo.toml`.
       # `--all-targets` is omitted: dev-dependencies (criterion, rcgen)
       # carry their own, higher MSRVs, and an MSRV is a promise about
       # building the library, not about running its test suite.
@@ -112,7 +116,7 @@ jobs:
           -p conflux-proto -p conflux-config -p conflux-registry
           -p conflux-selector -p conflux-net -p conflux-buffer
           -p conflux-privacy -p conflux-reputation -p conflux-core
-          -p conflux-node -p conflux-trusted-reference
+          -p conflux-node -p conflux-trusted-reference -p conflux-client
 
   isolation:
     name: dependency isolation

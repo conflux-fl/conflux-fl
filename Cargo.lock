@@ -913,6 +913,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "conflux-client"
+version = "0.2.0"
+dependencies = [
+ "conflux-net",
+ "conflux-proto",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "conflux-config"
 version = "0.2.0"
 dependencies = [

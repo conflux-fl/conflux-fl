@@ -153,6 +153,69 @@ async fn both_fields_travel_together_without_interfering() {
 }
 
 #[tokio::test]
+async fn local_loss_survives_reassembly_and_absent_stays_absent() {
+    // q-FedAvg's `F_k(w_t)`, added after `local_steps` and
+    // `control_variate`. Same scalar convention: repeated on every
+    // chunk, read from whichever arrives first.
+    //
+    // The second half matters more than the first. protobuf reads an
+    // unset `optional float` as `0.0`, so "this client is not running
+    // q-FedAvg" and "this client reported a loss of exactly zero" are
+    // indistinguishable to anything checking truthiness — and with
+    // `q > 0`, a loss read as zero means *zero weight*, silently
+    // excluding every client that has not been upgraded to report one.
+    let bytes = encode_weights(&[1.0, 2.0, 3.0, 4.0]);
+    let mid = bytes.len() / 2;
+
+    let mut first = chunk(1, 2, bytes[mid..].to_vec());
+    first.local_loss = Some(0.75);
+    let mut second = chunk(0, 2, bytes[..mid].to_vec());
+    second.local_loss = Some(0.75);
+
+    let delta = reassemble(vec![first, second]).await;
+    assert_eq!(delta.local_loss, Some(0.75));
+
+    // And a client that reports nothing must arrive as `None`.
+    let silent = reassemble(vec![
+        chunk(0, 2, bytes[..mid].to_vec()),
+        chunk(1, 2, bytes[mid..].to_vec()),
+    ])
+    .await;
+    assert_eq!(silent.local_loss, None, "absent must not become Some(0.0)");
+}
+
+#[tokio::test]
+async fn all_three_optional_fields_travel_together() {
+    // The full ADR 0012 payload as a real client now sends it: FedNova's
+    // step count, q-FedAvg's loss, and SCAFFOLD's variate, in one
+    // submission, out of order.
+    let variate = [0.1_f32, 0.2, 0.3, 0.4];
+    let cv = encode_weights(&variate);
+    let weights = [5.0_f32, 6.0, 7.0, 8.0];
+    let data = encode_weights(&weights);
+    let mid = cv.len() / 2;
+
+    let mut c0 = chunk(0, 2, data[..mid].to_vec());
+    c0.local_steps = Some(30);
+    c0.local_loss = Some(2.31);
+    c0.control_variate = Some(cv[..mid].to_vec());
+    let mut c1 = chunk(1, 2, data[mid..].to_vec());
+    c1.local_steps = Some(30);
+    c1.local_loss = Some(2.31);
+    c1.control_variate = Some(cv[mid..].to_vec());
+
+    let delta = reassemble(vec![c1, c0]).await;
+
+    assert_eq!(decode_weights(&delta.weights).unwrap(), weights);
+    assert_eq!(delta.local_steps, Some(30));
+    assert_eq!(delta.local_loss, Some(2.31));
+    assert_eq!(
+        decode_weights(&delta.control_variate.unwrap()).unwrap(),
+        variate
+    );
+}
+
+#[tokio::test]
 async fn a_partially_populated_control_variate_reassembles_short_rather_than_being_padded() {
     // Documented behavior, asserted so it stays deliberate. A client that
     // sets `control_variate` on only some of its chunks is malformed, but

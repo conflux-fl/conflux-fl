@@ -1,5 +1,16 @@
 # 0005 — Python SDK and model distribution deferred
 
+**Status update (2026-09-01): question (3) is resolved and shipped;
+(1) and (2) remain deferred.** See
+[phase 23](../phases/phase-23-client-app-sdk.md). The `ClientApp` base
+class exists (`python/conflux_client/app.py`), the MNIST harness runs on
+it end to end, and `TrainResult` carries the ADR 0012 wire fields — so a
+client can now populate `local_steps`, `local_loss` and
+`control_variate`, which nothing could before.
+
+That last point is what unblocked FedNova, SCAFFOLD and q-FedAvg from
+being shipped-but-inert. The rest of this ADR stands as written.
+
 ## Context
 Two real product questions remain unresolved: how a model architecture is
 introduced to a `ClientApp`, and how client code is distributed to
@@ -75,3 +86,40 @@ already how the existing E2E numpy/PyTorch examples work). Treat
 (1)/(2) as `crowdsource`/`edge`-specific follow-on work, gated on product
 scope this ADR still can't resolve — this keeps `cross_silo` from staying
 blocked on decisions that are specific to the other two topologies.
+
+## Update (2026-09-01) — a Rust-native client changes what (1) and (2) cost
+
+The update above recommends resolving (3) first and treating (1)/(2) as
+`crowdsource`/`edge`-specific follow-on work. That still holds, with one
+addition worth recording before either is decided.
+
+A Rust-native client — training inside `conflux-node` via a framework
+like [Burn](https://github.com/tracel-ai/burn), which supports full
+autodiff training and names federated learning as a target use case —
+would not merely be a second client. It **dissolves** two of these three
+questions rather than answering them:
+
+- **(1) becomes vacuous.** The model is compiled in. There is no
+  architecture to hand off, no import path, no serialized-model story to
+  take responsibility for.
+- **(2) becomes "ship a binary."** This is the question this ADR calls
+  "most clearly outside this codebase's boundary" and a product
+  decision. For participants who are not pre-provisioned machines, a
+  single static binary is a fundamentally smaller problem than
+  provisioning a Python environment.
+
+It would also give the `edge` topology something to be. That profile
+currently mirrors `cross_device` because resource-aware tuning "isn't
+implemented yet"; Burn's `no_std` backend is aimed squarely at it.
+
+**This is not a decision, and specifically not a recommendation to
+replace Python** — researchers want PyTorch, every e2e harness is
+PyTorch, and the DSS research line depends on them. It would be an
+additional client path, maintained alongside.
+
+What it *is*: a reason not to answer (2) yet. Choosing a Python
+distribution mechanism before evaluating whether the client needs Python
+at all would be settling the expensive question on incomplete
+information. Phase 23 records the cheap way to find out — a Rust port of
+the numpy-logreg harness, which tests the architecture without
+committing to it.
