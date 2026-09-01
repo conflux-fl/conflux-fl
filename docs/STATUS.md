@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** Then Phase 23: the `ClientApp` SDK — ADR 0005's question (3), resolved in Python *and* in Rust, which is what finally lets a client populate ADR 0012's fields at all and takes FedNova/SCAFFOLD/FedProx/q-FedAvg from blocked to buildable. `crates/conflux-client` proves the loop closes with no Python process anywhere (0.67 local-only → 0.996 federated, on a problem no client can solve alone), and needed no server, node, or proto change to do it. Adding it to CI turned up a false published claim: the declared MSRV of 1.85 **did not build eight of the twelve crates that promised it** — corrected to 1.88. Then **FedNova and SCAFFOLD** — 21 methods across five families, and the last two blocked on client-side plumbing; SCAFFOLD needed a `TaskResponse` field going *down* that nobody had noticed was missing, making it the only method whose algorithm needs the server to send state to clients. Before that, running `qfedavg` end to end found that **`round.rs` dropped all three ADR 0012 fields on the last hop before aggregation** — `..Default::default()` reset them to `None`, so q-FedAvg silently ran as FedAvg and FedNova/SCAFFOLD would have too. Every unit test on both sides of that function passed. Fixed, pinned by a red-first test, and q-FedAvg is now demonstrated live. Finally **FedProx**, which needed no server work at all — the proximal term implemented client-side where it belongs, measured to cut client drift 62% at `μ = 1.0`, with an honest null result on whether it helps at this harness's scale. **The aggregation catalog is closed: 21 server-side methods across five families, plus FedProx client-side.** 509 tests (23 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fifteen crates. Version 0.2.0.
+Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** Then Phase 23: the `ClientApp` SDK — ADR 0005's question (3), resolved in Python *and* in Rust, which is what finally lets a client populate ADR 0012's fields at all and takes FedNova/SCAFFOLD/FedProx/q-FedAvg from blocked to buildable. `crates/conflux-client` proves the loop closes with no Python process anywhere (0.67 local-only → 0.996 federated, on a problem no client can solve alone), and needed no server, node, or proto change to do it. Adding it to CI turned up a false published claim: the declared MSRV of 1.85 **did not build eight of the twelve crates that promised it** — corrected to 1.88. Then **FedNova and SCAFFOLD** — 21 methods across five families, and the last two blocked on client-side plumbing; SCAFFOLD needed a `TaskResponse` field going *down* that nobody had noticed was missing, making it the only method whose algorithm needs the server to send state to clients. Before that, running `qfedavg` end to end found that **`round.rs` dropped all three ADR 0012 fields on the last hop before aggregation** — `..Default::default()` reset them to `None`, so q-FedAvg silently ran as FedAvg and FedNova/SCAFFOLD would have too. Every unit test on both sides of that function passed. Fixed, pinned by a red-first test, and q-FedAvg is now demonstrated live. Finally **FedProx**, which needed no server work at all — the proximal term implemented client-side where it belongs, measured to cut client drift 62% at `μ = 1.0`, with an honest null result on whether it helps at this harness's scale. **The aggregation catalog is closed: 21 server-side methods across five families, plus FedProx client-side.** Then CI's **`python-client` job**, closing the gap where the Python half of the wire contract was executed by nothing: seven gates from `compileall` up to a real server/node/client federation whose pass condition is the *server's* round counter advancing — verified to fail on a deliberately broken client, not just to pass on a good one. 509 tests (23 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fifteen crates. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -2211,6 +2211,90 @@ A test asserts every registered name appears in it.
 Every method in `AGGREGATION_LANDSCAPE.md`'s survey is now either built
 or explicitly declined with a reason. 509 tests, clippy clean under
 `-D warnings`, fmt clean, 9 Python SDK tests.
+
+## CI's python-client job — the wire contract's other half (2026-09-01)
+
+Until now CI had six jobs, all Rust or env-file. The Python client — the
+`ClientApp` SDK, the stub client, four harnesses, 26 files — **was never
+executed by CI at all**. The only occurrence of "python" in
+`ci.yml` was inside a comment.
+
+### Why that mattered more than ordinary missing coverage
+
+Python owns one side of the wire contract, and the two sides have very
+different failure modes:
+
+| | Schema changes | Detected by |
+|---|---|---|
+| Rust client | build breaks | the compiler, on the offending commit |
+| Python client | nothing breaks | a runtime error, in someone's experiment |
+
+The generated stubs are **not committed** — `generate_proto.sh` produces
+them locally — so a `.proto` change yields no diff, no build error, and
+no failing test. It yields a client that connects, registers, trains,
+submits, and silently omits a field.
+
+**That has happened twice.** `fl_transport_pb2.py` sat a schema version
+behind for the entire life of ADR 0012's fields and nothing noticed.
+Then adding `TaskResponse.control_variate` broke ten Rust struct
+literals loudly while the Python side would only have failed at runtime,
+inside `HasField`. Both times the failure had no symptom: the run
+converged, the logs stayed clean, the configured method never ran.
+
+### Seven gates, cheapest first
+
+1. **Regenerate stubs** from the current `.proto`, so every later gate
+   checks today's contract rather than a cached one.
+2. **`compileall`** over every file, including the four harnesses the
+   job deliberately does not import (they need torch; CI does not
+   install it).
+3. **`ruff --select E9,F`** — undefined names, unused imports, broken
+   f-strings. Found one real unused import on its first run.
+4. **`bash -n`** on every shipped shell script. The demo scripts go to
+   participants too, and a shell syntax error is as broken as a Python
+   one.
+5. **Import the SDK against the fresh stubs**, and assert the wire
+   contract still carries every optional field an aggregator reads —
+   `local_steps`/`local_loss`/`control_variate` upward, and
+   `control_variate` downward. **This is the gate that catches stub
+   drift**, the failure that went unnoticed for weeks.
+6. **SDK contract tests** (9), including absent-vs-zero both directions.
+7. **A real federation** — `ci_smoke.sh`: real `conflux-server`, real
+   `conflux-node`, real Python client over the real loopback hop.
+
+### Gate 7 is the one that cannot be faked
+
+Gates 1–6 all pass for a client that loads correctly and accomplishes
+nothing. So the smoke test does not trust the client's own report: after
+the run it queries **the server's `/round/status`** and requires the
+round counter to have advanced past 1, which can only happen if a
+submission was actually aggregated into a checkpoint.
+
+**Verified to fail, not just to pass** — the same discipline the IID demo
+taught. Deliberately breaking the stub client two ways, and confirming
+the gate catches each:
+
+| Injected fault | Caught by |
+|---|---|
+| submits for a round that has closed | "the Python client exited 1" |
+| syntax error | "the Python client exited 1" (`SyntaxError`) |
+
+`ci_smoke.sh` lives in `python/conflux_client/` rather than inside the
+YAML, so the same gate runs locally before distributing anything:
+`./ci_smoke.sh 2`.
+
+All seven gates were run locally as CI will run them, not merely
+written.
+
+### conflux-web
+
+New guide, [Getting the client to
+participants](https://conflux-fl.github.io/guides/client-distribution/):
+what a participant actually installs (**two processes — a Rust node
+*and* the Python client, which is why a participant already needs a
+binary today**), what `cross_silo` settles, what `crowdsource`/`edge`
+deliberately leave open, and what the seven gates stop from shipping.
+Cross-linked from the deployment guide and the guides index.
 
 ## Research-line entry point
 

@@ -118,6 +118,107 @@ jobs:
           -p conflux-privacy -p conflux-reputation -p conflux-core
           -p conflux-node -p conflux-trusted-reference -p conflux-client
 
+  python-client:
+    name: python client
+    runs-on: ubuntu-latest
+    # The Python client is half of the wire contract and, until this job
+    # existed, the half nothing checked. The Rust side is compiler-
+    # enforced: adding a field to the `.proto` breaks every exhaustive
+    # struct literal, loudly, on the commit that did it. Python has no
+    # equivalent — the generated stubs are not committed, so a schema
+    # change produces no diff, no build error, and no failing test. It
+    # produces a client that silently stops sending a field.
+    #
+    # That has already happened twice. `fl_transport_pb2.py` sat one
+    # schema version behind for the whole life of ADR 0012's fields, and
+    # nothing noticed. The failure mode is the bad one: nothing crashes,
+    # the run converges, and the configured method never ran.
+    #
+    # The gates below run cheapest-first, so a syntax error fails in
+    # seconds rather than after a cargo build.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install client dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # grpcio-tools regenerates the stubs; ruff is the static gate.
+          # Deliberately no torch/numpy: the SDK and the stub client
+          # depend on neither, and the gates that need them are the
+          # end-to-end harnesses, which are not CI's job to run.
+          pip install grpcio grpcio-tools protobuf ruff
+
+      # Gate 1 — the schema. Regenerating from the current .proto is what
+      # makes every later gate a check against *today's* contract rather
+      # than whatever was generated last.
+      - name: regenerate protobuf stubs from the current schema
+        run: ./generate_proto.sh
+        working-directory: python/conflux_client
+
+      # Gate 2 — syntax, across every file, including the four harnesses
+      # this job deliberately does not import (they need torch).
+      - name: byte-compile every Python file
+        run: python -m compileall -q . -x '\.venv'
+        working-directory: python/conflux_client
+
+      # Gate 3 — the static bug classes that matter for a client someone
+      # else will run: undefined names, unused imports, broken f-strings.
+      # E9 is syntax/IO errors; F is pyflakes.
+      - name: lint
+        run: ruff check --select E9,F --exclude .venv --exclude '*_pb2*' .
+        working-directory: python/conflux_client
+
+      # Gate 4 — the demo scripts are shipped client-side too, and a
+      # shell syntax error in one is exactly as broken as a Python one.
+      - name: check the demo scripts parse
+        run: |
+          set -e
+          for script in generate_proto.sh ci_smoke.sh examples/*/run_demo.sh; do
+            bash -n "$script" && echo "  ok  $script"
+          done
+        working-directory: python/conflux_client
+
+      # Gate 5 — the SDK and stub client must import against the stubs
+      # generated in gate 1, and still expose their public names. This is
+      # what would have caught the stale-stub drift.
+      - name: import the SDK against freshly generated stubs
+        run: |
+          python -c "
+          import app, stub_client
+          required = ('ClientApp', 'TrainResult', 'run', 'main',
+                      'encode_weights', 'decode_weights', 'is_placeholder_init')
+          missing = [n for n in required if not hasattr(app, n)]
+          assert not missing, f'app.py no longer exports: {missing}'
+          import fl_transport_pb2 as pb
+          # Every optional field an aggregator reads must exist on the
+          # generated types. A stub generated before one of these landed
+          # imports fine and silently omits it, which is the whole reason
+          # this gate exists.
+          for field in ('local_steps', 'local_loss', 'control_variate'):
+              assert hasattr(pb.DeltaChunk(), field), f'DeltaChunk lacks {field}'
+              assert hasattr(pb.ClientDelta(), field), f'ClientDelta lacks {field}'
+          assert hasattr(pb.TaskResponse(), 'control_variate'), 'TaskResponse lacks control_variate'
+          print('SDK imports, and the wire contract has every field the aggregators read')
+          "
+        working-directory: python/conflux_client
+
+      # Gate 6 — the contract tests, including absent-vs-zero on both
+      # directions of the wire.
+      - name: SDK tests
+        run: python tests/test_app.py
+        working-directory: python/conflux_client
+
+      # Gate 7 — the one that cannot be satisfied by a client that merely
+      # loads. Real server, real node, real gRPC, and the server's own
+      # round counter as the witness.
+      - name: end-to-end smoke over the real local hop
+        run: ./ci_smoke.sh 2
+        working-directory: python/conflux_client
+
   isolation:
     name: dependency isolation
     runs-on: ubuntu-latest
