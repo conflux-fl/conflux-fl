@@ -1,7 +1,7 @@
 //! Authentication for the HTTP admin surface.
 //!
-//! The gRPC surface has had real authentication since Phase 8c (node
-//! allow-list) and Phase 16 (JWT). The HTTP surface, serving the same
+//! The gRPC surface has had real authentication (node
+//! allow-list) and (JWT). The HTTP surface, serving the same
 //! process on a different port, had none at all — and it is the more
 //! dangerous of the two, because `/admin/allowlist` is the endpoint that
 //! decides *who is allowed to participate*. Anything able to reach that

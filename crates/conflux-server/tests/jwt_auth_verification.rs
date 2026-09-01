@@ -1,8 +1,8 @@
-//! Real end-to-end JWT verification tests (Phase 16) — proving that
+//! Real end-to-end JWT verification tests — proving that
 //! `auth = jwt` actually gates the `Register` RPC over a live gRPC
 //! connection, not just that the verifier works in isolation.
 //!
-//! Same rigor and shape as `node_auth.rs` (Phase 8c) does for the
+//! Same rigor and shape as `node_auth.rs` does for the
 //! allow-list: a real `AppState`, a real `FlTransportService`, a real
 //! `PullTransport` client, and real ES256 keys generated per test rather
 //! than a private key committed to the repository.

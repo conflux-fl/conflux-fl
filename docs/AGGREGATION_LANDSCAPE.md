@@ -6,7 +6,7 @@ round-1 outlier, starving whichever `robust` aggregator is configured of
 the honest batch it needs. That was found against four shipped
 aggregators (FedAvg, Krum, Trimmed Mean, Median). This doc generalizes
 the question to the wider aggregation literature — roughly 18 real,
-citable methods — because `docs/STATUS.md`'s "Next" section already lists
+citable methods — because the STATUS record's "Next" section already lists
 several future aggregators (Bulyan) and selectors, and the family pattern
 (ADR 0002) is meant to make adding more of these cheap. Before extending
 that pattern further, it's worth knowing *which* future methods this bug
@@ -63,11 +63,11 @@ was pointing at.
 | **Multi-Krum** | same | `UpdateFilter` | Shipped |
 | **Trimmed Mean** | Yin, Chen, Ramchandran & Bartlett, 2018 | `CoordinateWiseRobustStatistic` | Shipped |
 | **Median** | same | `CoordinateWiseRobustStatistic` | Shipped |
-| **Bulyan** | El Mhamdi, Guerraoui & Rouault, 2018 | `FilteredAggregator<BulyanFilter, TrimmedMean>` — composes existing shapes, zero new plumbing (already noted in `docs/STATUS.md`) | Sketched, not built |
+| **Bulyan** | El Mhamdi, Guerraoui & Rouault, 2018 | `FilteredAggregator<BulyanFilter, TrimmedMean>` — composes existing shapes, zero new plumbing (already noted in the STATUS record) | Sketched, not built |
 | **FABA** | Xia, Zhang, Yang, Shao & Yin, 2019 | `UpdateFilter` — iteratively drops the update farthest from the running mean, like a simpler Krum | Not built |
 | **Divide-and-Conquer (DnC)** | Shejwalkar & Houmansadr, 2021 | `UpdateFilter`, but the filtering *logic* (random coordinate subsampling + top-singular-eigenvector outlier scoring) is spectral, not distance-based — the trait shape fits, the internals are a genuinely different algorithm family from Krum's pairwise distances | Not built |
 | **Geometric Median / RFA** | Pillutla, Kakade & Harchaoui, 2019/2022 | **Doesn't cleanly fit either existing trait.** It's a *whole-vector* robust statistic (Weiszfeld's algorithm, jointly over all coordinates) — `CoordinateWiseRobustStatistic` is explicitly per-coordinate-independent, which loses the cross-coordinate structure geometric median preserves. Needs a third trait shape, e.g. `RobustVectorStatistic: fn combine(&self, updates: &[Vec<f32>]) -> Vec<f32>` | Not built — flagged as a real gap in the current two-trait design |
-| **Centered Clipping (CClip)** | Karimireddy, He & Jaggi, 2021 | Doesn't fit either trait either — clips each update around a **server-held reference vector that persists and updates across rounds** (not recomputed fresh from each round's batch alone). Closer in shape to a stateful transform than either existing family member | **Shipped** (Phase 15) — `CenteredClippingAggregator` in `temporal.rs`, config name `centered_clipping`; used `temporal.rs`'s cross-round state pattern, no new trait needed |
+| **Centered Clipping (CClip)** | Karimireddy, He & Jaggi, 2021 | Doesn't fit either trait either — clips each update around a **server-held reference vector that persists and updates across rounds** (not recomputed fresh from each round's batch alone). Closer in shape to a stateful transform than either existing family member | **Shipped** — `CenteredClippingAggregator` in `temporal.rs`, config name `centered_clipping`; used `temporal.rs`'s cross-round state pattern, no new trait needed |
 
 All nine assume the batch handed to them is representative. Pre-filtering
 that batch with a scorer whose own reference can be skewed by the same
@@ -98,7 +98,7 @@ own methods, ironically) is still *derived from the batch* and still
 breaks once the Byzantine fraction crosses the ~50% breakdown point any
 batch-only statistic has. A trusted-root-dataset reference doesn't have
 that ceiling. This is worth weighing against the three candidate fixes
-`docs/STATUS.md` already lists — it's a fourth, and arguably better, one:
+the STATUS record already lists — it's a fourth, and arguably better, one:
 **give `conflux-reputation` (or a new `robust` family member built the
 same way) a small server-held trusted reference, shared infrastructure
 both could use**, rather than reinventing "robust reference" twice.
@@ -145,60 +145,60 @@ Two more, briefly, because they're popular enough to come up eventually
 and don't fit neatly into the above five:
 
 - **SignSGD with majority vote** (Bernstein, Wang, Azizzadenesheli &
-  Anandkumar, 2018; Byzantine analysis in Bernstein et al., 2019) —
-  aggregates the *sign* of each client's gradient via majority vote,
-  discarding magnitude entirely. This challenges the wire format's
-  implicit assumption (a flat `f32[]` where magnitude carries
-  information) more than it challenges the reputation/aggregation
-  ordering — a genuinely different case from everything above, and a
-  good stress test for whether `conflux-proto`'s "one schema for
-  everything" (ADR 0004) holds up to a fundamentally different update
-  representation.
+ Anandkumar, 2018; Byzantine analysis in Bernstein et al., 2019) —
+ aggregates the *sign* of each client's gradient via majority vote,
+ discarding magnitude entirely. This challenges the wire format's
+ implicit assumption (a flat `f32[]` where magnitude carries
+ information) more than it challenges the reputation/aggregation
+ ordering — a genuinely different case from everything above, and a
+ good stress test for whether `conflux-proto`'s "one schema for
+ everything" (ADR 0004) holds up to a fundamentally different update
+ representation.
 - **Personalization methods** (FedPer — Arivazhagan et al., 2019; Ditto —
-  Li, Hu, Beirami & Smith, 2021; pFedMe — T Dinh, Tran & Nguyen, 2020) —
-  produce *per-client* models rather than one global broadcast model;
-  some parameters stay local and never aggregate at all. Orthogonal to
-  the robustness discussion, but relevant to "many more aggregators
-  later": these need the pipeline to know that not every dimension of
-  the weight vector is meant to be combined the same way, which today's
-  "one flat vector, fully aggregated, fully broadcast" model doesn't
-  represent.
+ Li, Hu, Beirami & Smith, 2021; pFedMe — T Dinh, Tran & Nguyen, 2020) —
+ produce *per-client* models rather than one global broadcast model;
+ some parameters stay local and never aggregate at all. Orthogonal to
+ the robustness discussion, but relevant to "many more aggregators
+ later": these need the pipeline to know that not every dimension of
+ the weight vector is meant to be combined the same way, which today's
+ "one flat vector, fully aggregated, fully broadcast" model doesn't
+ represent.
 
 ## What this means architecturally, concretely
 
 1. **The reputation fix should target the reference computation, not any
-   individual aggregator.** Category 2 shows the blast radius is the
-   entire `robust` family, present and future — fixing `round.rs`'s
-   `mean_vector` call site (or replacing what it feeds
-   `filter_by_threshold`) once is strictly better than any per-aggregator
-   workaround.
+ individual aggregator.** Category 2 shows the blast radius is the
+ entire `robust` family, present and future — fixing `round.rs`'s
+ `mean_vector` call site (or replacing what it feeds
+ `filter_by_threshold`) once is strictly better than any per-aggregator
+ workaround.
 2. **FLTrust/Zeno (Category 3) suggest a stronger fix than "robust
-   statistic of the batch."** A trusted server-held reference has no
-   Byzantine-fraction breakdown point; a batch-derived robust statistic
-   (even median) still does. Worth designing the reputation fix around a
-   shared "trusted reference" primitive rather than just swapping mean
-   for median — and worth noting that primitive could *also* become a new
-   `robust` family member (FLTrust itself), reusing the same
-   infrastructure instead of building it twice.
+ statistic of the batch."** A trusted server-held reference has no
+ Byzantine-fraction breakdown point; a batch-derived robust statistic
+ (even median) still does. Worth designing the reputation fix around a
+ shared "trusted reference" primitive rather than just swapping mean
+ for median — and worth noting that primitive could *also* become a new
+ `robust` family member (FLTrust itself), reusing the same
+ infrastructure instead of building it twice.
 3. **The current two `robust`-family traits (`UpdateFilter`,
-   `CoordinateWiseRobustStatistic`) don't cover everything already in the
-   literature.** Geometric Median needs a whole-vector statistic shape;
-   Centered Clipping needs persistent cross-round state. Both are real,
-   cited, popular methods — worth deciding the trait taxonomy's next
-   shape before, not after, someone needs to bolt one on urgently.
+ `CoordinateWiseRobustStatistic`) don't cover everything already in the
+ literature.** Geometric Median needs a whole-vector statistic shape;
+ Centered Clipping needs persistent cross-round state. Both are real,
+ cited, popular methods — worth deciding the trait taxonomy's next
+ shape before, not after, someone needs to bolt one on urgently.
 4. **`AveragingWeighting`/`Aggregator` as currently defined can't express
-   FedNova, FedOpt, or SCAFFOLD without either a proto change (FedNova,
-   SCAFFOLD) or relaxing the stateless-per-round assumption (FedOpt,
-   Centered Clipping).** None of this needs to happen now, but the
-   `Aggregator` trait's signature is exactly the kind of thing that's
-   cheap to future-proof today (e.g. deciding whether cross-round state
-   is ever allowed) and expensive to retrofit after several more
-   stateless-only family members exist.
+ FedNova, FedOpt, or SCAFFOLD without either a proto change (FedNova,
+ SCAFFOLD) or relaxing the stateless-per-round assumption (FedOpt,
+ Centered Clipping).** None of this needs to happen now, but the
+ `Aggregator` trait's signature is exactly the kind of thing that's
+ cheap to future-proof today (e.g. deciding whether cross-round state
+ is ever allowed) and expensive to retrofit after several more
+ stateless-only family members exist.
 5. **Not everything needs core-framework work.** FedProx is a reminder
-   that the client-side/server-side split (ADR 0004) already buys a lot
-   of algorithm flexibility for free — worth keeping in mind so the
-   family-pattern's scope doesn't grow to cover things that were never
-   the server's problem.
+ that the client-side/server-side split (ADR 0004) already buys a lot
+ of algorithm flexibility for free — worth keeping in mind so the
+ family-pattern's scope doesn't grow to cover things that were never
+ the server's problem.
 
 ## Summary table (all 18)
 
@@ -214,7 +214,7 @@ and don't fit neatly into the above five:
 | 8 | Divide-and-Conquer | 2 | **Shipped** (2026-08-23) — `UpdateFilter`, new `top_singular_vector` power-iteration helper |
 | 9 | Geometric Median / RFA | 2 | **Shipped** (2026-08-23) — new `RobustVectorStatistic` trait + `VectorRobustAggregator<S>` |
 | 10 | Centered Clipping | 2 + 4 | New trait shape + cross-round state — `temporal.rs`'s `Mutex`-based state (built for FoolsGold, below) is now a concrete precedent for the cross-round part |
-| 11 | FLTrust | 3 — trusted-reference | New trait shape + a trusted-reference primitive — still needs its own ADR-0004-revisiting scoping (Phase 13's "Revision history") |
+| 11 | FLTrust | 3 — trusted-reference | New trait shape + a trusted-reference primitive — still needs its own ADR-0004-revisiting scoping |
 | 12 | Zeno / Zeno++ | 3 | Same trusted-reference primitive as above |
 | 13 | FedNova | 4 — needs new plumbing | `conflux-proto` field (local step count) |
 | 14 | FedAdam/Yogi/Adagrad | 4 | Cross-round server optimizer state |
@@ -223,7 +223,7 @@ and don't fit neatly into the above five:
 | 17 | SignSGD majority vote | wire-format stress test | Different update representation entirely |
 | 18 | FedPer / Ditto / pFedMe | personalization, orthogonal | Partial-aggregation model the pipeline doesn't have yet |
 | 19 | Median-of-Means | 2 (not in the original 18 — added during implementation) | **Shipped** (2026-08-23) — `CoordinateWiseRobustStatistic`, groups by array position |
-| 20 | FoolsGold | **new Category 6 — cross-round/temporal** (not in the original taxonomy; see `docs/research/temporal-consistency-aggregation.md`) | **Shipped** (2026-08-23) — first member of a new `temporal.rs` module, `Mutex`-based per-client history, the first Conflux aggregator with real cross-round state |
+| 20 | FoolsGold | **new Category 6 — cross-round/temporal** (not in the original taxonomy) | **Shipped** (2026-08-23) — first member of a new `temporal.rs` module, `Mutex`-based per-client history, the first Conflux aggregator with real cross-round state |
 
 ## Where this leaves the reputation fix
 
@@ -235,11 +235,11 @@ a reusable trusted-reference concept (Category 3's lesson) rather than
 just a more robust batch statistic, since that same primitive pays for
 itself again the moment FLTrust or Zeno gets built. Still real design
 work deserving its own phase brief, not a same-session patch — see
-`docs/STATUS.md`'s "Next" section.
+the STATUS record's "Next" section.
 
 ## Update (2026-08-23) — the trusted-reference recommendation above is corrected in the phase brief
 
-`docs/phases/phase-13-reputation-reference-fix.md` (the scoping brief
+its phase brief (the scoping brief
 this section called for) found a real problem with the trusted-reference
 recommendation two paragraphs up: **FLTrust and Zeno both require the
 server to train its own reference update on real data.** Conflux's server
@@ -248,7 +248,7 @@ central boundary (`conflux-server` is opaque to model architecture by
 design, which is *why* the wire format is a flat `f32[]`). Adopting a
 trusted-reference design isn't a reputation-module change under that
 boundary; it's new server-side ML capability that would need its own ADR
-revisiting 0004 first. The phase brief scopes Phase 13 to what's
+revisiting 0004 first. The phase brief scopes to what's
 achievable without that: reject non-finite submissions outright (a
 distinct bug this doc's Category-2 analysis didn't anticipate — see the
 brief and `docs/E2E_TESTING.md`'s finding 3, found via this session's
@@ -257,7 +257,7 @@ raw-mean reference with a coordinate-wise median reusing
 `conflux-core::MedianStatistic` — real, in-scope improvements, explicitly
 not claimed to close the general Byzantine-fraction ceiling Category 3
 describes. That larger question stays open, correctly identified above,
-just not being solved by Phase 13.
+just not being solved by.
 
 ## Update (2026-08-23, second) — this whole doc's framing was too defense-oriented
 
@@ -272,13 +272,13 @@ imposed generically in front of every aggregator. Priority is keeping
 the family pattern (ADR 0002) simple so more methods keep being cheap to
 add, not minimizing attack surface.
 
-Under that lens, `docs/phases/phase-13-reputation-reference-fix.md` was
+Under that lens, its phase brief was
 revised a second time: **the fix is not "make `conflux-reputation`'s
 filter more robust" (the update immediately above), it's "stop making
 that filter mandatory."** `CosineScorer` applied unconditionally in
 front of every aggregator was itself the mistake — no cited paper in
 this document's own tables asks for an extra uncited filter ahead of
-Krum, Trimmed Mean, or Median. The revised Phase 13 makes reputation
+Krum, Trimmed Mean, or Median. The revised makes reputation
 filtering opt-in (off by default), so every method's default behavior
 matches its paper with zero interference, and drops the coordinate-wise
 median plan entirely (solving robustness for a mandatory gate that no
@@ -293,8 +293,7 @@ would be built as its own self-contained aggregator implementing its
 own cited trust mechanism faithfully, not as a `conflux-reputation`
 extension. What no longer holds is this document's implicit framing that
 Conflux's job is to defend every configured aggregator against every
-listed attack by default — it isn't. See `docs/phases/
-phase-13-reputation-reference-fix.md`'s "Revision history" for the full
+listed attack by default — it isn't. See its phase brief for the full
 account.
 
 ## Update (2026-08-23, third) — a new Category 6, and six methods shipped
@@ -302,19 +301,13 @@ account.
 Six of this table's remaining entries (Bulyan, FABA, Divide-and-Conquer,
 Geometric Median, plus Median-of-Means and FoolsGold, not in the
 original 18) are now built — see the summary table above and
-`docs/STATUS.md`'s "Done" entry for that date. FoolsGold surfaces a gap
+the STATUS record's "Done" entry for that date. FoolsGold surfaces a gap
 this document's original taxonomy didn't have a category for: **every
 one of the ten pre-existing methods, across Categories 1–5, judges a
 round's batch in isolation** — none have memory of prior rounds. That's
 a real, distinct axis from "which geometric signal does the filtering,"
 worth calling **Category 6 — cross-round/temporal**. FoolsGold is its
-first member; `docs/research/temporal-consistency-aggregation.md` is a
-full research proposal exploring whether that axis, generalized, closes
-this document's Category 1/2 attack-adaptivity gap and the non-IID
-fairness problem simultaneously — read that document for the deeper
-analysis; it supersedes this doc as the place gap-analysis work
-continues from here. A second Category-6 member, Deviation Stability
-Scoring (DSS), is now also built and validated — see that document's
+first member of this category.
 §5.5/§6.4 for its own real, measured tradeoffs.
 
 ## Update (2026-08-23, fourth) — this table's remaining gaps are now scoped, not just identified
@@ -322,25 +315,24 @@ Scoring (DSS), is now also built and validated — see that document's
 Every remaining "Not built" row in the summary table above now has a
 concrete planning document, closing the loop this doc opened:
 
-- **Centered Clipping** (row 10) — `docs/phases/
-  phase-15-centered-clipping.md`. Buildable now, independent of the
-  proto-extension ADR below — needs cross-round state only,
-  `temporal.rs`'s `Mutex`-based pattern (proven twice over, by FoolsGold
-  and DSS) is the direct precedent.
+- **Centered Clipping** (row 10) — its phase brief. Buildable now, independent of the
+ proto-extension ADR below — needs cross-round state only,
+ `temporal.rs`'s `Mutex`-based pattern (proven twice over, by FoolsGold
+ is the direct precedent.
 - **FLTrust / Zeno** (rows 11–12) — the "still needs its own
-  ADR-0004-revisiting scoping" this table already flagged is now written:
-  `docs/adr/0011-server-trusted-reference-boundary.md`. Recommends an
-  optional sidecar process (keeping `conflux-server` itself training-free,
-  preserving ADR 0004's actual boundary) over embedding a training
-  capability in the server binary directly.
+ ADR-0004-revisiting scoping" this table already flagged is now written:
+ ADR 0011. Recommends an
+ optional sidecar process (keeping `conflux-server` itself training-free,
+ preserving ADR 0004's actual boundary) over embedding a training
+ capability in the server binary directly.
 - **FedNova / FedOpt-family / SCAFFOLD** (rows 13–15) — the shared
-  plumbing question ("what this means architecturally" point 4, above)
-  is now resolved as a proposed decision:
-  `docs/adr/0012-stateful-aggregator-and-proto-extension.md`. Keeps
-  `Aggregator::aggregate`'s `&self` signature (the `temporal.rs` pattern
-  generalizes rather than requiring `&mut self`), adds two `optional`
-  `ClientDelta` fields (`local_steps`, `control_variate`) additively —
-  every existing producer of `ClientDelta` is unaffected.
+ plumbing question ("what this means architecturally" point 4, above)
+ is now resolved as a proposed decision:
+ ADR 0012. Keeps
+ `Aggregator::aggregate`'s `&self` signature (the `temporal.rs` pattern
+ generalizes rather than requiring `&mut self`), adds two `optional`
+ `ClientDelta` fields (`local_steps`, `control_variate`) additively —
+ every existing producer of `ClientDelta` is unaffected.
 
 None of these four are implemented yet — each remains a proposal
 awaiting project-owner review, per those documents' own "Status" lines —
@@ -350,7 +342,7 @@ closed for every entry that had one.
 ## Update (2026-08-30, fifth) — Centered Clipping shipped
 
 Row 10 is no longer a gap. `CenteredClippingAggregator`
-(`crates/conflux-core/src/temporal.rs`, Phase 15) is registered as
+(`crates/conflux-core/src/temporal.rs`) is registered as
 `centered_clipping` and selectable from config like every other shipped
 method.
 
@@ -358,16 +350,16 @@ Two things this row's original analysis got right, confirmed by
 building it:
 
 - **It needed no new trait.** The row predicted CClip "doesn't fit
-  either trait" and would need a shape of its own. In the event, it
-  needed *no* family trait at all — it implements `Aggregator` directly,
-  the way `FoolsGoldAggregator` and `DssAggregator` already do. The
-  `temporal` family is not a trait, it is a place where methods that
-  own cross-round state live; that was the right precedent to point at.
+ either trait" and would need a shape of its own. In the event, it
+ needed *no* family trait at all — it implements `Aggregator` directly,
+ the way `FoolsGoldAggregator` and `DssAggregator` already do. The
+ `temporal` family is not a trait, it is a place where methods that
+ own cross-round state live; that was the right precedent to point at.
 - **It needed no `conflux-proto` change**, as the phase brief predicted,
-  so it landed independently of ADR 0012.
+ so it landed independently of ADR 0012.
 
 One thing worth adding to the row's characterization, learned from
-measuring it (`docs/research/temporal-consistency-aggregation.md`
+measuring it (measured
 §5.10): CClip is the only method in this table whose single tunable
 bounds the **attack** and the **convergence rate** with the same
 number. Every selection-based method's parameter (`byzantine_fraction`)
@@ -393,7 +385,7 @@ What this changes about the analysis above, in one line: **the ceiling
 Category 2 was written to describe has a way over it now.** Every method
 in Categories 1 and 2 derives "normal" from the batch, so a colluding
 majority is normal by construction — which this document identified, and
-which `docs/research/` §5.1 then measured. FLTrust never asks the batch:
+which measurement then confirmed. FLTrust never asks the batch:
 its reference comes from data no client contributed to, so a unanimous
 batch of attackers is scored against the same reference an honest one
 would be. `conflux-core`'s own test suite asserts exactly that case
@@ -446,26 +438,26 @@ the batch — but unlike them it needs no trusted data.
 
 It now ships (`conflux-core/src/flanders.rs`), paired with Krum per its
 own `ϕ`. Two things this document should record, both measured in
-`docs/research/` §5.14 rather than argued:
+measured rather than argued:
 
 - **It is not a strict improvement over the Category 1/2 methods.**
-  Paired with FedAvg it scores *worse than undefended FedAvg* against
-  every Sybil attack tested (24.2 vs 17.0 at 20% malicious). The reason
-  is structural and now pinned as a unit test: a colluder that repeats
-  itself is the most forecastable client in the batch, so a
-  forecast-consistency filter keeps it and drops the noisier honest
-  majority. Its own paper's evaluation uses attacks that perturb or
-  optimize, where that failure mode cannot arise.
+ Paired with FedAvg it scores *worse than undefended FedAvg* against
+ every Sybil attack tested (24.2 vs 17.0 at 20% malicious). The reason
+ is structural and now pinned as a unit test: a colluder that repeats
+ itself is the most forecastable client in the batch, so a
+ forecast-consistency filter keeps it and drops the noisier honest
+ majority. Its own paper's evaluation uses attacks that perturb or
+ optimize, where that failure mode cannot arise.
 - **Its headline regime did not reproduce.** Against an adaptive
-  attacker at 60% malicious it scored 1901.7 where undefended FedAvg
-  scored 1659.1. Reported as what the numbers show, at `dim = 3`, on one
-  attack family — not as a refutation of the paper's own results.
+ attacker at 60% malicious it scored 1901.7 where undefended FedAvg
+ scored 1659.1. Reported as what the numbers show, at `dim = 3`, on one
+ attack family — not as a refutation of the paper's own results.
 
 The useful generalization for this landscape: **a cross-round defense
 must choose what "normal" means over time**, and the two available
 choices fail on opposite attacks. Forecast-consistency (FLANDERS)
 rewards clients that repeat themselves, so stable collusion defeats it.
-Deviation-*instability* (DSS) requires clients to vary, so stable
+Deviation-*instability* requires clients to vary, so stable
 collusion defeats it too — for the opposite reason. Neither is a
 general answer, and the trusted-reference family (Category 3) remains
 the only one that sidesteps the question entirely, at the cost of

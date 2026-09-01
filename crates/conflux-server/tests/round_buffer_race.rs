@@ -1,5 +1,5 @@
 //! Real reproduction of the `RoundBuffer` lost-update race
-//! (`docs/phases/phase-10a-roundbuffer-race.md`) at the `conflux-server`
+//! (its phase brief) at the `conflux-server`
 //! level: `run_round` retrying past `AggregatorError::EmptyBatch` leaves
 //! `AppState.current_buffer` pointing at an already-flushed buffer, and a
 //! late submission against it must be explicitly rejected, not silently

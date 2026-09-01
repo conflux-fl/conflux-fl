@@ -5,11 +5,10 @@
 //!
 //! A pre-aggregation *filter*, not an aggregation rule: it decides which
 //! clients the configured base method gets to see, and the base method
-//! does the rest. That composition is the same shape `DssAggregator`
-//! uses, which is not a coincidence — both are cross-round temporal
-//! defenses, and FLANDERS is the closest published prior art to DSS.
-//! Having both in the catalog is what makes the comparison in
-//! `docs/research/` an experiment rather than an argument.
+//! does the rest. Composing that way — judge, then delegate — is the
+//! natural shape for a cross-round temporal defense, and it means
+//! FLANDERS pairs with whichever base method a deployment already
+//! chose rather than replacing it.
 //!
 //! # The method
 //!
@@ -278,9 +277,9 @@ impl FlandersAggregator {
 
     /// The most recent round's per-client scores and keep/drop decisions.
     ///
-    /// Read-only, for research runners and tests; `aggregate` never
-    /// consults it. The same shape `DssAggregator::last_diagnostics` has,
-    /// deliberately, so the two can be compared row for row.
+    /// Read-only, for experiment runners and tests; `aggregate` never
+    /// consults it. A stable, per-client row shape, so a run's decisions
+    /// can be compared against another method's.
     pub fn last_diagnostics(&self) -> Vec<ClientFlandersDiagnostic> {
         self.last_diagnostics
             .lock()
@@ -739,7 +738,7 @@ mod tests {
     #[test]
     fn a_perfectly_stable_colluder_is_the_most_forecastable_client_in_the_batch() {
         // The structural limitation this method has, encoded as a test
-        // because `docs/research/` §5.14 measured its consequence and the
+        // because measurement showed its consequence and the
         // consequence is severe: FLANDERS scored *worse than undefended
         // FedAvg* against persistent Sybils.
         //

@@ -80,7 +80,7 @@ echo "model dimension (flattened MLP parameter count): $DIM"
 echo ""
 echo "=== 2. downloading + partitioning MNIST (N=$N_CLIENTS clients, split=${SPLIT_FLAGS[1]}) ==="
 # CONFLUX_DEMO_SEED makes a run repeatable *and* varies it: the harness
-# was fixed-seed, which is why every real-data result in docs/research/
+# was fixed-seed, which is why every real-data result produced with it
 # has been single-seed and why task r4 exists. Defaults to
 # partition_data.py's own 42, so existing results reproduce unchanged.
 python3 "$SCRIPT_DIR/partition_data.py" --n-clients "$N_CLIENTS" --out-dir "$WORK_DIR" \

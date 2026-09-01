@@ -10,7 +10,7 @@ edition.workspace = true
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
 conflux-net = { path = "../conflux-net" }
-# Phase 17. This is a real change to the dependency line `docs/spec`'s §2
+# Phase 17. This is a real change to the dependency line the v1 specification's §2
 # draws for `conflux-node` ("conflux-proto and conflux-net only"), made
 # deliberately: spec §8's own sequence diagram shows `Node->>Priv: clip +
 # noise (optional)` as a distinct step from the server-side transform, and

@@ -4,7 +4,7 @@
 //!
 //! Decoding `ClientDelta.weights` uses this crate's error type — the
 //! actual little-endian `f32` codec lives in `conflux-proto` (shared
-//! with `conflux-server`, Phase 5) so it's implemented once, not per
+//! with `conflux-server`) so it's implemented once, not per
 //! crate.
 
 use conflux_proto::ClientDelta;
@@ -45,14 +45,14 @@ pub(crate) fn decode_weights(client_id: &str, bytes: &[u8]) -> Result<Vec<f32>, 
 ///    FedAvg's weighting assumes honest reporting (McMahan et al. 2017),
 ///    and that assumption is the framework's to surface, not to silently
 ///    repair by deviating from the published method.
-pub(crate) const MAX_PLAUSIBLE_SAMPLE_COUNT: u64 = 1 << 40;
+pub const MAX_PLAUSIBLE_SAMPLE_COUNT: u64 = 1 << 40;
 
 /// Decodes every update in a batch and checks it is fit to aggregate:
 /// all the same length, all finite, and reporting a possible sample
 /// count.
 ///
 /// The "before any real aggregation logic can run" step every family
-/// member needs (Phase 11a: factored out here so `averaging.rs` and
+/// member needs (factored out here so `averaging.rs` and
 /// `robust.rs`'s coordinate-wise members don't each reimplement it).
 /// Being the single chokepoint is what makes it the right place for the
 /// finiteness check — all eleven aggregator entry points call it, so no
@@ -62,9 +62,15 @@ pub(crate) const MAX_PLAUSIBLE_SAMPLE_COUNT: u64 = 1 << 40;
 /// batch is `EmptyBatch` or something else, since not every caller wants
 /// the same error for it (this function just has nothing to validate
 /// when there's nothing to decode).
-pub(crate) fn decode_and_validate(
-    updates: &[ClientDelta],
-) -> Result<Vec<Vec<f32>>, AggregatorError> {
+///
+/// **Public because an out-of-tree `Aggregator` needs it.** Anyone
+/// implementing the trait outside this crate — a prototype, a method
+/// this catalog does not ship — has to decode a batch and reject
+/// non-finite weights before touching them, and reimplementing that is
+/// how a new method acquires the `NaN`-handling defects the catalog
+/// already fixed. Exporting the chokepoint is cheaper than watching it
+/// be copied badly.
+pub fn decode_and_validate(updates: &[ClientDelta]) -> Result<Vec<Vec<f32>>, AggregatorError> {
     let decoded: Vec<Vec<f32>> = updates
         .iter()
         .map(|u| decode_weights(&u.client_id, &u.weights))
@@ -106,7 +112,7 @@ pub(crate) fn decode_and_validate(
     Ok(decoded)
 }
 
-// --- Phase 19: shared accumulation ----------------------------------
+// --- shared accumulation ----------------------------------
 //
 // Every shipped aggregation method's combine step reduces to one of two
 // element-wise shapes. They live here, once, rather than as eight
@@ -115,7 +121,7 @@ pub(crate) fn decode_and_validate(
 // principle ADR 0002's family pattern is built on.
 //
 // **These are deliberately scalar, and that is the measured result of
-// this phase, not an omission.** Phase 19 set out to vectorize this loop
+// this phase, not an omission.** set out to vectorize this loop
 // with the `wide` crate. It was built, and then benchmarked against the
 // scalar loop it replaced (`benches/accumulate.rs`, still present so the
 // question stays answerable). Explicit `f32x8` SIMD was **slower** at
@@ -140,9 +146,9 @@ pub(crate) fn decode_and_validate(
 
 /// `acc[i] += src[i] * weight`.
 ///
-/// The workhorse: `WeightedAverageAggregator`'s combine, FoolsGold's and
-/// DSS's combines, and the plain summation paths (which pass
-/// `weight = 1.0`) all reduce to this.
+/// The workhorse: `WeightedAverageAggregator`'s combine, FoolsGold's,
+/// and the plain summation paths (which pass `weight = 1.0`) all reduce
+/// to this.
 pub(crate) fn accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
     // An internal invariant, not a user-facing error: every caller has
     // already been through `decode_and_validate`, which is what turns a

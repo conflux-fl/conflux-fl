@@ -1,9 +1,8 @@
-//! Phase 13: proves reputation filtering is genuinely opt-in (off by
+//! proves reputation filtering is genuinely opt-in (off by
 //! default lets every aggregator behave exactly as its own paper defines
 //! it, with no framework-imposed interference) and that a non-finite
 //! submission is excluded rather than failing the whole round,
 //! regardless of the flag. See
-//! `docs/phases/phase-13-reputation-reference-fix.md`.
 
 use std::sync::Arc;
 
@@ -120,14 +119,14 @@ async fn krum_defends_against_an_outlier_with_reputation_at_its_new_default() {
 /// reputation explicitly on: since 4 of 5 clients are honest, the batch
 /// mean stays dominated by the honest direction, so the attacker's
 /// cosine similarity to it is strongly negative and gets rejected —
-/// same mechanism as before Phase 13, just requiring an explicit opt-in
+/// same mechanism as before, just requiring an explicit opt-in
 /// now.
 ///
 /// Deliberately *not* a large-magnitude attack like the outlier test
 /// above: a large-magnitude attacker dominates the raw batch mean
 /// enough to also drag honest clients' cosine scores down (finding 1,
 /// `docs/E2E_TESTING.md`) — reputation's own known weakness, which
-/// Phase 13 makes *avoidable* (by leaving it off) but doesn't fix for
+/// makes *avoidable* (by leaving it off) but doesn't fix for
 /// the case where a deployer explicitly turns it on anyway. This test
 /// picks an attack shape reputation's raw-mean-based filter can actually
 /// handle, to prove the *opt-in path itself* still works correctly, not

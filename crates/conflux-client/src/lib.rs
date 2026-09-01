@@ -1,15 +1,15 @@
 //! A Rust-native `ClientApp` — training with no Python hop.
 //!
-//! This is the spike [phase 23](../../../docs/phases/phase-23-client-app-sdk.md)
+//! This is the spike phase 23
 //! proposed: the same contract `python/conflux_client/app.py` offers,
 //! expressed in Rust, to find out whether the architecture holds when
 //! the client is not Python.
 //!
 //! It is deliberately **not** a replacement for the Python SDK.
-//! Researchers want PyTorch, every end-to-end harness is PyTorch, and
-//! the DSS research line runs on them. This is a second path, and the
-//! question it answers is narrower than "should the client be Rust":
-//! it answers *can* it be, and what that would cost.
+//! Researchers want PyTorch and every end-to-end harness is PyTorch.
+//! This is a second path, and the question it answers is narrower than
+//! "should the client be Rust": it answers *can* it be, and what that
+//! would cost.
 //!
 //! # Why this matters beyond taste
 //!

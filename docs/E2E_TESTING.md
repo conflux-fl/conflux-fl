@@ -24,7 +24,7 @@ needed to change**, beyond a handful of new `main.rs` env vars (below).
 Every round already moves a flat, framework-agnostic `Vec<f32>` (spec §7,
 ADR 0004): `conflux-proto::encode_weights`/`decode_weights` pack and
 unpack a plain little-endian `f32[]`, and nothing on the Rust side
-inspects what the numbers mean. Aggregation (`FedAvg`, and Phase 11's
+inspects what the numbers mean. Aggregation (`FedAvg`, and the
 `robust` family), privacy, reputation scoring, selection, and
 checkpointing were all already exercised by real integration tests
 against this exact wire format before this harness existed — this doc's
@@ -48,7 +48,7 @@ the SDK without going through that design work.
 
 ### `main.rs` changes this required
 
-Closing part of the gap `docs/STATUS.md` had flagged since Phase 11c's
+Closing part of the gap the STATUS record had flagged's
 manual verification: `main.rs` gained `overrides_from_env()`, reading
 `CONFLUX_AGGREGATOR`/`CONFLUX_SELECTOR`/`CONFLUX_PRIVACY_MECHANISM`/
 `CONFLUX_ROBUST_BYZANTINE_FRACTION`/`CONFLUX_QUORUM`/
@@ -64,7 +64,7 @@ model a deployment trains — Conflux has no way to know that on its own
 ## Real findings
 
 Running both harnesses live surfaced three genuine issues neither Phase
-11's unit tests nor Phase 12's application-level tests (which fed
+11's unit tests nor the application-level tests (which fed
 attacks directly to an `Aggregator`, bypassing everything upstream of
 it) could have caught. All three are documented here in full because
 this is exactly the value real E2E testing is supposed to provide.
@@ -98,7 +98,7 @@ difference, because the aggregator never saw the honest clients either
 way.
 
 Isolating the aggregator's own defense (`--no-reputation`, effectively
-disabling the filter) shows Krum working exactly as Phase 12's tests
+disabling the filter) shows Krum working exactly as the tests
 already proved in isolation — now confirmed against real, live,
 multi-round training:
 
@@ -122,7 +122,7 @@ after aggregation instead of before; give `CosineScorer` a robust
 reference point (e.g. the coordinate-wise median) instead of the raw
 mean; or make reputation filtering explicitly off-by-default for
 deployments that rely on `robust` aggregation instead of layering both.
-Tracked in `docs/STATUS.md`'s "Next" section.
+Tracked in the STATUS record's "Next" section.
 
 ### 2. Conflux's zero-init placeholder breaks a ReLU network's ability to learn at all
 
@@ -210,33 +210,33 @@ should be rejected outright, logged, and excluded before any reference
 computation touches them** — independent of whatever the reference
 computation itself ends up being. Not yet fixed in either the harness
 or Conflux; a natural addition to the reputation fix's scope (see
-`docs/STATUS.md`'s "Next" section and
-`docs/phases/phase-13-reputation-reference-fix.md`).
+the STATUS record's "Next" section and
+its phase brief).
 
 ## Architecture
 
 ```mermaid
 graph TD
-    subgraph "One process each, real Rust binaries — unchanged"
-        server["conflux-server<br/><small>aggregation, privacy, reputation, checkpointing</small>"]
-        node1["conflux-node #1"]
-        node2["conflux-node #2"]
-        nodeN["conflux-node #N"]
-    end
-    subgraph "Python test-harness processes (built, Phase E2E)"
-        client1["trainer_client.py<br/><small>shard 1 only</small>"]
-        client2["trainer_client.py<br/><small>shard 2 only</small>"]
-        clientN["trainer_client.py<br/><small>shard N only</small>"]
-        eval["eval_client.py<br/><small>held-out test set</small>"]
-    end
+ subgraph "One process each, real Rust binaries — unchanged"
+ server["conflux-server<br/><small>aggregation, privacy, reputation, checkpointing</small>"]
+ node1["conflux-node #1"]
+ node2["conflux-node #2"]
+ nodeN["conflux-node #N"]
+ end
+ subgraph "Python test-harness processes (built, Phase E2E)"
+ client1["trainer_client.py<br/><small>shard 1 only</small>"]
+ client2["trainer_client.py<br/><small>shard 2 only</small>"]
+ clientN["trainer_client.py<br/><small>shard N only</small>"]
+ eval["eval_client.py<br/><small>held-out test set</small>"]
+ end
 
-    node1 --> server
-    node2 --> server
-    nodeN --> server
-    client1 --> node1
-    client2 --> node2
-    clientN --> nodeN
-    eval -. FetchTask only, never trains .-> nodeN
+ node1 --> server
+ node2 --> server
+ nodeN --> server
+ client1 --> node1
+ client2 --> node2
+ clientN --> nodeN
+ eval -. FetchTask only, never trains .-> nodeN
 ```
 
 Each `trainer_client.py` process only ever sees its own data shard — the
@@ -249,18 +249,18 @@ actual property federated learning exists to provide.
 ## Wire format contract
 
 - `TaskResponse.model_weights` / `DeltaChunk.data`: little-endian packed
-  `f32`, exactly `conflux_proto::encode_weights`/`decode_weights`
-  (`crates/conflux-proto/src/lib.rs`) — both harnesses' own
-  `encode_weights`/`decode_weights` (`struct.pack`/`unpack` with
-  `"<{n}f"`) are the reference reimplementation, identical to
-  `stub_client.py`'s.
+ `f32`, exactly `conflux_proto::encode_weights`/`decode_weights`
+ (`crates/conflux-proto/src/lib.rs`) — both harnesses' own
+ `encode_weights`/`decode_weights` (`struct.pack`/`unpack` with
+ `"<{n}f"`) are the reference reimplementation, identical to
+ `stub_client.py`'s.
 - A model's real parameters must be **flattened to one 1-D vector**
-  before `encode_weights` and **unflattened back** after `decode_weights`
-  — Option A's logistic regression skips this (its weights already are a
-  flat vector); Option B's `model.py` has `flatten`/`unflatten` for a
-  real `nn.Module`.
+ before `encode_weights` and **unflattened back** after `decode_weights`
+ — Option A's logistic regression skips this (its weights already are a
+ flat vector); Option B's `model.py` has `flatten`/`unflatten` for a
+ real `nn.Module`.
 - `DeltaChunk.num_samples`: `FedAvg`'s weighting input (McMahan et al.
-  2017). Both harnesses report the shard's real size.
+ 2017). Both harnesses report the shard's real size.
 
 ## Choosing a model + dataset
 
@@ -269,31 +269,31 @@ quickly; move to Option B for a result that looks like what a real
 deployment would report.
 
 - **Option A** — `sklearn.datasets.make_classification`, plain NumPy
-  logistic regression. No download, no PyTorch, deterministic, fast
-  enough to run many rounds in seconds. Best for isolating Conflux's own
-  effects (privacy noise, robust aggregation, reputation filtering) from
-  real-model training noise.
+ logistic regression. No download, no PyTorch, deterministic, fast
+ enough to run many rounds in seconds. Best for isolating Conflux's own
+ effects (privacy noise, robust aggregation, reputation filtering) from
+ real-model training noise.
 - **Option B** — real MNIST (`torchvision`, ~10MB download, cached after
-  first run) + a small real PyTorch MLP (`784 → 64 → 10`, ~51k
-  parameters). Higher fidelity; needs the zero-init workaround above.
+ first run) + a small real PyTorch MLP (`784 → 64 → 10`, ~51k
+ parameters). Higher fidelity; needs the zero-init workaround above.
 
 ## Partitioning the dataset across clients
 
 Both harnesses' `partition_data.py` support two splits:
 
 - **IID**: shuffle once, divide into *N* equal shards. Use this first —
-  if orchestration is broken, an IID split still shows it, without
-  non-IID noise muddying the signal.
+ if orchestration is broken, an IID split still shows it, without
+ non-IID noise muddying the signal.
 - **Non-IID** (`--split dirichlet`, standard FL benchmark practice): draw
-  per-class proportions per client from `Dirichlet(alpha)` — small
-  `alpha` (e.g. 0.1) gives strongly skewed, realistic-looking client
-  data. This is also where `robust` family members and
-  `conflux-reputation`'s cosine scorer have something real to react to,
-  versus an IID split where every client's update looks similar by
-  construction. Both `run_demo.sh` scripts now expose this directly:
-  `./run_demo.sh fedavg 5 15 --dirichlet --dirichlet-alpha 0.5`. Run
-  live on both harnesses — see finding 3 below for what a too-aggressive
-  `alpha` surfaced.
+ per-class proportions per client from `Dirichlet(alpha)` — small
+ `alpha` (e.g. 0.1) gives strongly skewed, realistic-looking client
+ data. This is also where `robust` family members and
+ `conflux-reputation`'s cosine scorer have something real to react to,
+ versus an IID split where every client's update looks similar by
+ construction. Both `run_demo.sh` scripts now expose this directly:
+ `./run_demo.sh fedavg 5 15 --dirichlet --dirichlet-alpha 0.5`. Run
+ live on both harnesses — see finding 3 below for what a too-aggressive
+ `alpha` surfaced.
 
 A held-out test set (never partitioned, never seen by any trainer
 client) is written separately by both `partition_data.py` scripts, for
@@ -321,7 +321,7 @@ eval client, waits for registration, then starts the Python processes.
 **Quorum**: both scripts set `CONFLUX_QUORUM` explicitly to the client
 count and register every `conflux-node` before any Python trainer starts
 its round loop — `conflux-node` registers with `conflux-server` once at
-its own startup (Phase 6), well before any Python client attaches to it,
+its own startup, well before any Python client attaches to it,
 which is what makes this reliable in practice (confirmed across many
 real runs during verification) despite the round loop starting almost
 immediately after the server does.
@@ -340,28 +340,28 @@ prove exists in isolation.
 Measured directly, not assumed:
 
 - **Option A, no attack**: 0.735–0.7425 held-out accuracy vs. a 0.7375
-  centralized baseline — matches.
+ centralized baseline — matches.
 - **Option B, no attack**: 0.72 (round 2) → 0.905 (round 15) vs. a
-  0.889 centralized baseline — matches, and converges visibly over
-  rounds.
+ 0.889 centralized baseline — matches, and converges visibly over
+ rounds.
 - **Option A and B, `krum` + persistent attacker, reputation isolated
-  out**: 0.72–0.7375 (Option A) and 0.884 (Option B) — both essentially
-  match their undefended baselines despite an active attacker every
-  round.
+ out**: 0.72–0.7375 (Option A) and 0.884 (Option B) — both essentially
+ match their undefended baselines despite an active attacker every
+ round.
 - **Option A and B, same attacker, reputation at its default**: both
-  collapse to a random-ish accuracy — the real finding above, not a
-  harness bug.
+ collapse to a random-ish accuracy — the real finding above, not a
+ harness bug.
 - **Dirichlet non-IID, moderate skew (`alpha = 0.5`), no attack**:
-  Option A 0.7275 vs. 0.7375 centralized (shard sizes 41–657 out of
-  1600, class balance 0.00–1.00 per shard); Option B 0.891 vs. 0.889
-  centralized (shard sizes 159–897, real MNIST). Both converge close to
-  their centralized baselines despite real per-client heterogeneity —
-  FedAvg tolerating moderate non-IID skew as expected.
+ Option A 0.7275 vs. 0.7375 centralized (shard sizes 41–657 out of
+ 1600, class balance 0.00–1.00 per shard); Option B 0.891 vs. 0.889
+ centralized (shard sizes 159–897, real MNIST). Both converge close to
+ their centralized baselines despite real per-client heterogeneity —
+ FedAvg tolerating moderate non-IID skew as expected.
 - **Dirichlet non-IID, aggressive skew (`alpha = 0.1`), no attack**:
-  Option A produced a **zero-sample shard** and collapsed to 0.4975 —
-  finding 3 above, not a harness bug either. `alpha = 0.5` is the
-  practical floor for these dataset sizes/client counts until finding
-  3's fix lands.
+ Option A produced a **zero-sample shard** and collapsed to 0.4975 —
+ finding 3 above, not a harness bug either. `alpha = 0.5` is the
+ practical floor for these dataset sizes/client counts until finding
+ 3's fix lands.
 
 ## Where this lives
 

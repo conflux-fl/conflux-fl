@@ -1,5 +1,5 @@
 //! Cited implementations of published FL attacks — see
-//! `docs/phases/phase-12-attack-simulation.md` for the full source list
+//! its phase brief for the full source list
 //! and scope notes. Each attack is "omniscient": `craft` sees the
 //! honest batch before producing malicious updates, the strongest and
 //! most conservative threat model this literature studies.
@@ -240,9 +240,8 @@ impl Attack for ScalingAttack {
 /// model converges.
 ///
 /// This attack exists specifically to stress-test **temporal** defenses
-/// (`conflux-core::FoolsGoldAggregator`, and the Deviation Stability
-/// Scoring hypothesis in
-/// `docs/research/temporal-consistency-aggregation.md`) — a stable,
+/// (`conflux-core::FoolsGoldAggregator`, `CenteredClippingAggregator`,
+/// and any out-of-tree method in that family) — a stable,
 /// self-similar, round-over-round signature from a colluding cluster is
 /// exactly the pattern those defenses are built to catch, and exactly
 /// what every single-round-only attack above can't model, since none of
@@ -284,12 +283,12 @@ impl Attack for PersistentSybilAttack {
 /// [`PersistentSybilAttack`]'s identical submissions.
 ///
 /// This exists to answer a question the identical-Sybil model
-/// structurally cannot. `docs/research/temporal-consistency-aggregation.md`
-/// §5.6's mechanism ablation found DSS's "unstable AND colluding" gate to
-/// be numerically identical to stability-alone — but that was measured
-/// against Sybils submitting byte-identical updates, where *every*
-/// client's collusion score saturates and the signal carries no
-/// information for anyone. That result is about the *model*, not about
+/// structurally cannot. A defense whose gate combines "erratic" with
+/// "mutually similar" cannot be told apart from one testing eagerness
+/// alone when it is measured against Sybils submitting byte-identical
+/// updates: *every* client's similarity score saturates, so the signal
+/// carries no information for anyone. Such a result is about the
+/// *model*, not about
 /// the mechanism: it could not distinguish "the collusion signal adds
 /// nothing" from "this attack makes the collusion signal unmeasurable."
 ///
@@ -390,7 +389,7 @@ impl Attack for CorrelatedSybilAttack {
 /// strategy — the standard, conservative "omniscient but non-reactive"
 /// threat model most robustness papers evaluate against first. This one
 /// specifically models a *reactive* adversary, closing part of the gap
-/// `docs/research/temporal-consistency-aggregation.md`'s Section 2.2
+/// the cross-round collusion literature
 /// flagged as a stretch goal: whether a temporal defense still holds
 /// against an attacker that's also adapting round to round, not just a
 /// defense reacting to a static attack.

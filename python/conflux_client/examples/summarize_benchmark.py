@@ -2,7 +2,7 @@
 """Converts benchmark.py's JSONL output into a flat CSV (every round)
 and a summary CSV (final-round accuracy per aggregator x split) — no
 dependencies beyond the standard library, matching
-docs/research/scripts/summarize.py's own convention for the Rust-side
+the convention out-of-tree experiment scripts use for the Rust-side
 experiments.
 
 Usage:

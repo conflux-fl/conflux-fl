@@ -1,6 +1,6 @@
 //! `AppState` answering `conflux-net`'s `RoundDispatcher` seam for real —
-//! the piece Phase 3 explicitly left for whichever crate does the real
-//! integration (spec: `docs/phases/phase-3-net.md`).
+//! the piece explicitly left for whichever crate does the real
+//! integration (a deliberate seam).
 
 use std::sync::atomic::Ordering;
 
@@ -124,7 +124,7 @@ impl RoundDispatcher for AppState {
         auth_token: &str,
         peer_cert_fingerprint: Option<&str>,
     ) -> Result<RegisterResponse, DispatchError> {
-        // Phase 16. Two independent gates, in this order:
+        //. Two independent gates, in this order:
         //
         //   1. Is this token genuine, and is it *yours*? (`auth = jwt`)
         //   2. Is this client on the allow-list? (`require_node_auth`)
@@ -150,7 +150,7 @@ impl RoundDispatcher for AppState {
             // actually carries: an mTLS peer cert fingerprint if present,
             // else the request's shared token. Checked *before* touching
             // `conflux-registry` at all, so a rejected node never shows up
-            // as a lifecycle registration attempt (spec: Phase 8c brief).
+            // as a lifecycle registration attempt (spec: brief).
             let presented = match peer_cert_fingerprint {
                 Some(fingerprint) => NodeIdentity::CertFingerprint(fingerprint.to_string()),
                 None => NodeIdentity::SharedToken(auth_token.to_string()),

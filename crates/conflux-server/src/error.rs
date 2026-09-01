@@ -9,7 +9,7 @@ pub enum ServerError {
     /// and the accountant reports the epsilon budget is spent.
     #[error("privacy budget exhausted for this experiment")]
     BudgetExhausted,
-    /// Phase 14: the `PerClient`-scope counterpart — `budget_exhausted_
+    /// the `PerClient`-scope counterpart — `budget_exhausted_
     /// action = halt` and a specific client's own cumulative epsilon
     /// (not the experiment-wide total) has reached `target_epsilon`.
     #[error("privacy budget exhausted for client {client_id}")]

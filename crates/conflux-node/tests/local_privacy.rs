@@ -1,4 +1,4 @@
-//! Client-side privacy transform tests (Phase 17) — local DP applied to
+//! Client-side privacy transform tests — local DP applied to
 //! a client's own update before it leaves `conflux-node`.
 //!
 //! Every test here submits through a real local gRPC hop into a real

@@ -16,30 +16,30 @@ Option B for a higher-fidelity PyTorch/MNIST version).
 ## Prerequisites
 
 - Rust toolchain (the repo already builds — if you haven't yet, `cargo
-  build --workspace` from the repo root once, to confirm your setup
-  works, before running this demo).
+ build --workspace` from the repo root once, to confirm your setup
+ works, before running this demo).
 - Python 3.10+ and the shared venv this repo's other Python tooling
-  uses:
+ uses:
 
-  ```bash
-  cd python/conflux_client
-  python3 -m venv .venv
-  .venv/bin/pip install -r requirements.txt              # grpc (base)
-  .venv/bin/pip install -r examples/e2e_numpy_logreg/requirements.txt  # numpy, scikit-learn
-  ./generate_proto.sh                                     # regenerates fl_transport_pb2*.py
-  ```
+ ```bash
+ cd python/conflux_client
+ python3 -m venv .venv
+ .venv/bin/pip install -r requirements.txt # grpc (base)
+ .venv/bin/pip install -r examples/e2e_numpy_logreg/requirements.txt # numpy, scikit-learn
+ ./generate_proto.sh # regenerates fl_transport_pb2*.py
+ ```
 
-  (`generate_proto.sh` isn't committed output — you need to run it once;
-  see the parent `README.md` if you haven't before.)
+ (`generate_proto.sh` isn't committed output — you need to run it once;
+ see the parent `README.md` if you haven't before.)
 
 ## Run it
 
 ```bash
-source .venv/bin/activate   # from python/conflux_client/
+source .venv/bin/activate # from python/conflux_client/
 cd examples/e2e_numpy_logreg
-./run_demo.sh                       # fedavg, 5 clients, 15 rounds — the defaults
-./run_demo.sh krum 5 15             # a robust aggregator instead
-./run_demo.sh krum 5 15 --poison    # + one persistent Byzantine client
+./run_demo.sh # fedavg, 5 clients, 15 rounds — the defaults
+./run_demo.sh krum 5 15 # a robust aggregator instead
+./run_demo.sh krum 5 15 --poison # + one persistent Byzantine client
 ```
 
 The script builds the Rust binaries, generates a synthetic dataset,
@@ -61,7 +61,7 @@ of) the centralized baseline printed in step 3. Real run, no attack:
 held_out_accuracy=0.7375
 
 === 6. starting 5 trainer clients + 1 eval client ===
-round=8  held_out_accuracy=0.7425
+round=8 held_out_accuracy=0.7425
 round=14 held_out_accuracy=0.7350
 round=16 held_out_accuracy=0.7350
 ```
@@ -106,7 +106,7 @@ filtered before aggregation runs):
 ```
 ./run_demo.sh krum 5 15 --poison --no-reputation
 # held_out_accuracy stays 0.72-0.7375 — the attacker is excluded, matching
-# the centralized baseline, exactly what Phase 12's unit/application
+# the centralized baseline, exactly what the unit/application
 # tests already proved in isolation — now confirmed live.
 ```
 
@@ -125,7 +125,7 @@ against a first-round large-magnitude attacker in the current pipeline —
 reputation filtering needs to either run after aggregation, use a
 robust reference point instead of a raw mean, or be tuned/disabled for
 deployments expecting this specific attack shape. This is tracked as a
-real, open finding — see `docs/STATUS.md`'s "Next" section and
+real, open finding — see the STATUS record's "Next" section and
 `docs/E2E_TESTING.md`'s "A real finding" section, not fixed by this demo
 itself.
 
@@ -136,37 +136,37 @@ itself.
 ```
 
 - `AGGREGATOR`: `fedavg` (default), `krum`, `multi_krum`, `trimmed_mean`,
-  `median`.
+ `median`.
 - `--poison`: the last client persistently submits offset weights
-  instead of training, every round (not `stub_client.py`'s single shot —
-  a real multi-round Byzantine client).
+ instead of training, every round (not `stub_client.py`'s single shot —
+ a real multi-round Byzantine client).
 - `--no-reputation`: see above.
 
 ## Files
 
 - `partition_data.py` — generates a synthetic dataset
-  (`sklearn.datasets.make_classification`) and splits it (IID by
-  default; `--split dirichlet` for realistic non-IID).
+ (`sklearn.datasets.make_classification`) and splits it (IID by
+ default; `--split dirichlet` for realistic non-IID).
 - `model.py` — plain NumPy logistic regression; weights are already a
-  flat vector, so no flatten/unflatten step is needed (unlike Option B).
+ flat vector, so no flatten/unflatten step is needed (unlike Option B).
 - `trainer_client.py` — a real client: loads its own shard only, loops
-  fetch/train/submit across rounds.
+ fetch/train/submit across rounds.
 - `eval_client.py` — fetch-only, scores the current checkpoint against a
-  held-out set nothing ever trains on.
+ held-out set nothing ever trains on.
 - `centralized_baseline.py` — the correctness bar.
 - `run_demo.sh` — orchestrates all of the above.
 
 ## Troubleshooting
 
 - **"server did not become healthy"**: something's already listening on
-  `127.0.0.1:50051`/`8080` — check `pgrep -af conflux-server` and kill
-  any leftover process from a previous run that didn't clean up (e.g.
-  the script was killed with `SIGKILL`, which skips the `trap cleanup`).
+ `127.0.0.1:50051`/`8080` — check `pgrep -af conflux-server` and kill
+ any leftover process from a previous run that didn't clean up (e.g.
+ the script was killed with `SIGKILL`, which skips the `trap cleanup`).
 - **Accuracy stuck near 0.5 with no attack**: the learning rate/step
-  count might not suit a change you made to `--n-features`; the defaults
-  (10 features, `--lr 0.5`, 5 steps/round) are tuned for the demo's own
-  synthetic dataset.
+ count might not suit a change you made to `--n-features`; the defaults
+ (10 features, `--lr 0.5`, 5 steps/round) are tuned for the demo's own
+ synthetic dataset.
 - **A trainer logs "submission rejected (FAILED_PRECONDITION)"**: normal
-  — a submission raced an already-closed round (Phase 10a's fix
-  rejecting it explicitly rather than silently losing it); the client
-  retries with the next round automatically.
+ — a submission raced an already-closed round (the fix
+ rejecting it explicitly rather than silently losing it); the client
+ retries with the next round automatically.

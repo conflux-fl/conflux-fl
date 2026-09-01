@@ -2,7 +2,7 @@
 //! impl, the round pipeline, and the HTTP admin surface. `main.rs` is a
 //! thin wrapper around this.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §8, §10 (Phase 5).
+//! See the v1 specification §8, §10.
 //!
 //! # Example
 //!

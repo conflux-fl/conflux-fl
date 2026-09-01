@@ -1,7 +1,7 @@
-//! Per-field backend selection (Phase 8a) — the hybrid design from
-//! `docs/FLOWER_COMPARISON.md`'s follow-up discussion: registry/store/
+//! Per-field backend selection — the hybrid design from
+//! the Flower-platform design review's follow-up: registry/store/
 //! accounting choices stay fully independent (matching how those traits
-//! have been decoupled since Phase 1), but `mode = production` can never
+//! have been decoupled), but `mode = production` can never
 //! silently start on a backend that still resolves to its in-memory/
 //! disabled default. `validate_production_backends` is the same
 //! fail-fast shape `allow_stub_client` already uses (spec §7) — a

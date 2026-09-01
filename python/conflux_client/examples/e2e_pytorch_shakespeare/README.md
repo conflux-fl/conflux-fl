@@ -15,15 +15,15 @@ does not tell you it holds across a change of *task*.
 This one differs on two axes that matter:
 
 1. **A sequence task with a recurrent model.** Next-character prediction
-   with a GRU, so gradients flow through time and updates behave
-   differently — recurrent nets exploding a gradient looks, to an
-   aggregator, a lot like a client attacking it.
+ with a GRU, so gradients flow through time and updates behave
+ differently — recurrent nets exploding a gradient looks, to an
+ aggregator, a lot like a client attacking it.
 2. **Natural non-IID-ness.** Each client is a different Shakespeare
-   character. Their vocabulary, cadence, and subject matter genuinely
-   differ, so the federation is non-IID *because of what the data is* —
-   not because a Dirichlet concentration parameter was set to 0.1. Any
-   result that depends on a synthetic skew knob is partly a result about
-   the knob; this partition has no knob.
+ character. Their vocabulary, cadence, and subject matter genuinely
+ differ, so the federation is non-IID *because of what the data is* —
+ not because a Dirichlet concentration parameter was set to 0.1. Any
+ result that depends on a synthetic skew knob is partly a result about
+ the knob; this partition has no knob.
 
 This is the partition LEAF's own Shakespeare benchmark uses, for the
 same reason.
@@ -34,8 +34,8 @@ same reason.
 # from python/conflux_client/, with the venv active
 cd examples/e2e_pytorch_shakespeare
 
-./run_demo.sh                                   # fedavg, 5 clients, 15 rounds, IID control
-./run_demo.sh fedavg 5 15 --dirichlet           # the by-role (non-IID) partition
+./run_demo.sh # fedavg, 5 clients, 15 rounds, IID control
+./run_demo.sh fedavg 5 15 --dirichlet # the by-role (non-IID) partition
 ./run_demo.sh krum 5 15 --poison --no-reputation # with a Byzantine client
 ```
 
@@ -89,12 +89,12 @@ rather than an obvious one at startup.
 ## Known limits
 
 - **One role per client, largest roles first.** The corpus's long tail
-  of one-line roles can't train anything, so `--n-clients` is capped by
-  how many roles have enough text. This makes the federation less
-  heterogeneous than LEAF's full 1,129-client version.
+ of one-line roles can't train anything, so `--n-clients` is capped by
+ how many roles have enough text. This makes the federation less
+ heterogeneous than LEAF's full 1,129-client version.
 - **Small by design.** `SEQ_LEN=40`, 64 hidden units, 800 samples per
-  client — sized so a demo round finishes in seconds on a CPU. LEAF's
-  configuration (80 characters of context, a 2-layer 256-unit LSTM) is
-  the reference point for a real experiment, not this.
+ client — sized so a demo round finishes in seconds on a CPU. LEAF's
+ configuration (80 characters of context, a 2-layer 256-unit LSTM) is
+ the reference point for a real experiment, not this.
 - **Ports are fixed** (50051, 8080, 47100+). Two demos cannot run
-  concurrently — the same constraint every harness here has.
+ concurrently — the same constraint every harness here has.

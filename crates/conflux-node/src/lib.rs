@@ -2,7 +2,7 @@
 //! `RoundDispatcher` implementation. `main.rs` is a thin wrapper around
 //! this.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §7, §10 (Phase 6).
+//! See the v1 specification §7, §10.
 //!
 //! # Example
 //!

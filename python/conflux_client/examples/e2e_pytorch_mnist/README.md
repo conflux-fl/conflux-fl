@@ -18,7 +18,7 @@ the CPU build, no GPU needed):
 
 ```bash
 cd python/conflux_client
-python3 -m venv .venv                 # if you haven't already
+python3 -m venv .venv # if you haven't already
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install -r examples/e2e_pytorch_mnist/requirements.txt
 ./generate_proto.sh
@@ -32,7 +32,7 @@ The first run also downloads MNIST itself (~10MB) to `/tmp/conflux_mnist`
 ```bash
 source .venv/bin/activate
 cd examples/e2e_pytorch_mnist
-./run_demo.sh                       # fedavg, 5 clients, 15 rounds
+./run_demo.sh # fedavg, 5 clients, 15 rounds
 ./run_demo.sh krum 5 15 --poison --no-reputation
 ```
 
@@ -47,7 +47,7 @@ logistic regression — confirmed directly:
 
 ```
 ./run_demo.sh krum 5 15 --poison --no-reputation
-# round=15 held_out_accuracy=0.8840   (centralized baseline: 0.8890)
+# round=15 held_out_accuracy=0.8840 (centralized baseline: 0.8890)
 ```
 
 Essentially matching the undefended baseline, with a persistent
@@ -63,9 +63,9 @@ a couple points:
 held_out_accuracy=0.8890
 
 === 6. starting 5 trainer clients + 1 eval client ===
-round=2  held_out_accuracy=0.7210
-round=6  held_out_accuracy=0.8810
-round=9  held_out_accuracy=0.8920
+round=2 held_out_accuracy=0.7210
+round=6 held_out_accuracy=0.8810
+round=9 held_out_accuracy=0.8920
 round=15 held_out_accuracy=0.9050
 ```
 
@@ -111,7 +111,7 @@ MNIST), `trainer_client.py`, `eval_client.py`, `centralized_baseline.py`,
 
 Same as Option A's, plus:
 - **First run is slow**: that's the MNIST download, not training — cached
-  after the first run.
+ after the first run.
 - **Accuracy stuck near 0.10 with no attack**: if you're running an
-  older checkout of this example, you've hit the zero-init bug described
-  above — pull the latest `model.py`/`trainer_client.py`/`eval_client.py`.
+ older checkout of this example, you've hit the zero-init bug described
+ above — pull the latest `model.py`/`trainer_client.py`/`eval_client.py`.

@@ -1,5 +1,5 @@
 //! Push-mode tests for `NodeBridge` — the client-side half of a capability
-//! `conflux-net`'s server side has had since Phase 3.
+//! `conflux-net`'s server side has had.
 //!
 //! Same shape as `integration.rs`'s pull-mode tests: a fake
 //! `RoundDispatcher` stands in for the real `conflux-server`, and a real

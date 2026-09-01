@@ -9,14 +9,13 @@
 //! **Verification only.** There is no signing key here and no way to
 //! issue a token, deliberately. Conflux is not an identity provider —
 //! tokens come from whatever IdP a deployment already runs, exactly as
-//! certificates come from whatever CA it already runs (Phase 7e never
-//! made this crate a CA either). That also means only the *public* half
+//! certificates come from whatever CA it already runs. That also means only the *public* half
 //! of a keypair ever reaches a Conflux process.
 //!
 //! **Asymmetric only** — RS256 or ES256, never HS256. An HMAC-signed JWT
 //! requires the verifier to hold the same secret the issuer signs with,
 //! which is the identical trust model `NodeIdentity::SharedToken`
-//! already provides (Phase 8b/8c) with none of the added value: any
+//! already provides with none of the added value: any
 //! party that can verify could also mint tokens for any client.
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};

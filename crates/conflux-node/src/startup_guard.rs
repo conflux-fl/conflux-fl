@@ -1,12 +1,11 @@
-//! Phase 9b — production stub-client guard. Closes gap 5 from
-//! `docs/FLOWER_COMPARISON.md` / the CLAUDE.md constraint, implemented
+//! The production stub-client guard. Closes gap 5 from
+//! the Flower-platform design review / the CLAUDE.md constraint, implemented
 //! where it architecturally belongs: `conflux-node` is the only process
 //! with a local loopback listener (ADR 0004) a Python `ClientApp`
 //! connects to — `conflux-server` never talks to Python at all, despite
 //! the spec's original wording naming it.
 //!
-//! `conflux-node` has no `conflux-config` dependency (`docs/phases/
-//! phase-6-node.md`'s deliberate scope decision, preserved here) — these
+//! `conflux-node` has no `conflux-config` dependency (a deliberate scope decision, preserved here) — these
 //! two enums are small, locally-defined stand-ins for the one bit of
 //! `conflux-config::Mode` and one new concept this guard needs, not a
 //! reason to pull the whole crate in.
@@ -26,7 +25,7 @@ pub enum RuntimeMode {
 /// has no protocol-level way to verify this on its own (no handshake
 /// field carries it, and ADR 0005 defers the real Python SDK entirely) —
 /// it's an explicit operator assertion, the same way `require_node_auth`
-/// (Phase 8b) made a security posture an explicit config value rather
+/// made a security posture an explicit config value rather
 /// than an implicit assumption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientAppKind {

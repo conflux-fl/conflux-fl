@@ -201,7 +201,7 @@ pub struct Overrides {
     /// 50,890-parameter MLP and one Byzantine client, `centered_clipping`
     /// at `τ = 1.0` scored 0.078 held-out accuracy where undefended
     /// `fedavg` scored 0.163 and `krum` scored 0.844
-    /// (`docs/research/temporal-consistency-aggregation.md` §5.13).
+    /// (measured on a real 50,890-parameter model).
     ///
     /// The reason is structural rather than a bad constant. `τ` bounds
     /// an L2 norm in *parameter space*, so it simultaneously bounds how

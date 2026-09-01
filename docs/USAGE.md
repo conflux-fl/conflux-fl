@@ -3,17 +3,17 @@
 A practical guide to building, running, and testing Conflux. For *why*
 things are built the way they are, see [ARCHITECTURE.md](ARCHITECTURE.md).
 For the authoritative design, see
-[`spec/conflux-spec-v1.md`](spec/conflux-spec-v1.md).
+`spec/conflux-spec-v1.md`.
 
 ## Prerequisites
 
 - **Rust** (edition 2024 — a recent stable toolchain; this workspace was
-  built and tested against rustc 1.96).
+ built and tested against rustc 1.96).
 - **Docker**, only if you want the durable backends (`RedisRegistry`,
-  `PostgresStore`, `S3Store`) or want to reproduce their test suites — the
-  default binaries run entirely in-memory with no external services.
+ `PostgresStore`, `S3Store`) or want to reproduce their test suites — the
+ default binaries run entirely in-memory with no external services.
 - **Python 3** + a venv, only if you want to run the stub `ClientApp`
-  (`python/conflux_client/stub_client.py`).
+ (`python/conflux_client/stub_client.py`).
 
 ## Building and testing
 
@@ -50,31 +50,31 @@ listen on the standard ports rather than the offset ones used here.
 ## Quick start: running the full pipeline locally
 
 This walks through the same three-process, cross-language setup verified
-in Phase 6 — a real `conflux-server`, a real `conflux-node`, and the real
+in a real `conflux-server`, a real `conflux-node`, and the real
 Python stub client, all talking over actual gRPC.
 
 ```mermaid
 sequenceDiagram
-    participant You
-    participant Server as conflux-server
-    participant Node as conflux-node
-    participant Py as stub_client.py
+ participant You
+ participant Server as conflux-server
+ participant Node as conflux-node
+ participant Py as stub_client.py
 
-    You->>Server: cargo run -p conflux-server
-    Note over Server: binds :50051 (gRPC) and :8080 (HTTP)<br/>starts the round loop immediately
-    You->>Node: cargo run -p conflux-node
-    Node->>Server: Register (network hop)
-    Node->>Node: bind :47100 (local gRPC)
-    You->>Py: python stub_client.py
-    Py->>Node: Register (local hop)
-    Py->>Node: FetchTask
-    Node->>Server: FetchTask (forwarded)
-    Server-->>Node: task (round, weights)
-    Node-->>Py: task (forwarded)
-    Py->>Py: "train" (+1.0 offset, no PyTorch)
-    Py->>Node: SubmitDelta
-    Node->>Server: SubmitDelta (forwarded)
-    Server->>Server: aggregate, checkpoint, advance round
+ You->>Server: cargo run -p conflux-server
+ Note over Server: binds :50051 (gRPC) and :8080 (HTTP)<br/>starts the round loop immediately
+ You->>Node: cargo run -p conflux-node
+ Node->>Server: Register (network hop)
+ Node->>Node: bind :47100 (local gRPC)
+ You->>Py: python stub_client.py
+ Py->>Node: Register (local hop)
+ Py->>Node: FetchTask
+ Node->>Server: FetchTask (forwarded)
+ Server-->>Node: task (round, weights)
+ Node-->>Py: task (forwarded)
+ Py->>Py: "train" (+1.0 offset, no PyTorch)
+ Py->>Node: SubmitDelta
+ Node->>Server: SubmitDelta (forwarded)
+ Server->>Server: aggregate, checkpoint, advance round
 ```
 
 ### 1. Start the server
@@ -115,7 +115,7 @@ server on `127.0.0.1:47100` for a Python `ClientApp` to connect to.
 cd python/conflux_client
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-./generate_proto.sh          # regenerates fl_transport_pb2*.py — not committed
+./generate_proto.sh # regenerates fl_transport_pb2*.py — not committed
 .venv/bin/python stub_client.py --address 127.0.0.1:47100
 ```
 
@@ -128,7 +128,7 @@ report the next round number.
 **Testing a robust aggregator against a real adversarial client**:
 `stub_client.py --poison --poison-magnitude 1000.0` submits a
 large-magnitude offset instead of honest training, standing in for a
-Byzantine client (Phase 11c) — see `python/conflux_client/README.md` for
+Byzantine client — see `python/conflux_client/README.md` for
 a quick worked example.
 
 **Real end-to-end training, not just the pipeline**:
@@ -158,35 +158,35 @@ still open) — both are controlled by environment variables.
 | `CONFLUX_SERVER_ADDR` | `conflux-node` | a `http://host:port` URL | `http://127.0.0.1:50051` |
 | `CONFLUX_CLIENT_ID` | `conflux-node` | any string | `node-1` |
 | `CONFLUX_LOCAL_ADDR` | `conflux-node` | a `host:port` | `127.0.0.1:47100` |
-| `CONFLUX_ALLOW_STUB_CLIENT` | `conflux-node` | `true`, `false` | mode's own default (research `true`, production `false`) — see `docs/phases/phase-9b-stub-client-guard.md` |
+| `CONFLUX_ALLOW_STUB_CLIENT` | `conflux-node` | `true`, `false` | mode's own default (research `true`, production `false`) — see its phase brief |
 | `CONFLUX_CLIENT_APP_KIND` | `conflux-node` | `stub`, `real` | `stub` (matches what's actually shipped, ADR 0005) |
 | `CONFLUX_CONNECTION_MODE` | `conflux-node` | `push`, `pull` | `pull`. Picks which upstream transport the node uses — the server serves both RPCs either way, so this is the node's choice rather than something it has to match. What *does* have to match is the local hop: a Python `ClientApp` that calls `fetch_task` against a push-mode node (or `subscribe_tasks` against a pull-mode one) gets a typed error naming this variable, not a hang |
-| `CONFLUX_CLIENT_SIDE_PRIVACY_TRANSFORM` | `conflux-node` | `true`, `false` | `false`. Applies spec §8's `clip + noise` on the node, *before* the update leaves the machine (Phase 17) — the server-side transform still runs independently, so enabling both clips twice |
+| `CONFLUX_CLIENT_SIDE_PRIVACY_TRANSFORM` | `conflux-node` | `true`, `false` | `false`. Applies spec §8's `clip + noise` on the node, *before* the update leaves the machine — the server-side transform still runs independently, so enabling both clips twice |
 | `CONFLUX_SEED_VALUE` | `conflux-node` | an integer | (unset — nondeterministic). Seeds the client-side DP noise so a run reproduces. A malformed value panics rather than being ignored |
 | `RUST_LOG` | both | standard `tracing`/`env_logger` filter syntax, e.g. `info`, `conflux_server=debug` | (unset — default level) |
 
 `conflux-node` refuses to start with `CONFLUX_MODE=production` and the
 default stub `CONFLUX_CLIENT_APP_KIND` unless `CONFLUX_ALLOW_STUB_CLIENT=true`
-is set explicitly (phase-9b's fail-fast guard).
+is set explicitly (a fail-fast guard).
 
-### Durable backends and TLS (`conflux-server`, Phase 8a/9a)
+### Durable backends and TLS (`conflux-server`/9a)
 
 Every variable below is optional — omitted means the in-memory/plaintext
 default, which `mode = production` refuses to start with unless every
 one of registry/store/accounting-persistence/TLS is explicitly set (see
-`docs/phases/phase-8a-backend-selection.md` and `phase-9a-auth-enforcement.md`).
+its phase brief).
 
 | Variable | Purpose | Values |
 |---|---|---|
 | `CONFLUX_REGISTRY_BACKEND` | Client registry backend | `redis` (else in-memory) |
-| `CONFLUX_REDIS_URL` | Redis connection (registry + node allow-list, Phase 8c) | `redis://host:port` |
+| `CONFLUX_REDIS_URL` | Redis connection (registry + node allow-list) | `redis://host:port` |
 | `CONFLUX_STORE_BACKEND` | Checkpoint store backend | `postgres`, `s3` (else in-memory) |
 | `CONFLUX_POSTGRES_URL` | Postgres connection (store and/or accounting persistence) | `postgres://user:pass@host:port/db` |
 | `CONFLUX_S3_ENDPOINT`, `CONFLUX_S3_BUCKET`, `CONFLUX_S3_ACCESS_KEY`, `CONFLUX_S3_SECRET_KEY` | S3/MinIO checkpoint store | required together when `CONFLUX_STORE_BACKEND=s3` |
 | `CONFLUX_ACCOUNTING_PERSISTENCE` | Persist the privacy accountant's round history | `true` (reuses `CONFLUX_POSTGRES_URL`) |
 | `CONFLUX_TLS_CERT_PATH`, `CONFLUX_TLS_KEY_PATH`, `CONFLUX_TLS_CLIENT_CA_PATH` | mTLS material for the gRPC server, required in production when the resolved `auth` value is `mtls` (`cross_silo`'s topology default) | PEM file paths |
 
-`require_node_auth` and the node allow-list (Phase 8b/8c) are regular
+`require_node_auth` and the node allow-list are regular
 `conflux-config` parameters, not separate env vars here — see the next
 section.
 
@@ -209,10 +209,10 @@ half is profile files, not experiment files.
 | `CONFLUX_SERVER_LIPSCHITZ` | `server_lipschitz` — q-FedAvg's `L`. A placeholder like `clip_radius`: the paper estimates it by grid search at `q = 0`, which the server cannot do because it never sees a loss surface |
 | `CONFLUX_SERVER_MOMENTUM` | `server_momentum` — FedAvgM's `β`. Builtin `0.9`, a real default rather than a placeholder (it sits inside the paper's own `{0, 0.7, 0.9, 0.97, 0.99, 0.997}` sweep). Worth tuning on genuinely non-IID data, which is where the paper finds momentum matters most. `0.0` recovers plain FedAvg. Read only by `fedavgm` |
 | `CONFLUX_SELECTOR` | `selector` |
-| `CONFLUX_PRIVACY_MECHANISM` | `privacy_mechanism` (Phase 11b) |
+| `CONFLUX_PRIVACY_MECHANISM` | `privacy_mechanism` |
 | `CONFLUX_ROBUST_BYZANTINE_FRACTION` | `robust_byzantine_fraction` — only read by `robust`-family aggregators |
-| `CONFLUX_CLIP_RADIUS` | `clip_radius` — Centered Clipping's `τ`. **Must be tuned to your model.** The builtin `1.0` is a placeholder: on a real 50,890-parameter MLP it scored *below undefended `fedavg`* (0.078 vs 0.163, [§5.13](research/temporal-consistency-aggregation.md)). The server warns at startup if you select `centered_clipping` without setting this |
-| `CONFLUX_REPUTATION_FILTER_ENABLED` | `reputation_filter_enabled` — the master switch for reputation gating (Phase 13), builtin `false` and owned by neither config axis. `CONFLUX_MIN_REPUTATION_SCORE` sets the threshold but does **not** turn the filter on |
+| `CONFLUX_CLIP_RADIUS` | `clip_radius` — Centered Clipping's `τ`. **Must be tuned to your model.** The builtin `1.0` is a placeholder: on a real 50,890-parameter MLP it scored *below undefended `fedavg`* (0.078 vs 0.163, measured). The server warns at startup if you select `centered_clipping` without setting this |
+| `CONFLUX_REPUTATION_FILTER_ENABLED` | `reputation_filter_enabled` — the master switch for reputation gating, builtin `false` and owned by neither config axis. `CONFLUX_MIN_REPUTATION_SCORE` sets the threshold but does **not** turn the filter on |
 | `CONFLUX_MIN_REPUTATION_SCORE` | `min_reputation_score` — see `docs/E2E_TESTING.md`'s "Real findings" for why you might want this low when testing a `robust` aggregator specifically |
 | `CONFLUX_QUORUM` | `quorum` |
 | `CONFLUX_MAX_UPDATE_BYTES` | `max_update_bytes` — the largest reassembled update the transport accepts from one client, in bytes (builtin 256 MiB). A trust-boundary bound rather than a tuning knob: gRPC's own limit is per *message*, so without this an unbounded chunk stream is an unbounded server allocation (Tier 5, H1). Over it, the client gets gRPC `resource_exhausted` and the server logs the client id and the limit |
@@ -221,7 +221,7 @@ half is profile files, not experiment files.
 | `CONFLUX_NOISE_MULTIPLIER` | `noise_multiplier` |
 | `CONFLUX_INITIAL_WEIGHTS_DIM` | not an `Overrides` field — the dimension of the server's placeholder initial checkpoint (`vec![0.0f32; N]`), which has to match whatever real model a deployment trains (default `4`) |
 | `CONFLUX_ADMIN_TOKEN` | not an `Overrides` field — bearer token required on every HTTP admin route except `/health`. **The server refuses to start if `CONFLUX_HTTP_ADDR` binds beyond loopback without one**, since `/admin/allowlist` decides who may participate |
-| `CONFLUX_JWT_PUBLIC_KEY_PATH` | not an `Overrides` field — a PEM public key (RSA → RS256, ECDSA → ES256) that `register()` verifies `auth_token` against when `auth = jwt` (Phase 16). Required in production for the three topologies that default to `jwt`; research warns and skips verification without it |
+| `CONFLUX_JWT_PUBLIC_KEY_PATH` | not an `Overrides` field — a PEM public key (RSA → RS256, ECDSA → ES256) that `register()` verifies `auth_token` against when `auth = jwt`. Required in production for the three topologies that default to `jwt`; research warns and skips verification without it |
 | `CONFLUX_EXPERIMENT_CONFIG_PATH` | not an `Overrides` field — a TOML file of experiment-level overrides (see below) |
 | `CONFLUX_GRPC_ADDR` / `CONFLUX_HTTP_ADDR` | not `Overrides` fields — override the `FlTransport` gRPC and HTTP admin listen addresses (default `127.0.0.1:50051` / `127.0.0.1:8080`). Needed to reach the admin API from a different container — see `docs/WEB_APP_INTEGRATION.md`. Defaults stay loopback-only; binding wider is deliberate, and the server refuses to do it without `CONFLUX_ADMIN_TOKEN` (see the row above) |
 
@@ -229,7 +229,7 @@ Everything else (`require_node_auth`, `target_epsilon`, `seed_mode`,
 ...) still resolves correctly from topology/mode profiles and builtin
 fallbacks, and can be set from an experiment config file.
 
-### Experiment config file (Phase 20)
+### Experiment config file
 
 Set `CONFLUX_EXPERIMENT_CONFIG_PATH` to a TOML file and every
 `Overrides` field becomes settable, not just the subset with env vars:
@@ -253,27 +253,27 @@ Startup then logs each of those values with the file's real path as its
 source:
 
 ```
-[config] aggregator = centered_clipping  (source: experiment file "./experiment.toml")
+[config] aggregator = centered_clipping (source: experiment file "./experiment.toml")
 ```
 
 Three things worth knowing:
 
 - **Precedence is unchanged.** The file sits in the tier it always has:
-  below env vars and CLI, above the mode and topology profiles. An env
-  var still wins over the same key in the file.
+ below env vars and CLI, above the mode and topology profiles. An env
+ var still wins over the same key in the file.
 - **Enum-valued keys use the same spelling the startup log prints** —
-  `auth = "mtls"`, `connection_mode = "push"`, `accounting_scope =
-  "per_client"`. There is no second vocabulary to learn, and a test
-  enforces that there never will be.
+ `auth = "mtls"`, `connection_mode = "push"`, `accounting_scope =
+ "per_client"`. There is no second vocabulary to learn, and a test
+ enforces that there never will be.
 - **A typo is an error, not a shrug.** An unrecognized key refuses the
-  file and lists the valid ones, rather than being silently ignored and
-  leaving you with a run that quietly used defaults. So is a missing
-  file, or a value of the wrong type.
+ file and lists the valid ones, rather than being silently ignored and
+ leaving you with a run that quietly used defaults. So is a missing
+ file, or a value of the wrong type.
 
 Profile files — topology/mode profiles themselves defined in TOML with
 `inherits`-based extension (spec §4.1) — are deliberately **not** part
 of this; they remain hardcoded Rust. See
-`docs/phases/phase-20-config-file-parsing.md`'s "out of scope" section.
+its phase brief section.
 
 Example: run the server as a `cross_silo` production deployment with
 verbose logging:
@@ -310,11 +310,11 @@ explicit override to "nothing", which is rarely what anyone wants.
 This project uses [evnx](https://evnx.dev) to keep the two files honest:
 
 ```bash
-evnx doctor              # gitignore coverage, file permissions, .example sync
-evnx diff                # what one file has that the other doesn't
-evnx sync                # bring them back into line
-evnx validate            # placeholders, weak values, config mistakes
-evnx scan .env           # refuse to let a real secret reach a commit
+evnx doctor # gitignore coverage, file permissions, .example sync
+evnx diff # what one file has that the other doesn't
+evnx sync # bring them back into line
+evnx validate # placeholders, weak values, config mistakes
+evnx scan .env # refuse to let a real secret reach a commit
 ```
 
 `evnx validate` and `evnx scan` both run in CI. `validate` exits non-zero
@@ -326,24 +326,24 @@ give it a token.
 Two things about `scan` worth knowing before trusting its output:
 
 - **`evnx scan .env.example` scans nothing.** evnx excludes that filename
-  by design, and `--exclude` cannot override it — so the command reports
-  `Scanned 0 files` above a green `✓ No secrets detected`, which reads
-  as a pass and is not one. Naming the template explicitly buys nothing;
-  it is covered only as part of a directory scan.
+ by design, and `--exclude` cannot override it — so the command reports
+ `Scanned 0 files` above a green `✓ No secrets detected`, which reads
+ as a pass and is not one. Naming the template explicitly buys nothing;
+ it is covered only as part of a directory scan.
 - **Locally, scan the env files; in CI, scan the checkout.** `evnx scan
-  .env` is the useful local command, because an unscoped scan here walks
-  `python/conflux_client/.venv` and reports base64 font data inside PIL
-  as an AWS key. CI runs `evnx scan .` instead and is right to: `.venv`
-  is gitignored, so it does not exist in a fresh checkout, and scanning
-  the root is what catches a credential pasted into a tracked file that
-  is not an env file at all.
+ .env` is the useful local command, because an unscoped scan here walks
+ `python/conflux_client/.venv` and reports base64 font data inside PIL
+ as an AWS key. CI runs `evnx scan .` instead and is right to: `.venv`
+ is gitignored, so it does not exist in a fresh checkout, and scanning
+ the root is what catches a credential pasted into a tracked file that
+ is not an env file at all.
 
 ## Durable backends (Redis, Postgres, S3)
 
 `conflux-registry::RedisRegistry`, `conflux-store::PostgresStore`, and
 `conflux-store::S3Store` are real, tested, working implementations — but
 **as of this writing, neither binary's `main.rs` selects them via an env
-var yet** (tracked in [`STATUS.md`](STATUS.md)'s "Next" section). Today
+var yet**. Today
 they're usable programmatically (construct one directly instead of
 `InMemoryRegistry`/`InMemoryStore` if you're embedding `conflux-server`'s
 crates in your own code) and are exercised by each crate's own test suite
@@ -354,9 +354,9 @@ repository ships a `docker-compose.yml` that brings up all three on the
 ports the tests default to:
 
 ```bash
-docker compose up -d      # redis, postgres, minio
+docker compose up -d # redis, postgres, minio
 cargo test --workspace
-docker compose down -v    # stop and discard the data
+docker compose down -v # stop and discard the data
 ```
 
 The individual `docker run` commands below are equivalent, and remain
@@ -368,20 +368,20 @@ docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine
 
 # Postgres — conflux-store's PostgresStore tests (checkpoints + privacy round log)
 docker run -d --name conflux-dev-postgres \
-  -e POSTGRES_PASSWORD=conflux -e POSTGRES_DB=conflux \
-  -p 15432:5432 postgres:16-alpine
+ -e POSTGRES_PASSWORD=conflux -e POSTGRES_DB=conflux \
+ -p 15432:5432 postgres:16-alpine
 
 # MinIO (S3-compatible) — conflux-store's S3Store tests
 docker run -d --name conflux-dev-minio -p 19000:9000 -p 19001:9001 \
-  -e MINIO_ROOT_USER=confluxadmin -e MINIO_ROOT_PASSWORD=confluxsecret \
-  minio/minio server /data --console-address ":9001"
+ -e MINIO_ROOT_USER=confluxadmin -e MINIO_ROOT_PASSWORD=confluxsecret \
+ minio/minio server /data --console-address ":9001"
 ```
 
 Then:
 
 ```bash
-cargo test -p conflux-registry   # includes RedisRegistry's tests
-cargo test -p conflux-store      # includes PostgresStore's and S3Store's tests
+cargo test -p conflux-registry # includes RedisRegistry's tests
+cargo test -p conflux-store # includes PostgresStore's and S3Store's tests
 ```
 
 Tear down when you're done:
@@ -410,19 +410,19 @@ resolution is a separate, optional process.
 
 ```bash
 # 1. Start the sidecar with your trusted root dataset. One example per
-#    line, comma-separated, target last.
+# line, comma-separated, target last.
 cat > root-dataset.csv <<'CSV'
 1.0,0.0,2.0
 0.0,1.0,3.0
 1.0,1.0,5.0
 CSV
 
-CONFLUX_TRUSTED_DATASET_PATH=root-dataset.csv CONFLUX_SIDECAR_ADDR=127.0.0.1:50100   cargo run -p conflux-trusted-reference
+CONFLUX_TRUSTED_DATASET_PATH=root-dataset.csv CONFLUX_SIDECAR_ADDR=127.0.0.1:50100 cargo run -p conflux-trusted-reference
 ```
 
 ```bash
 # 2. Point the server at it.
-CONFLUX_AGGREGATOR=fltrust CONFLUX_TRUSTED_REFERENCE_ADDR=http://127.0.0.1:50100   cargo run -p conflux-server
+CONFLUX_AGGREGATOR=fltrust CONFLUX_TRUSTED_REFERENCE_ADDR=http://127.0.0.1:50100 cargo run -p conflux-server
 ```
 
 The server performs a `Describe` handshake at startup and **refuses to
@@ -484,15 +484,12 @@ cargo test -p conflux-server --test load -- --nocapture
 ## Development workflow
 
 ```bash
-cargo fmt --all              # apply formatting
-cargo clippy --workspace --all-targets   # lint everything, including tests
+cargo fmt --all # apply formatting
+cargo clippy --workspace --all-targets # lint everything, including tests
 ```
 
-Before starting any new work, read [`STATUS.md`](STATUS.md) for what's
-done and what's next, then the relevant brief under
-[`phases/`](phases/) — each phase brief states its scope, what it
-deliberately doesn't cover, and its test plan. After finishing work,
-update `STATUS.md` (what shipped, what's next, any deviation from spec
-and why) — this is how the project stays legible across sessions; see
+Before starting any new work, read [CONTRIBUTING.md](../CONTRIBUTING.md)
+— it covers what CI enforces and the four things this project is
+opinionated about. See
 [ARCHITECTURE.md](ARCHITECTURE.md#how-the-project-was-built) for why that
 matters here specifically.

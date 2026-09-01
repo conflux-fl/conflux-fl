@@ -6,7 +6,7 @@
 //!
 //! The real, cross-language, cross-process verification (actual
 //! `conflux-server` + actual `conflux-node` + the actual
-//! `stub_client.py`) is a manual smoke test recorded in `docs/STATUS.md` —
+//! `stub_client.py`) is a manual smoke test recorded in the STATUS record —
 //! spawning arbitrary external processes inside `cargo test` isn't
 //! hermetic or standard practice.
 

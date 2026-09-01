@@ -1,4 +1,4 @@
-//! Minimal HTTP admin surface (spec §10, Phase 5), served on a separate
+//! Minimal HTTP admin surface (spec §10), served on a separate
 //! port from the gRPC `FlTransport` service.
 
 use std::sync::Arc;
@@ -117,7 +117,7 @@ struct RegisterHttpResponse {
 ///
 /// **It is not a second *authentication* path either, and that is worth
 /// being explicit about.** The gRPC `Register` RPC runs JWT verification
-/// (Phase 16) and the node allow-list check (Phase 8c); this handler
+/// and the node allow-list check; this handler
 /// runs neither. Before the admin token existed, that made it a way to
 /// register a client while bypassing both — the HTTP port undoing the
 /// gRPC port's authentication. It is now behind the admin token, so
@@ -133,8 +133,8 @@ async fn register(
     Json(RegisterHttpResponse { accepted })
 }
 
-/// Phase 8c admin surface — mirrors `flwr supernode register`/`list`/
-/// `unregister`: the operator's way to populate the allow-list Phase 8b
+/// admin surface — mirrors `flwr supernode register`/`list`/
+/// `unregister`: the operator's way to populate the allow-list
 /// built and `dispatcher.rs`'s `register()` now enforces (when
 /// `config.require_node_auth` is on).
 #[derive(Deserialize)]

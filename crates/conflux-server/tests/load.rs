@@ -3,7 +3,6 @@
 //! integration test in this session uses) against one real, running
 //! `AppState` + gRPC server, across several rounds — not the single
 //! client every other test used. See
-//! `docs/phases/phase-7g-load-testing.md`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -126,7 +125,7 @@ async fn concurrent_clients_across_multiple_rounds() {
             .expect("run_round task panicked")
             .expect("run_round failed under concurrent load");
 
-        // The known Phase 6/7d RoundBuffer race would show up as
+        // The known/7d RoundBuffer race would show up as
         // num_submitted/num_passed less than NUM_CLIENTS despite every
         // client's RPC reporting success above — record honestly rather
         // than hiding a soft failure behind an unconditional assert.
@@ -156,8 +155,8 @@ async fn concurrent_clients_across_multiple_rounds() {
 
     assert!(
         !round_buffer_race_observed,
-        "the known Phase 6/7d RoundBuffer race manifested under this load — see \
-         docs/STATUS.md's tracked deviation, this needs escalating from \"documented\" \
+        "the known/7d RoundBuffer race manifested under this load — see \
+         a tracked deviation, this needs escalating from \"documented\" \
          to \"actively causing test failures\""
     );
 }

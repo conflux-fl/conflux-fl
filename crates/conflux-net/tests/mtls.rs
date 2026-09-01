@@ -1,7 +1,7 @@
 //! Real mTLS handshake tests: a client presenting a cert signed by the
 //! configured CA connects and completes an RPC; a client presenting a
 //! cert from an untrusted CA is rejected at the TLS layer, before any RPC
-//! logic runs. See `docs/phases/phase-7e-mtls.md`.
+//! logic runs.
 
 use std::sync::{Arc, Mutex};
 

@@ -1,10 +1,9 @@
-//! Phase 12's actual deliverable: every attack against every shipped
+//! the actual deliverable: every attack against every shipped
 //! `Aggregator`, over a real `aggregate()` call — not a mocked one. This
 //! reports an honest attack/defense matrix, including where a defense
 //! doesn't fully hold (matching the literature's own findings), rather
-//! than being loosened until everything passes. See
-//! `docs/phases/phase-12-attack-simulation.md` and `docs/adr/
-//! 0010-attack-simulation-crate.md`.
+//! than being loosened until everything passes. See ADR 0010 for why
+//! this crate is dev/test-only.
 
 use conflux_attacks::{AlieAttack, Attack, GaussianAttack, ScalingAttack, SignFlippingAttack};
 use conflux_core::{AggregatorParams, build_aggregator};
@@ -204,13 +203,13 @@ fn alie_attack_against_defended_aggregators_at_high_attacker_fraction() {
     // test's job is to make that visible (via cargo test's captured
     // output on failure, or by inspection) rather than assert a
     // specific outcome this session can't fully predict without
-    // running it. See docs/phases/phase-12-attack-simulation.md.
+    // running it.
     println!("ALIE @ 33% attacker fraction — findings: {findings:?}");
     assert!(!findings.is_empty());
 }
 
 /// The concrete motivation for building `PersistentSybilAttack`
-/// (`docs/research/temporal-consistency-aggregation.md`, Section 2.2):
+/// (the cross-round collusion literature):
 /// a single-round-only defense (every `robust`-family member above) has
 /// no way to know these two attackers submitted the *same* update last
 /// round too — but `FoolsGoldAggregator` does. The honest batch is

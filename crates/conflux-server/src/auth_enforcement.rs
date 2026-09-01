@@ -1,9 +1,9 @@
-//! Phase 9a — enforcing the resolved `auth` config value (spec §3 ties
+//! enforcing the resolved `auth` config value (spec §3 ties
 //! topology to auth mode; `conflux-config` resolves and logs it, but
 //! nothing previously read it to decide whether the gRPC server actually
-//! binds with TLS). Closes gap 4 from `docs/FLOWER_COMPARISON.md`.
+//! binds with TLS). Closes gap 4 of the Flower-platform design review.
 //!
-//! Phase 16 added the `Jwt` arm's other half. `auth = "jwt"` no longer
+//! added the `Jwt` arm's other half. `auth = "jwt"` no longer
 //! just means "mTLS isn't required" — it now also means every
 //! `register()` must present a token this deployment's public key can
 //! verify. The two are independent: `resolve_server_tls` decides how the
@@ -15,7 +15,7 @@ use conflux_net::jwt::{JwtAuthError, JwtKeyMaterial, verify_token_for_client};
 use conflux_net::tls::server_tls_config;
 use tonic::transport::ServerTlsConfig;
 
-/// Plain PEM bytes, matching every other Phase 7/8 backend's
+/// Plain PEM bytes, matching every other/8 backend's
 /// "argument-based, not `conflux-config`-driven" precedent for connection
 /// material (a cert path is a deployment detail, not an experiment-tuning
 /// parameter).
@@ -204,7 +204,7 @@ mod tests {
         ));
     }
 
-    // --- Phase 16: the Jwt arm's five cases, one-for-one with the
+    // --- the Jwt arm's five cases, one-for-one with the
     // resolve_server_tls cases above -----------------------------------
 
     /// A real ES256 keypair plus a signed token for `sub`, generated per

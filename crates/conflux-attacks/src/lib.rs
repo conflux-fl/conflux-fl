@@ -5,7 +5,7 @@
 //! dev-dependency for this crate's own application-level tests
 //! (`tests/attack_vs_defense.rs`).
 //!
-//! See `docs/phases/phase-12-attack-simulation.md` for the full source
+//!  for the full source
 //! list, and `docs/EXTENDING.md`'s "Adding a new attack" section for how
 //! to add another one.
 //!

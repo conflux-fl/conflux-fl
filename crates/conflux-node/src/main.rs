@@ -1,13 +1,13 @@
 //! Client binary — Rust-side networking/orchestration, hands training off
 //! to the Python `ClientApp` over local loopback gRPC.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §7, §10 (Phase 6). No CLI/config
+//! See the v1 specification §7, §10. No CLI/config
 //! resolution yet — address/id come from env vars, matching
-//! `conflux-server`'s Phase 5 `main.rs`.
+//! `conflux-server`'s `main.rs`.
 //!
-//! Phase 9b: `CONFLUX_MODE`/`CONFLUX_ALLOW_STUB_CLIENT`/
+//! `CONFLUX_MODE`/`CONFLUX_ALLOW_STUB_CLIENT`/
 //! `CONFLUX_CLIENT_APP_KIND` gate startup via `startup_guard` — see that
-//! module and `docs/phases/phase-9b-stub-client-guard.md`.
+//! module and its phase brief.
 //!
 //! `CONFLUX_CONNECTION_MODE` (`push`/`pull`) picks which upstream
 //! transport to open. It defaults to `pull`, which is *not* the same as
@@ -52,7 +52,7 @@ async fn main() {
         Ok("real") => ClientAppKind::Real,
         // Default "stub" matches what's actually shipped today
         // (`python/conflux_client/stub_client.py`) — see
-        // docs/adr/0005-python-sdk-deferred.md.
+        // ADR 0005.
         _ => ClientAppKind::Stub,
     };
     validate_client_app_startup(mode, allow_stub_client, client_app_kind)
@@ -75,9 +75,9 @@ async fn main() {
     // carries it differs — but it has to happen on the same transport the
     // node will go on using, not a throwaway one, so it lives inside each
     // branch rather than before them.
-    // Phase 17: optional local DP, read from env vars for the same
+    // optional local DP, read from env vars for the same
     // reason `startup_guard.rs` reads its own — `conflux-node` calls no
-    // `conflux-config` API directly (Phase 6's scope decision), so the
+    // `conflux-config` API directly, so the
     // few values it needs are read here and their builtin fallbacks
     // mirrored inline. These names and defaults match
     // `conflux-config`'s `client_side_privacy_transform` (false),

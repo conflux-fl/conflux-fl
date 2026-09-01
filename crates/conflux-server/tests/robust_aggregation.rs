@@ -1,9 +1,8 @@
-//! Phase 11a (and its later extensions, FABA/Bulyan/Geometric Median):
+//! (and its later extensions, FABA/Bulyan/Geometric Median):
 //! proves each `robust` family member resolves through `conflux-config`'s
 //! strategy registry and completes a real round end-to-end — the same
-//! shape as Phase 10b's `strategy_registry.rs::
+//! shape as the `strategy_registry.rs::
 //! explicit_aggregator_and_selector_overrides_resolve_through_the_registry_end_to_end`.
-//! See `docs/phases/phase-11a-robust-aggregation.md`.
 
 use std::sync::Arc;
 
@@ -34,7 +33,7 @@ fn config_with(overrides: Overrides) -> conflux_config::ResolvedConfig {
 /// (Krum/Multi-Krum: nothing to filter out; Trimmed Mean/Median: nothing
 /// to trim/no other value to combine with), so this proves each name
 /// constructs a real, working `Aggregator` through the registry with one
-/// shared assertion shape, the same way Phase 10b's fedavg test does.
+/// shared assertion shape, the same way the fedavg test does.
 async fn run_single_client_round(aggregator_name: &str) -> Vec<f32> {
     let config = config_with(Overrides {
         aggregator: Some(aggregator_name.to_string()),

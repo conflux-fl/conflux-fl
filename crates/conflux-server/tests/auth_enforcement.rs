@@ -1,8 +1,7 @@
-//! Real end-to-end tests for Phase 9a: `resolve_server_tls`'s
+//! Real end-to-end tests for `resolve_server_tls`'s
 //! `Some(ServerTlsConfig)` actually binds a working mTLS server, and
 //! `None` binds a working plaintext one — not just that the decision
 //! function type-checks. See
-//! `docs/phases/phase-9a-auth-enforcement.md`.
 
 use std::sync::Arc;
 
@@ -67,7 +66,7 @@ async fn mtls_with_real_material_binds_a_server_that_requires_a_trusted_client_c
 
     // `AppState`'s own config is research mode here — this test is about
     // `resolve_server_tls`'s decision (exercised above with
-    // `Mode::Production` directly), not Phase 8b's `require_node_auth`,
+    // `Mode::Production` directly), not the `require_node_auth`,
     // which would otherwise reject this test's unregistered client.
     let state = Arc::new(AppState::new(
         conflux_config::resolve(

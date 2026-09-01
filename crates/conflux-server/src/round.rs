@@ -53,7 +53,7 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         .collect();
 
     // `quorum` has no universal default (spec §9); absent an override,
-    // Phase 5 requires every selected client to respond — the
+    // requires every selected client to respond — the
     // `cross_silo`/"all_available" ethos, not a formally-derived choice.
     let target_n = quorum_override(state).unwrap_or(active.len());
     let selected = state.selector.select(&active, target_n, round);
@@ -87,10 +87,9 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     let decoded = filter_by_per_client_budget(state, decoded, round)?;
     let decoded = apply_server_side_privacy(state, decoded);
 
-    // Phase 13: reputation filtering is opt-in, off by default — every
+    // reputation filtering is opt-in, off by default — every
     // aggregator's default behavior should match its cited paper with
-    // zero framework-imposed interference (see `docs/phases/
-    // phase-13-reputation-reference-fix.md`). When off, every update
+    // zero framework-imposed interference (ADR 0008). When off, every update
     // that survived `decode_flushed_deltas` above (decodable and finite)
     // goes straight to the configured aggregator, unmodified.
     let passed_ids: HashSet<String> = if state.config.reputation_filter_enabled.value {
@@ -152,7 +151,7 @@ fn quorum_override(state: &AppState) -> Option<usize> {
 }
 
 /// The experiment-wide budget gate — only meaningful for
-/// `AccountingScope::Global`. Phase 14: `PerClient` scope has no single
+/// `AccountingScope::Global`. `PerClient` scope has no single
 /// "the round" gate to check here; its enforcement moves to
 /// [`filter_by_per_client_budget`], evaluated per client once the
 /// round's batch is actually known, not once upfront against
@@ -185,7 +184,7 @@ fn check_privacy_budget(state: &AppState, round: u64) -> Result<(), ServerError>
     }
 }
 
-/// Phase 14 (`AccountingScope::PerClient`): excludes any client whose
+/// (`AccountingScope::PerClient`): excludes any client whose
 /// *own* cumulative epsilon has already reached `target_epsilon` from
 /// this round's batch, before its update reaches server-side privacy or
 /// aggregation — the same "exclude, don't fail the whole round" shape
@@ -236,7 +235,7 @@ fn filter_by_per_client_budget(
 /// one is malformed at the byte level — a corrupt/truncated payload is a
 /// protocol-level problem, not a numerically-degenerate-but-well-formed
 /// value), then excludes — not fails the round over — any decoded update
-/// containing a non-finite (`NaN`/`Inf`) value. Phase 13: a single
+/// containing a non-finite (`NaN`/`Inf`) value. a single
 /// client with degenerate local data (e.g. a zero-sample shard from an
 /// aggressive Dirichlet split) can otherwise poison
 /// `conflux-reputation`'s shared batch-mean reference via `NaN`
@@ -322,9 +321,9 @@ fn reencode_passing_deltas(
 }
 
 /// Records this round's privacy cost — both the experiment-wide total
-/// (`Global`'s own accounting, unchanged since Phase 7d) *and*, for
+/// (`Global`'s own accounting, unchanged) *and*, for
 /// every client actually admitted into this round's aggregate, a
-/// per-client entry (Phase 14). Both are recorded unconditionally,
+/// per-client entry. Both are recorded unconditionally,
 /// regardless of `accounting_scope` — the same "never lose history the
 /// current scope isn't actively using" reasoning `app_state.rs`'s
 /// `connect_accounting` already applies on the replay side; a
@@ -354,7 +353,7 @@ async fn record_round_privacy_cost(
 
     // Persisted immediately, not batched — a crash between updating the
     // in-memory accountant and this append would otherwise leave the
-    // durable log one round behind, which is exactly the drift Phase 7d
+    // durable log one round behind, which is exactly the drift
     // exists to prevent. A persistence failure here is surfaced, not
     // swallowed: silently degrading back to in-memory-only accounting
     // would defeat the point of having `accountant_log` at all.

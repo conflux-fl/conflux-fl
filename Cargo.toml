@@ -22,7 +22,7 @@ members = [
 # true`, so a version bump or a license change is one edit here rather
 # than thirteen — and cannot be applied to twelve crates by accident.
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 # **Set by the dependencies, not by our own source.** `edition = "2024"`
 # stabilized in 1.85 and nothing this workspace *writes* needs anything

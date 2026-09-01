@@ -72,7 +72,7 @@ enum Upstream {
 pub struct NodeBridge {
     upstream: Mutex<Upstream>,
     node_client_id: String,
-    /// Phase 17: local DP applied to this client's own update before it
+    /// local DP applied to this client's own update before it
     /// leaves the node. `None` — the default — means the update is
     /// forwarded byte-for-byte as the `ClientApp` produced it, which is
     /// every pre-Phase-17 deployment's behavior exactly.

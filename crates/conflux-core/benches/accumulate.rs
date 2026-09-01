@@ -1,4 +1,4 @@
-//! Phase 19's evidence: does vectorizing the combine step actually help,
+//! the evidence: does vectorizing the combine step actually help,
 //! and where does it stop helping?
 //!
 //! Two comparisons, at model dimensions spanning what this project's own

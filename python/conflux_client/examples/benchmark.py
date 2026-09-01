@@ -5,7 +5,7 @@ capturing every round's real held-out accuracy/loss — plus the
 centralized baseline each combination is compared against — into one
 JSONL file.
 
-The real-data equivalent of docs/research/scripts/'s Rust-only sweep
+The real-data equivalent of an out-of-tree Rust-only sweep
 infrastructure: each combination is one real `./run_demo.sh` invocation
 (real training, real gRPC, real aggregation), not a synthetic vector.
 
@@ -23,7 +23,7 @@ alpha = more non-IID).
 Each `--attacks` entry is "none" or "poison". `poison` turns on the
 demo's own persistent Byzantine client (`run_demo.sh --poison`), which
 is what makes this harness able to check whether the synthetic-vector
-robustness findings in `docs/research/temporal-consistency-aggregation.md`
+robustness findings from synthetic experiments
 survive contact with a real model and a real dataset. Without it a sweep
 can only compare aggregators on clean data, where they are all supposed
 to look alike — and mostly do, which tells you nothing about

@@ -1,7 +1,6 @@
-//! Phase 10b: proves `config.aggregator.value`/`config.selector.value`
+//! proves `config.aggregator.value`/`config.selector.value`
 //! actually drive construction through `conflux-config`'s strategy
 //! registry — not just that the builtin defaults happen to still work.
-//! See `docs/phases/phase-10b-strategy-registry-wiring.md`.
 
 use std::sync::Arc;
 

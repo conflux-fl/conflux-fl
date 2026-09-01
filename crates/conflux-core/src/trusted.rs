@@ -105,7 +105,7 @@ fn l2_norm_f64(v: &[f32]) -> f64 {
 ///
 /// Krum, Trimmed Mean, Median, FoolsGold and the rest all derive their
 /// notion of "normal" from the batch. A colluding majority is therefore
-/// normal by construction — `docs/research/` §5.1 measured exactly that.
+/// normal by construction, which measurement bears out.
 /// FLTrust never asks the batch anything: `g₀` comes from data no client
 /// contributed to, so a unanimous batch of attackers is scored against
 /// the same reference an honest one would be, and is rejected by the same

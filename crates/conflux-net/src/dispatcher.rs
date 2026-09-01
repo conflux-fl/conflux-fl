@@ -37,7 +37,7 @@ pub enum DispatchError {
     #[error("client {0} is not on the node allow-list")]
     NotAllowed(String),
     /// The caller's credential itself didn't check out — an invalid,
-    /// expired, or wrong-subject JWT (Phase 16). Kept distinct from
+    /// expired, or wrong-subject JWT. Kept distinct from
     /// [`DispatchError::NotAllowed`] because the two mean opposite
     /// things about the caller: `NotAllowed` says "we know who you are
     /// and you aren't invited," this says "we couldn't establish who you

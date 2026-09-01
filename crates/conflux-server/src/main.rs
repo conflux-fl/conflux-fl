@@ -1,24 +1,24 @@
 //! Server binary — integrates the library crates into the round pipeline.
 //!
-//! See `docs/spec/conflux-spec-v1.md` §8, §10 (Phase 5). CLI/experiment-file
+//! See the v1 specification §8, §10. CLI/experiment-file
 //! parsing into `conflux-config::Overrides` isn't built yet (spec §11 Open
 //! Item 2) — topology/mode are picked from `CONFLUX_TOPOLOGY`/`CONFLUX_MODE`
 //! env vars for now.
 //!
-//! Backend selection (Phase 8a) is env-var driven too, deliberately kept
+//! Backend selection is env-var driven too, deliberately kept
 //! separate from `conflux-config`'s `Overrides` — see
-//! `docs/phases/phase-8a-backend-selection.md`'s scope note: a Redis URL is
+//! its phase brief's scope note: a Redis URL is
 //! a deployment detail, not an experiment-tuning parameter.
 //!
-//! Node auth (Phase 8b/8c) needs no separate wiring here: `require_node_auth`
+//! Node auth needs no separate wiring here: `require_node_auth`
 //! is a regular `conflux-config` parameter (already covered by the
 //! provenance-log loop below), and `AppState::connect` derives the
 //! allow-list backend from `CONFLUX_REGISTRY_BACKEND` itself — see
-//! `docs/phases/phase-8c-node-auth-enforcement.md`'s scope note on why
+//! its phase brief's scope note on why
 //! that's one fewer env var rather than a fully independent backend axis.
 //!
 //! `overrides_from_env` (below) closes part of the gap flagged in
-//! `docs/STATUS.md`'s "Next" section after Phase 11c's manual
+//! the STATUS record's "Next" section after the manual
 //! verification needed a throwaway example binary to select a
 //! non-default aggregator: `CONFLUX_AGGREGATOR`/`CONFLUX_SELECTOR`/
 //! `CONFLUX_PRIVACY_MECHANISM`/`CONFLUX_ROBUST_BYZANTINE_FRACTION`, plus
@@ -39,12 +39,12 @@
 //! stay loopback-only — the admin API has no auth of its own, so binding
 //! wider is an explicit opt-in, not a new default.
 //!
-//! `CONFLUX_REPUTATION_FILTER_ENABLED` (Phase 13): reputation filtering
+//! `CONFLUX_REPUTATION_FILTER_ENABLED`: reputation filtering
 //! is opt-in, defaulting to `false` — `conflux-reputation`'s
 //! `CosineScorer`, applied unconditionally in front of every aggregator,
 //! was itself the bug the "real finding" above documents: no cited paper
 //! (Krum, Trimmed Mean, Median, ...) asks for an extra uncited filter
-//! ahead of it. See `docs/phases/phase-13-reputation-reference-fix.md`.
+//! ahead of it.
 //! `CONFLUX_MIN_REPUTATION_SCORE` still controls the threshold used
 //! *when* this is explicitly turned on.
 
@@ -77,7 +77,7 @@ async fn main() {
         _ => Mode::Research,
     };
 
-    // Phase 20: an optional experiment-level config file. Unset behaves
+    // an optional experiment-level config file. Unset behaves
     // exactly as before — `None` into the tier that has always been
     // there. Set, it is a hard failure if unreadable: an operator who
     // named a config file meant it, and silently continuing with
@@ -108,7 +108,7 @@ async fn main() {
         println!("{line}");
     }
 
-    // Phase 9a: makes the just-logged `auth` value real — `mode =
+    // makes the just-logged `auth` value real — `mode =
     // production` with `auth = mtls` and no TLS material refuses to
     // start here (`resolve_server_tls`'s own fail-fast), rather than
     // silently binding a plaintext gRPC server for a topology whose
@@ -136,7 +136,7 @@ async fn main() {
                 .expect("CONFLUX_INITIAL_WEIGHTS_DIM must be a positive integer")
         })
         .unwrap_or(4);
-    // Phase 16: the `auth = jwt` counterpart to the mTLS check above.
+    // the `auth = jwt` counterpart to the mTLS check above.
     // Loaded and validated *before* binding, so a production JWT
     // deployment with no key to verify against never starts — the same
     // fail-fast discipline, for the other three topologies' default

@@ -181,10 +181,9 @@ impl FedOptParams {
 ///   condition (`v_{-1} ≥ τ²`) permits.
 /// - **State does not survive a restart.** `m`, `v`, and `x_t` are
 ///   in-process, like every other stateful method here
-///   (`FoolsGoldAggregator`, `CenteredClippingAggregator`,
-///   `DssAggregator`). A restarted server resumes from its checkpoint
-///   with fresh moment estimates, which costs a few rounds of adaptivity
-///   rather than correctness.
+///   (`FoolsGoldAggregator`, `CenteredClippingAggregator`). A restarted
+///   server resumes from its checkpoint with fresh moment estimates,
+///   which costs a few rounds of adaptivity rather than correctness.
 pub struct FedOptAggregator {
     variant: FedOptVariant,
     params: FedOptParams,
@@ -1223,8 +1222,8 @@ mod tests {
 /// bounds `τ_eff`, which a single client claiming `u32::MAX` would
 /// otherwise drag to absurdity for the whole batch.
 ///
-/// See [`crate::weights`]'s `MAX_PLAUSIBLE_SAMPLE_COUNT` for the same
-/// reasoning applied to the other self-reported scalar.
+/// See [`crate::MAX_PLAUSIBLE_SAMPLE_COUNT`] for the same reasoning
+/// applied to the other self-reported scalar.
 pub const MAX_PLAUSIBLE_LOCAL_STEPS: u32 = 1 << 20;
 
 /// **FedNova** — Wang, Liu, Liang, Joshi & Poor (2020), *Tackling the

@@ -6,7 +6,7 @@
 //!
 //! The three research runners beside this file (`run_experiment`,
 //! `run_fairness_experiment`, `run_dss_diagnostics`) sweep parameter
-//! grids and emit JSONL for the scripts in `docs/research/scripts/`.
+//! grids and emit JSONL for out-of-tree experiment scripts.
 //! This one is the opposite: one table, one glance, no output files.
 //!
 //! **Test/dev only** (ADR 0010). `conflux-server` must never depend on

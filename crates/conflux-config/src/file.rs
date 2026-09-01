@@ -2,11 +2,11 @@
 //!
 //! This is the *narrow* half of spec §11 Open Item 2: one flat TOML file
 //! of experiment-level overrides, feeding the `file` tier
-//! [`crate::resolve`] has accepted since Phase 1 but which nothing ever
+//! [`crate::resolve`] has accepted but which nothing ever
 //! supplied a real value for. Making topology/mode **profiles**
 //! themselves TOML-defined, with `inherits`-based extension between
 //! them, is the other half — materially larger, and deliberately not
-//! here (see `docs/phases/phase-20-config-file-parsing.md`).
+//! here (see its phase brief).
 //!
 //! Nothing about resolution changes. The layering chain, the precedence
 //! order, and the [`crate::ConfigSource::ExperimentFile`] provenance
@@ -130,7 +130,7 @@ mod tests {
     /// and hands back the path.
     ///
     /// The name mixes the process id with a per-call counter for the
-    /// same reason `redis_registry.rs`'s test keys do (Phase 7a): a
+    /// same reason `redis_registry.rs`'s test keys do: a
     /// counter alone still collides across two separate `cargo test`
     /// invocations running at once, which is exactly the flake that was
     /// found and fixed there rather than re-discovered here.

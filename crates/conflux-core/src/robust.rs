@@ -1,6 +1,6 @@
 //! The `robust` (Byzantine-resilient) aggregation family (spec §5).
 //!
-//! Two composable shapes rather than one (Phase 11a). The first pairs
+//! Two composable shapes rather than one. The first pairs
 //! `UpdateFilter` with `FilteredAggregator<F, C>`, for methods that pick
 //! a *subset of whole updates* to keep (Krum, Multi-Krum). The second
 //! pairs `CoordinateWiseRobustStatistic` with `CoordinateWiseAggregator<S>`,
@@ -9,7 +9,6 @@
 //! updates" at all, so forcing them through the first shape would
 //! misrepresent what they compute.
 //!
-//! See `docs/phases/phase-11a-robust-aggregation.md` for the full
 //! rationale, including why this split (rather than one shape, or two
 //! unrelated ones) is what lets a future method needing *both* — e.g.
 //! Bulyan, El Mhamdi, Guerraoui & Rouault (2018), *The Hidden
@@ -91,7 +90,7 @@ pub struct SelectionResult {
 /// this round," decided *before* any update exists; this one answers
 /// "which of the updates that came back do we trust," decided *after*.
 /// Same word ("select") would otherwise describe two different pipeline
-/// stages if this trait kept its Phase 4b name (`RobustSelection`).
+/// stages if this trait kept its name (`RobustSelection`).
 pub trait UpdateFilter: Send + Sync {
     /// Chooses which updates survive. Excluding is the whole mechanism
     /// here — the surviving set is then combined by an ordinary
@@ -765,7 +764,7 @@ mod tests {
         }
     }
 
-    // --- DistanceMatrix (unchanged behavior from Phase 4b) ---
+    // --- DistanceMatrix (unchanged behavior from) ---
 
     #[test]
     fn distance_to_self_is_zero() {

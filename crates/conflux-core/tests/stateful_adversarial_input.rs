@@ -4,7 +4,7 @@
 //! `tests/adversarial_input.rs` builds a fresh aggregator for every
 //! assertion and hands it exactly one batch. That is the right shape for
 //! the nine stateless methods, and it is blind for the four that are
-//! not: `foolsgold`, `centered_clipping`, and `DssAggregator` all carry
+//! not: `foolsgold` and `centered_clipping` both carry
 //! state from one round into the next, behind a `Mutex` because
 //! `Aggregator::aggregate` takes `&self` (ADR 0012).
 //!
@@ -26,9 +26,7 @@
 //! non-finite or wildly wrong aggregate, whatever it was fed before.**
 //! A batch may still be rejected — `Err` is a pass throughout.
 
-use conflux_core::{
-    Aggregator, AggregatorParams, CenteredClippingAggregator, DssAggregator, build_aggregator,
-};
+use conflux_core::{Aggregator, AggregatorParams, CenteredClippingAggregator, build_aggregator};
 use conflux_proto::{ClientDelta, encode_weights};
 
 /// The catalog methods that carry state across rounds. Spelled out
@@ -77,17 +75,14 @@ fn recovering_aggregators() -> Vec<(String, Box<dyn Aggregator>)> {
 
 /// Every stateful aggregator under test, as `(name, instance)`.
 ///
-/// `DssAggregator` is here and absent from `adversarial_input.rs` for
-/// one reason: it is deliberately not in `build_aggregator`'s catalog
-/// (it is an unvalidated hypothesis, see ADR 0008 and
-/// `API_STABILITY.md`), so a suite that iterates catalog *names* cannot
-/// see it. It is also the aggregator the DSS research line actually
-/// drives, and the one whose stored state a research finding (§5.8.1,
-/// "the shared deviation reference is itself unstable") already
-/// questions — so leaving it untested was the least defensible gap of
-/// the four.
+/// Built by name from the catalog, unlike `adversarial_input.rs`'s
+/// single-round suite, because what is under test here is what survives
+/// *between* rounds. An out-of-tree method that keeps cross-round state
+/// is not visible to a suite that iterates catalog names, and owes
+/// itself the equivalent coverage — see the module docs above for the
+/// four defects this shape of test found.
 fn stateful_aggregators() -> Vec<(String, Box<dyn Aggregator>)> {
-    let mut all: Vec<(String, Box<dyn Aggregator>)> = STATEFUL_CATALOG
+    let all: Vec<(String, Box<dyn Aggregator>)> = STATEFUL_CATALOG
         .iter()
         .map(|&name| {
             (
@@ -97,20 +92,6 @@ fn stateful_aggregators() -> Vec<(String, Box<dyn Aggregator>)> {
             )
         })
         .collect();
-
-    // Both DSS combine paths: `true` routes the final combine through
-    // the wrapped base, `false` is DSS's own weighted mean. They are
-    // different code, and only one of them was ever exercised here.
-    for through_base in [true, false] {
-        let mut dss = DssAggregator::new(
-            build_aggregator("fedavg", AggregatorParams::default()).expect("fedavg is in catalog"),
-        );
-        dss.combine_through_base = through_base;
-        all.push((
-            format!("dss(combine_through_base={through_base})"),
-            Box::new(dss),
-        ));
-    }
 
     all
 }
@@ -340,107 +321,6 @@ fn centered_clippings_stored_reference_stays_finite() {
 }
 
 #[test]
-fn dss_survives_every_scenario_the_catalog_methods_are_held_to() {
-    // T2: `adversarial_input.rs` iterates `build_aggregator`'s catalog,
-    // and `DssAggregator` is deliberately not in it — so DSS had *no*
-    // hostile-input coverage at all, single-batch or otherwise, despite
-    // being the aggregator every DSS research run drives.
-    //
-    // This is the same scenario list the twelve catalog methods face,
-    // applied to both DSS combine paths. Writing it found a real one:
-    // `combine_through_base = false` returned `[inf, inf, inf]` on a
-    // batch containing `f32::MAX`, because its weighted combine
-    // multiplied each update by `weight × num_samples` *before*
-    // normalizing, and `f32::MAX × 10` is already infinity.
-    let scenarios: Vec<(&str, Vec<ClientDelta>)> = vec![
-        (
-            "NaN weights",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("hostile", &[f32::NAN, f32::NAN, f32::NAN], 10),
-            ],
-        ),
-        (
-            "one NaN coordinate",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("hostile", &[1.0, f32::NAN, 1.0], 10),
-            ],
-        ),
-        (
-            "positive infinity",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("hostile", &[f32::INFINITY; 3], 10),
-            ],
-        ),
-        (
-            "negative infinity",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("hostile", &[f32::NEG_INFINITY; 3], 10),
-            ],
-        ),
-        (
-            "u64::MAX sample count",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("liar", &[99.0, 99.0, 99.0], u64::MAX),
-            ],
-        ),
-        (
-            "every client reporting zero samples",
-            vec![
-                delta("a", &[1.0; 3], 0),
-                delta("b", &[2.0; 3], 0),
-                delta("c", &[3.0; 3], 0),
-            ],
-        ),
-        (
-            "f32::MAX weights",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("huge", &[f32::MAX; 3], 10),
-            ],
-        ),
-        (
-            "several clients at f32::MAX",
-            vec![
-                delta("a", &[f32::MAX; 3], 10),
-                delta("b", &[f32::MAX; 3], 10),
-                delta("c", &[f32::MAX; 3], 10),
-            ],
-        ),
-        (
-            "denormal-adjacent weights",
-            vec![
-                delta("honest", &[1.0, 1.0, 1.0], 10),
-                delta("tiny", &[f32::MIN_POSITIVE; 3], 10),
-            ],
-        ),
-        ("a single client", vec![delta("solo", &[1.0, 2.0], 10)]),
-    ];
-
-    for (name, aggregator) in stateful_aggregators() {
-        if !name.starts_with("dss") {
-            continue;
-        }
-        for (scenario, batch) in &scenarios {
-            assert_round_survives(&name, &*aggregator, batch, scenario);
-        }
-
-        // Empty batch, which must be `EmptyBatch` rather than a panic.
-        let outcome =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| aggregator.aggregate(&[])));
-        match outcome {
-            Err(_) => panic!("{name} panicked on an empty batch"),
-            Ok(Ok(_)) => panic!("{name} accepted an empty batch"),
-            Ok(Err(_)) => {}
-        }
-    }
-}
-
-#[test]
 fn centered_clipping_movement_stays_bounded_by_the_clip_radius() {
     // What Centered Clipping actually promises, and the reason
     // `recovering_aggregators` excludes it from the recovery tests.
@@ -499,49 +379,5 @@ fn centered_clipping_movement_stays_bounded_by_the_clip_radius() {
         );
 
         previous = next;
-    }
-}
-
-#[test]
-fn dss_diagnostics_stay_consistent_with_the_batch_they_describe() {
-    // `last_diagnostics` is read by the research harness after every
-    // round. If it can disagree with the batch that produced it — wrong
-    // length, non-finite scores — every number the research line reports
-    // is suspect, which matters more here than in most diagnostics.
-    let mut dss = DssAggregator::new(
-        build_aggregator("fedavg", AggregatorParams::default()).expect("fedavg is in catalog"),
-    );
-    dss.combine_through_base = true;
-
-    for round in 0..10 {
-        let batch = vec![
-            delta("honest-1", &[1.0, 1.0, 1.0], 10),
-            delta("honest-2", &[1.1, 0.9, 1.0], 10),
-            delta("erratic", &[1e20 * (round as f32 + 1.0); 3], 10),
-        ];
-
-        if dss.aggregate(&batch).is_err() {
-            continue;
-        }
-
-        let diagnostics = dss.last_diagnostics();
-        assert_eq!(
-            diagnostics.len(),
-            batch.len(),
-            "round {round}: {} diagnostics for {} clients",
-            diagnostics.len(),
-            batch.len()
-        );
-        for d in &diagnostics {
-            assert!(
-                d.stability.is_finite() && d.collusion.is_finite() && d.weight.is_finite(),
-                "round {round}: non-finite diagnostic for {}: stability={}, collusion={}, \
-                 weight={}",
-                d.client_id,
-                d.stability,
-                d.collusion,
-                d.weight
-            );
-        }
     }
 }

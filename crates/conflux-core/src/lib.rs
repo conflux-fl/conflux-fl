@@ -81,6 +81,7 @@ mod robust;
 mod temporal;
 mod trusted;
 mod weights;
+pub use weights::{MAX_PLAUSIBLE_SAMPLE_COUNT, decode_and_validate};
 
 pub use averaging::{AveragingWeighting, FedAvg, SampleCountWeighting, WeightedAverageAggregator};
 pub use flanders::{ClientFlandersDiagnostic, FlandersAggregator};
@@ -94,9 +95,7 @@ pub use robust::{
     MedianOfMeansStatistic, MedianStatistic, MultiKrumFilter, RobustVectorStatistic,
     SelectionResult, TrimmedMeanStatistic, UpdateFilter, VectorRobustAggregator,
 };
-pub use temporal::{
-    CenteredClippingAggregator, ClientDssDiagnostic, DssAggregator, FoolsGoldAggregator,
-};
+pub use temporal::{CenteredClippingAggregator, FoolsGoldAggregator};
 pub use trusted::{FlTrustAggregator, TrustedReference};
 
 use conflux_config::{StrategyEntry, StrategyKind};
@@ -110,8 +109,7 @@ use conflux_proto::ClientDelta;
 /// `Median-of-Means`) via `CoordinateWiseAggregator`; whole-vector
 /// `robust` members (`Geometric Median`) via `VectorRobustAggregator`;
 /// and history-aware `temporal` members (`FoolsGold`, `Centered
-/// Clipping`, and the research-only `DssAggregator`) with their own
-/// internal state. Conflux's aim is a
+/// Clipping`) with their own internal state. Conflux's aim is a
 /// faithful, extensible catalog of published methods for researchers to
 /// compare against — see each type's own doc comment for its citation;
 /// adding another method is a new small trait impl composed with the
@@ -143,7 +141,6 @@ pub trait Aggregator: Send + Sync {
     /// |---|---|
     /// | [`FoolsGoldAggregator`] | per-client update history |
     /// | [`CenteredClippingAggregator`] | the running reference vector |
-    /// | [`DssAggregator`] | per-client deviation traces |
     /// | (future) FedOpt | first/second-moment estimates |
     ///
     /// Two obligations come with it, both learned the hard way in Tier 6
@@ -213,10 +210,12 @@ pub trait Aggregator: Send + Sync {
 // is what actually turns a config-resolved name into a constructed
 // `Aggregator`; these submissions are what let `conflux_config::lookup`
 // find each name at all, independent of whether anything ever calls
-// `build_aggregator`. `DssAggregator` (see `temporal.rs`) deliberately
-// has no entry here — it's an unvalidated research method, constructed
-// directly by whoever wants to run it, not selectable via a config
-// string.
+// `build_aggregator`.
+//
+// An unregistered `Aggregator` is still constructible directly by
+// whoever wants to run it — which is how an out-of-tree method (a
+// research prototype, say) composes with this catalog without being
+// selectable from a config string.
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "fedavg" }
 }
@@ -488,7 +487,7 @@ pub fn build_aggregator(
         // "ϕ = Krum or any other existing robust aggregation heuristic"
         // — and the catalog follows it rather than pairing with `fedavg`.
         //
-        // That is not a stylistic preference. `docs/research/` §5.14
+        // That is not a stylistic preference. Measurement
         // measured `flanders_fedavg` scoring *worse than undefended
         // FedAvg* against every Sybil attack tested (24.5 vs 17.2 at 20%
         // malicious, 84.0 vs 67.9 at 80%), because a colluder that

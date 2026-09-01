@@ -1,6 +1,6 @@
 //! Real over-the-wire tests: a live tonic server on a bound TCP port,
 //! driven by a real `PullTransport`/`PushTransport` client — not just
-//! prost encode/decode (Phase 0 already covers that in `conflux-proto`).
+//! prost encode/decode.
 
 use std::sync::Arc;
 

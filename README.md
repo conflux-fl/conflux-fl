@@ -1,4 +1,4 @@
-# Conflux
+# Conflux Federated Learning Framework (Conflux-FL)
 
 **A configurable, extensible, Rust-native federated learning framework.**
 
@@ -11,44 +11,44 @@ heterogeneous client contributions *conflux*-ing into one stronger
 global model.
 
 ```
-   client A ─┐
-   client B ─┼─▶  Conflux round pipeline  ─▶  one global model
-   client C ─┘     (select · train · aggregate · repeat)
+ client A ─┐
+ client B ─┼─▶ Conflux round pipeline ─▶ one global model
+ client C ─┘ (select · train · aggregate · repeat)
 ```
 
 ## What it offers
 
 - **A faithful, extensible catalog of published aggregation methods** —
-  FedAvg, Krum, Multi-Krum, Trimmed Mean, Median, FABA, Bulyan,
-  Geometric Median (RFA), Median-of-Means, Divide-and-Conquer, and
-  FoolsGold, eleven methods today, each a literal implementation of a
-  specific cited paper, not a framework-modified variant. See
-  [`docs/AGGREGATION_LANDSCAPE.md`](docs/AGGREGATION_LANDSCAPE.md) for
-  the full landscape, including what's deliberately not built yet and
-  why.
+ FedAvg, Krum, Multi-Krum, Trimmed Mean, Median, FABA, Bulyan,
+ Geometric Median (RFA), Median-of-Means, Divide-and-Conquer, and
+ FoolsGold, eleven methods today, each a literal implementation of a
+ specific cited paper, not a framework-modified variant. See
+ [`docs/AGGREGATION_LANDSCAPE.md`](docs/AGGREGATION_LANDSCAPE.md) for
+ the full landscape, including what's deliberately not built yet and
+ why.
 - **Four deployment topologies from one codebase** — `cross_silo`
-  (institutions, push+mTLS), `cross_device` (phones, pull+JWT),
-  `crowdsource` (public participants, stricter reputation), `edge`
-  (IoT) — selected entirely by configuration.
+ (institutions, push+mTLS), `cross_device` (phones, pull+JWT),
+ `crowdsource` (public participants, stricter reputation), `edge`
+ (IoT) — selected entirely by configuration.
 - **A layered, explainable configuration system** — every parameter
-  resolves through a fixed six-tier precedence chain (builtin →
-  topology → mode → experiment file → env var → CLI), and every
-  resolved value logs which tier it came from, so a misconfigured
-  deployment is debuggable without reading source.
+ resolves through a fixed six-tier precedence chain (builtin →
+ topology → mode → experiment file → env var → CLI), and every
+ resolved value logs which tier it came from, so a misconfigured
+ deployment is debuggable without reading source.
 - **Differential privacy and epsilon accounting** — clip + Gaussian
-  noise (Abadi et al., 2016), RDP composition (Mironov 2017).
+ noise (Abadi et al., 2016), RDP composition (Mironov 2017).
 - **Real backends, not just an in-memory demo** — `RedisRegistry`,
-  `PostgresStore`, `S3Store`, mTLS, node authentication, all tested
-  against real Docker-backed infrastructure, not mocks.
+ `PostgresStore`, `S3Store`, mTLS, node authentication, all tested
+ against real Docker-backed infrastructure, not mocks.
 - **A dev-only attack simulation crate** (`conflux-attacks`) — cited
-  implementations of known FL attacks and application-level
-  attack-vs-defense tests, structurally incapable of shipping in the
-  production server binary (never even a dependency of it).
+ implementations of known FL attacks and application-level
+ attack-vs-defense tests, structurally incapable of shipping in the
+ production server binary (never even a dependency of it).
 - **Extensibility as a first-class design goal** — adding a new
-  aggregation method, selector, or privacy mechanism is typically a
-  ~10–30 line trait implementation plus one registry line; the server
-  never needs to change. See [Extending Conflux](#extending-conflux)
-  below.
+ aggregation method, selector, or privacy mechanism is typically a
+ ~10–30 line trait implementation plus one registry line; the server
+ never needs to change. See [Extending Conflux](#extending-conflux)
+ below.
 
 ## Quick start
 
@@ -72,7 +72,7 @@ toy, actual gradient descent with real convergence numbers:
 ```bash
 cd python/conflux_client
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt \
-  -r examples/e2e_pytorch_mnist/requirements.txt
+ -r examples/e2e_pytorch_mnist/requirements.txt
 ./generate_proto.sh && source .venv/bin/activate
 cd examples/e2e_pytorch_mnist
 ./run_demo.sh krum 5 15 --poison --no-reputation
@@ -83,8 +83,8 @@ cd examples/e2e_pytorch_mnist
 held_out_accuracy=0.8890
 
 === 5 trainer clients + 1 eval client, one persistent attacker present every round ===
-round=2  held_out_accuracy=0.7210
-round=6  held_out_accuracy=0.8810
+round=2 held_out_accuracy=0.7210
+round=6 held_out_accuracy=0.8810
 round=15 held_out_accuracy=0.9050
 ```
 
@@ -106,33 +106,33 @@ why each is its own crate, and how to extend it — in
 
 ```mermaid
 graph LR
-    subgraph "Foundation"
-        proto[conflux-proto]
-        config[conflux-config]
-    end
-    subgraph "Server-side pipeline"
-        registry[conflux-registry]
-        store[conflux-store]
-        selector[conflux-selector]
-        net[conflux-net]
-        buffer[conflux-buffer]
-        privacy[conflux-privacy]
-        reputation[conflux-reputation]
-    end
-    subgraph "Algorithm catalog"
-        core[conflux-core]
-    end
-    subgraph "Binaries"
-        server[conflux-server]
-        node[conflux-node]
-    end
-    subgraph "Dev/test-only"
-        attacks[conflux-attacks]
-    end
-    proto & config --> registry & store & selector & net & buffer & privacy & reputation & core
-    registry & store & selector & net & buffer & privacy & reputation & core --> server
-    net & proto --> node
-    core -.dev-only.-> attacks
+ subgraph "Foundation"
+ proto[conflux-proto]
+ config[conflux-config]
+ end
+ subgraph "Server-side pipeline"
+ registry[conflux-registry]
+ store[conflux-store]
+ selector[conflux-selector]
+ net[conflux-net]
+ buffer[conflux-buffer]
+ privacy[conflux-privacy]
+ reputation[conflux-reputation]
+ end
+ subgraph "Algorithm catalog"
+ core[conflux-core]
+ end
+ subgraph "Binaries"
+ server[conflux-server]
+ node[conflux-node]
+ end
+ subgraph "Dev/test-only"
+ attacks[conflux-attacks]
+ end
+ proto & config --> registry & store & selector & net & buffer & privacy & reputation & core
+ registry & store & selector & net & buffer & privacy & reputation & core --> server
+ net & proto --> node
+ core -.dev-only.-> attacks
 ```
 
 | Crate | In one line |
@@ -161,16 +161,16 @@ trait impl plus one registry line, with **zero changes to
 // crates/conflux-core/src/robust.rs
 pub struct MyFilter { pub byzantine_fraction: f32 }
 impl UpdateFilter for MyFilter {
-    fn filter(&self, updates: &[ClientDelta]) -> Result<SelectionResult, AggregatorError> {
-        // score, select, return the indices you trust
-    }
+ fn filter(&self, updates: &[ClientDelta]) -> Result<SelectionResult, AggregatorError> {
+ // score, select, return the indices you trust
+ }
 }
 ```
 
 ```rust
 // crates/conflux-core/src/lib.rs
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "my_method" }
+ StrategyEntry { kind: StrategyKind::Aggregator, name: "my_method" }
 }
 // + one match arm in build_aggregator
 ```
@@ -186,32 +186,55 @@ follows: **[docs/EXTENDING.md](docs/EXTENDING.md)**.
 
 | Doc | Read it for |
 |---|---|
-| [docs/spec/conflux-spec-v1.md](docs/spec/conflux-spec-v1.md) | The authoritative design spec |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together, and how the project was built phase by phase |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together — start here |
 | [docs/CRATES.md](docs/CRATES.md) | Crate-by-crate reference and extension points |
 | [docs/USAGE.md](docs/USAGE.md) | Building, running, testing, configuration, durable backends, mTLS |
 | [docs/EXTENDING.md](docs/EXTENDING.md) | Step-by-step: add an aggregator, selector, privacy mechanism, or attack |
 | [docs/AGGREGATION_LANDSCAPE.md](docs/AGGREGATION_LANDSCAPE.md) | The wider aggregation-method literature vs. what's shipped |
 | [docs/E2E_TESTING.md](docs/E2E_TESTING.md) | Real-model/real-dataset test harness design and findings |
-| [docs/FLOWER_COMPARISON.md](docs/FLOWER_COMPARISON.md) | Design cross-check against a real deployed Flower-based platform |
 | [docs/WEB_APP_INTEGRATION.md](docs/WEB_APP_INTEGRATION.md) | Integrating the HTTP admin API into an external application |
-| [docs/adr/](docs/adr/) | One-page *why* behind each architecture decision |
-| [docs/phases/](docs/phases/) | Scoped build/design briefs, one per implementation phase |
-| [docs/research/](docs/research/) | Research proposals evaluated against real Conflux implementations |
-| [docs/STATUS.md](docs/STATUS.md) | **The live source of truth** — what's done, what's next, every known deviation from spec |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what gets merged, and the four things this project is opinionated about |
+| [SECURITY.md](SECURITY.md) | Reporting a vulnerability, and what is deliberately out of scope |
+
+### A note on `ADR NNNN`
+
+Doc comments throughout the code cite decisions as `ADR 0004`,
+`ADR 0012`, and so on. Each is a numbered architecture decision — the
+*why* behind something the code cannot explain about itself, usually
+because a reasonable-looking alternative was considered and rejected.
+
+The citation is deliberately terse so it does not crowd the comment that
+carries it. The decision records themselves are published as a reference
+on the documentation site rather than kept in this repository, which is
+scoped to the framework and its use.
+
+Where a decision matters for using or extending Conflux, the relevant
+document says so in full — [EXTENDING.md](docs/EXTENDING.md) and
+[API_STABILITY.md](docs/API_STABILITY.md) in particular do not assume
+you have read anything else.
 
 ## Project status
 
-367 tests pass workspace-wide; `cargo fmt --check` and
-`cargo clippy --workspace --all-targets` are both clean. See
-[docs/STATUS.md](docs/STATUS.md) for exactly what's shipped and what's
-next — it's kept current every session, unlike this README.
+**501 tests** pass workspace-wide, including a cross-round adversarial
+suite that holds every aggregation method to "never panic, never return
+a non-finite aggregate". `cargo fmt --check` and
+`cargo clippy --workspace --all-targets` are clean, the latter under
+`-D warnings`.
 
-Version `0.2.0`. The `0.x` is deliberate: the public API is still
-moving (several types gained methods or changed signatures in the last
-release), and a `1.0` would be a compatibility promise this codebase
-isn't ready to make. Breaking changes will land in minor versions until
-then.
+Twenty-one server-side aggregation methods across five families, plus
+FedProx client-side. Both client SDKs (Python and Rust) ship. Durable
+Redis / Postgres / S3 backends, mTLS and JWT node authentication, and
+differential privacy with epsilon accounting that survives a restart.
+
+Version `0.1.0`. The `0.x` is deliberate and
+[documented](docs/API_STABILITY.md): the public API is still moving, and
+a `1.0` would be a compatibility promise this codebase is not ready to
+make. Breaking changes land in minor versions until then.
+
+Unpublished research built *on* Conflux lives in a separate repository,
+not here — this one ships literal, cited implementations of published
+methods (ADR 0008).
 
 ## License
 

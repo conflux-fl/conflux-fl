@@ -1,7 +1,0 @@
-aggregator,attack,n_rows,n_seeds,mean_distance_from_true_value,ci95_distance_from_true_value,mean_asr,ci95_asr,first_round_distance,last_round_distance
-dss_fedavg,adaptive_evasion,100,5,1.175255,0.715726,0.109981,0.022852,17.012531,0.842838
-dss_fedavg,persistent_sybil,100,5,16.988764,0.016611,0.200173,0.000196,17.012531,16.956657
-dsscoll_fedavg,adaptive_evasion,100,5,1.078340,0.718833,0.087018,0.023345,17.012531,0.267106
-dsscoll_fedavg,persistent_sybil,100,5,1.082213,0.718659,0.012751,0.008468,17.012531,0.352497
-dssstab_fedavg,adaptive_evasion,100,5,1.175255,0.715726,0.109981,0.022852,17.012531,0.842838
-dssstab_fedavg,persistent_sybil,100,5,16.988764,0.016611,0.200173,0.000196,17.012531,16.956657

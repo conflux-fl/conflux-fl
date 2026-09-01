@@ -4,9 +4,9 @@
 //! `GaussianClippingPrivacy`, `UniformRandomSelector`, `CosineScorer`), so
 //! this phase wires them concretely rather than through
 //! `conflux-config`'s `inventory` registry — see
-//! `docs/phases/phase-5-server.md`'s scope note.
+//! its phase brief's scope note.
 //!
-//! `registry`/`store` are `Arc<AnyRegistry>`/`Arc<AnyStore>` (Phase 8a) —
+//! `registry`/`store` are `Arc<AnyRegistry>`/`Arc<AnyStore>` —
 //! see `backend_selection.rs` for how a caller picks which backend each
 //! resolves to.
 
@@ -68,12 +68,12 @@ pub struct AppState {
     pub registry: Arc<AnyRegistry>,
     /// Where checkpoints are read from and written to.
     pub store: Arc<AnyStore>,
-    /// Phase 8c: always constructed, even when `config.require_node_auth`
+    /// always constructed, even when `config.require_node_auth`
     /// is `false` — toggling the parameter is then just a config change
     /// and a restart, not a wiring change, matching how every other
     /// startup-only config value in this codebase works.
     pub node_allowlist: Arc<AnyNodeAllowlist>,
-    /// Phase 10b: constructed by name from `config.selector.value` /
+    /// constructed by name from `config.selector.value` /
     /// `config.aggregator.value` via each family's own `build_*`
     /// function (`conflux-config`'s `inventory` registry, ADR 0002) —
     /// `Box<dyn _>` rather than a concrete type since the constructed
@@ -100,16 +100,15 @@ pub struct AppState {
     /// and must not be made to — ADR 0011, following ADR 0010's
     /// precedent, and CI's `isolation` job checks it.
     pub trusted_reference: Option<TokioMutex<TrustedReferenceTransport>>,
-    /// Phase 11b: constructed by name from `config.privacy_mechanism.value`
+    /// constructed by name from `config.privacy_mechanism.value`
     /// via `conflux_privacy::build_privacy_mechanism` — the third of the
-    /// three spec §5 families now registry-wired (Phase 10b did the
-    /// other two).
+    /// three spec §5 families now registry-wired.
     pub privacy: Box<dyn PrivacyMechanism>,
     /// Cumulative privacy loss. `Mutex` because recording a round mutates
     /// it and every handler shares one `AppState`.
     pub accountant: Mutex<RdpAccountant>,
     /// `Some` when the privacy accountant's round history is durable
-    /// across restarts (Phase 7d) — `None` reproduces Phase 5's original
+    /// across restarts — `None` reproduces the original
     /// in-memory-only behavior exactly. Deliberately independent of
     /// `store`'s own backend choice: a deployment can persist accounting
     /// via Postgres while checkpointing to S3, say.
@@ -138,7 +137,7 @@ pub struct AppState {
     /// task broadcast to them; pull-mode clients just see it on their next
     /// `fetch_task`.
     pub push_sender: broadcast::Sender<TaskResponse>,
-    /// Phase 16: the public key `register()` verifies `auth_token`
+    /// the public key `register()` verifies `auth_token`
     /// against when `config.auth.value == AuthMode::Jwt`. `None` means
     /// none was supplied — which `verify_jwt_if_required` treats as
     /// permitted in research and refused in production, the same
@@ -151,7 +150,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Everything in-memory, no network backends — unchanged from Phase 5,
+    /// Everything in-memory, no network backends — unchanged from,
     /// still the default every pre-Phase-8 test and call site uses.
     pub fn new(config: ResolvedConfig, initial_weights: Vec<f32>) -> Self {
         Self::assemble(
@@ -165,7 +164,7 @@ impl AppState {
     }
 
     /// Like [`AppState::new`], but the privacy accountant's round history
-    /// is durable across restarts (Phase 7d): connects `PostgresStore`,
+    /// is durable across restarts: connects `PostgresStore`,
     /// replays any rounds it already holds into a fresh `RdpAccountant`
     /// *before* the server answers its first round, and keeps the handle
     /// so every future `record_round` also appends there. `registry`/
@@ -209,7 +208,7 @@ impl AppState {
         ))
     }
 
-    /// The general constructor (Phase 8a): connects whichever backend
+    /// The general constructor: connects whichever backend
     /// `backends` selects for the registry, the store, and privacy
     /// accounting, independently. Fails fast — before connecting
     /// anything — if `mode = production` and any of the three still
@@ -226,7 +225,7 @@ impl AppState {
         // The allow-list backend follows the registry backend's choice
         // rather than being a fully independent fourth axis — a
         // deliberate simplification (one fewer env var), documented in
-        // `docs/phases/phase-8c-node-auth-enforcement.md`.
+        // its phase brief.
         let node_allowlist = match &backends.registry {
             RegistryBackend::Memory => AnyNodeAllowlist::InMemory(InMemoryNodeAllowlist::new()),
             RegistryBackend::Redis { url } => {
@@ -290,7 +289,7 @@ impl AppState {
         };
         let (push_sender, _receiver) = broadcast::channel(16);
 
-        // Phase 10b: every existing call site resolves `selector`/
+        // every existing call site resolves `selector`/
         // `aggregator` through the builtin fallback ("uniform_random"/
         // "fedavg", `conflux-config/src/lib.rs`'s `resolve()`), so this
         // can never actually panic for any test or default deployment —
@@ -298,7 +297,7 @@ impl AppState {
         // the same "startup-invariant, not a runtime Result" treatment
         // `main.rs` already gives config resolution itself. Keeping
         // `assemble` infallible preserves `AppState::new`'s exact
-        // signature (Phase 8a's precedent).
+        // signature.
         let selector = conflux_selector::build_selector(&config.selector.value, seed)
             .expect("unknown selector in resolved config");
         let aggregator = conflux_core::build_aggregator(
@@ -386,7 +385,7 @@ async fn connect_accounting(
     for (noise_multiplier, sample_rate) in log.load_rounds().await? {
         accountant.record_round(noise_multiplier, sample_rate);
     }
-    // Phase 14: always replay per-client history too, regardless of
+    // always replay per-client history too, regardless of
     // which `accounting_scope` is currently configured — a deployment
     // that switches scope between restarts should never silently lose
     // whichever history it wasn't actively using at the time.

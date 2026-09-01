@@ -1,6 +1,6 @@
 //! Real integration tests for the round pipeline: a live gRPC server
 //! driven by a real `conflux-net::PullTransport` client (standing in for
-//! what `conflux-node` will be in Phase 6), the HTTP admin surface
+//! what `conflux-node` will be in), the HTTP admin surface
 //! exercised as real request/response round trips, and direct tests of
 //! `run_round`'s edge cases.
 
@@ -119,7 +119,7 @@ async fn end_to_end_single_round_pull_mode() {
     assert_eq!(summary.num_passed, 1);
 
     // One update, no clipping/noise: FedAvg of a single update is that
-    // update's weights unchanged (confirmed for conflux-core in Phase 4).
+    // update's weights unchanged (confirmed for conflux-core in).
     let checkpoint = state.store.load_latest_weights().await.unwrap();
     assert_eq!(checkpoint, vec![10.0, 20.0]);
     assert_eq!(state.round.load(Ordering::SeqCst), 2);
@@ -127,7 +127,7 @@ async fn end_to_end_single_round_pull_mode() {
 
 #[tokio::test]
 async fn a_round_completes_when_the_client_already_applied_its_own_privacy_transform() {
-    // Phase 17's composition check. `conflux-node` can now clip and noise
+    // the composition check. `conflux-node` can now clip and noise
     // an update before it leaves the node, and the server-side transform
     // still runs on top of whatever arrives. The claim under test is
     // narrow and deliberately so: the two stages compose without the
@@ -279,7 +279,7 @@ async fn budget_exhausted_halts_without_touching_store_or_registry() {
     );
 }
 
-// Phase 14: PerClient accounting.
+// PerClient accounting.
 
 #[tokio::test]
 async fn per_client_budget_excludes_only_the_exhausted_client_when_continuing() {
@@ -481,7 +481,6 @@ async fn submit_delta_reassembles_out_of_order_chunks() {
 
 /// `docker run -d --name conflux-dev-postgres -e POSTGRES_PASSWORD=conflux
 /// -e POSTGRES_DB=conflux -p 15432:5432 postgres:16-alpine` — see
-/// `docs/phases/phase-7d-accountant-persistence.md`.
 const TEST_POSTGRES_URL: &str = "postgres://postgres:conflux@127.0.0.1:15432/conflux";
 
 #[tokio::test]
@@ -536,7 +535,7 @@ async fn restarted_server_replays_privacy_rounds_instead_of_resetting_epsilon() 
 
     // "Restart": a second, entirely independent AppState constructed
     // against the *same* table, simulating a fresh process start. If this
-    // were still Phase 5/7b's in-memory-only accounting, this would start
+    // were still/7b's in-memory-only accounting, this would start
     // at zero rounds recorded regardless of what the first instance did —
     // that's the actual gap this phase closes.
     let state_b = AppState::new_with_persistent_accounting_table(
@@ -635,7 +634,7 @@ async fn app_state_connect_refuses_production_with_in_memory_registry() {
     }
 }
 
-/// Phase 8c: the `/admin/allowlist` HTTP surface exercised as real
+/// the `/admin/allowlist` HTTP surface exercised as real
 /// request/response round trips — add via `POST`, confirm via `GET`,
 /// revoke via `DELETE`, confirm removal — same `tower::ServiceExt::
 /// oneshot` pattern as `health_endpoint_returns_ok` above. A fresh

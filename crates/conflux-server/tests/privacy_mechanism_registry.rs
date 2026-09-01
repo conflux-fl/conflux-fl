@@ -1,7 +1,6 @@
-//! Phase 11b: proves `config.privacy_mechanism.value` actually drives
+//! proves `config.privacy_mechanism.value` actually drives
 //! construction through `conflux-config`'s strategy registry — the third
 //! of the three spec §5 families now wired this way. See
-//! `docs/phases/phase-11b-privacy-mechanism-registry.md`.
 
 use conflux_config::{Mode, Overrides, Topology};
 use conflux_server::AppState;
