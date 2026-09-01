@@ -50,6 +50,22 @@ pub fn lookup(kind: StrategyKind, name: &str) -> Option<&'static StrategyEntry> 
         .find(|entry| entry.kind == kind && entry.name == name)
 }
 
+/// Every name registered under `kind`, sorted.
+///
+/// Exists so an error message can list what *is* available without
+/// hardcoding it. A hand-maintained list in an error string drifts
+/// silently — this crate shipped one that named twelve aggregators while
+/// twenty-one were registered, because nine methods landed after it was
+/// written and nothing connected the two.
+pub fn registered_names(kind: StrategyKind) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = inventory::iter::<StrategyEntry>()
+        .filter(|entry| entry.kind == kind)
+        .map(|entry| entry.name)
+        .collect();
+    names.sort_unstable();
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

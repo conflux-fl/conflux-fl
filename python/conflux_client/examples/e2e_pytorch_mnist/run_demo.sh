@@ -39,6 +39,13 @@ STEPS=10
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 WORK_DIR="$(mktemp -d)"
+# The admin/health port. Overridable because the fixed 8080 is a common
+# port: if anything else on the machine is already listening there, the
+# server cannot bind it, and the health gate below would otherwise be
+# answered by that other service instead. Found the hard way — a local
+# service returning `{"status":true}` satisfied a plain 200 check while
+# `conflux-server`'s own admin listener was panicking with AddrInUse.
+ADMIN_PORT="${CONFLUX_ADMIN_PORT:-8080}"
 PIDS=()
 
 cleanup() {
@@ -97,19 +104,43 @@ CONFLUX_ROUND_TIMEOUT_SECS=60 \
 CONFLUX_CLIP_NORM=1000 \
 CONFLUX_NOISE_MULTIPLIER=0 \
 CONFLUX_INITIAL_WEIGHTS_DIM="$DIM" \
+CONFLUX_HTTP_ADDR="127.0.0.1:$ADMIN_PORT" \
 RUST_LOG=warn \
 "$SERVER_BIN" > "$WORK_DIR/server.log" 2>&1 &
 PIDS+=($!)
 
+# Three conditions, not one. A plain "did something return 200?" is
+# satisfied by any unrelated service already on this port, which is
+# exactly how a run once proceeded against a foreign server while ours
+# had failed to bind.
+#   1. the server process is still alive (catches a bind panic outright)
+#   2. the port answers
+#   3. the answer is *ours* — `conflux-server` reports {"status":"ok"};
+#      a string, where the service that fooled this check returned a
+#      boolean.
+SERVER_PID="${PIDS[-1]}"
+server_healthy() {
+  kill -0 "$SERVER_PID" 2>/dev/null || return 1
+  curl -sf --max-time 2 "http://127.0.0.1:$ADMIN_PORT/health" 2>/dev/null \
+    | grep -q '"status" *: *"ok"'
+}
 for _ in $(seq 1 50); do
-  if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
+  if server_healthy; then break; fi
   sleep 0.2
 done
-if ! curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then
-  echo "server did not become healthy — see $WORK_DIR/server.log"
+if ! server_healthy; then
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "conflux-server exited during startup — see $WORK_DIR/server.log"
+  elif curl -sf --max-time 2 "http://127.0.0.1:$ADMIN_PORT/health" >/dev/null 2>&1; then
+    echo "port $ADMIN_PORT is answering, but not with conflux-server's health response."
+    echo "Something else is listening there. Re-run with a free port:"
+    echo "    CONFLUX_ADMIN_PORT=18080 $0 $*"
+  else
+    echo "server did not become healthy — see $WORK_DIR/server.log"
+  fi
   exit 1
 fi
-echo "server healthy"
+echo "server healthy (admin port $ADMIN_PORT)"
 
 echo ""
 echo "=== 5. starting $N_CLIENTS conflux-node processes ==="

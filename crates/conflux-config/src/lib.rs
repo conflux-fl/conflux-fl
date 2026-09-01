@@ -97,7 +97,7 @@ mod source;
 mod types;
 
 pub use file::{ConfigFileError, load_experiment_file};
-pub use registry::{StrategyEntry, StrategyKind, lookup};
+pub use registry::{StrategyEntry, StrategyKind, lookup, registered_names};
 pub use source::ConfigSource;
 pub use types::{
     AccountingScope, AuthMode, BudgetExhaustedAction, ConnectionMode, LogFormat, Mode,
@@ -264,6 +264,16 @@ pub struct Overrides {
     /// clients up, flattening the accuracy *distribution* at some cost
     /// to its mean — and, less obviously, to convergence speed.
     pub fairness_q: Option<f32>,
+    /// SCAFFOLD's client population `N`.
+    ///
+    /// Builtin fallback `1`. **This is the total number of clients in
+    /// the deployment, not the number sampled into a round** — SCAFFOLD
+    /// damps its control-variate update by `1/N` precisely because only
+    /// `|S|` of the `N` clients contributed evidence this round. It
+    /// cannot be inferred from a batch, which only ever shows `|S|`, and
+    /// substituting `|S|` would quietly turn the damping off and change
+    /// the method. Read only by `scaffold`.
+    pub scaffold_num_clients: Option<u32>,
     /// q-FedAvg's Lipschitz estimate `L`.
     ///
     /// Builtin fallback `1.0`, and a placeholder in the same sense
@@ -415,6 +425,10 @@ pub struct ResolvedConfig {
     ///
     /// See the same field on [`Overrides`] for the full description.
     pub fairness_q: Resolved<f32>,
+    /// SCAFFOLD's client population `N`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub scaffold_num_clients: Resolved<u32>,
     /// q-FedAvg's Lipschitz estimate `L`.
     ///
     /// See the same field on [`Overrides`] for the full description.
@@ -808,6 +822,18 @@ pub fn resolve(
         &file_source,
         &env_var!("FAIRNESS_Q"),
     );
+    let scaffold_num_clients = layer(
+        1_u32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.scaffold_num_clients),
+        env.scaffold_num_clients,
+        cli.scaffold_num_clients,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("SCAFFOLD_NUM_CLIENTS"),
+    );
     let server_lipschitz = layer(
         1.0_f32,
         None,
@@ -985,6 +1011,7 @@ pub fn resolve(
         server_tau,
         server_momentum,
         fairness_q,
+        scaffold_num_clients,
         server_lipschitz,
         reputation_filter_enabled,
         client_side_privacy_transform,
@@ -1122,6 +1149,12 @@ impl ResolvedConfig {
             "fairness_q",
             LoggedValue::Number(self.fairness_q.value.to_string()),
             &self.fairness_q.source,
+        ));
+        lines.push(log_line(
+            format,
+            "scaffold_num_clients",
+            LoggedValue::Number(self.scaffold_num_clients.value.to_string()),
+            &self.scaffold_num_clients.source,
         ));
         lines.push(log_line(
             format,

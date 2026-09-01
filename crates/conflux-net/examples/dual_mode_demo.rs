@@ -46,6 +46,7 @@ impl RoundDispatcher for DemoDispatcher {
             task_id: "round-1-task".to_string(),
             round: 1,
             model_weights: conflux_proto::encode_weights(&[1.0, 2.0, 3.0]),
+            ..Default::default()
         })
     }
 
@@ -60,6 +61,7 @@ impl RoundDispatcher for DemoDispatcher {
                     task_id: format!("round-{round}-task"),
                     round,
                     model_weights: conflux_proto::encode_weights(&[round as f32]),
+                    ..Default::default()
                 })
             })
             .collect();

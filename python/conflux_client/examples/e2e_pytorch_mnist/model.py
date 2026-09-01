@@ -73,16 +73,45 @@ def train_steps(
     lr: float,
     steps: int,
     batch_size: int = 32,
+    mu: float = 0.0,
 ) -> list[float]:
     """Mutates `model` in place via `steps` mini-batch SGD updates, then
-    returns its flattened weights — the value a trainer client submits."""
+    returns its flattened weights — the value a trainer client submits.
+
+    `mu > 0` turns this into **FedProx** (Li, Sahu, Zaheer, Sanjabi,
+    Talwalkar & Smith, 2018/2020, *Federated Optimization in
+    Heterogeneous Networks*), which minimizes
+
+        h_k(w; w_t) = F_k(w) + (mu/2) * ||w - w_t||^2
+
+    instead of the local loss `F_k` alone. The extra term penalizes
+    drifting away from the round's *starting* weights, which is what
+    stops a client with unrepresentative data from running off toward
+    its own local optimum during a long round.
+
+    FedProx is entirely client-side — the server sees an ordinary weight
+    vector and cannot tell it was used (ADR 0004). That is why there is
+    no `aggregator = "fedprox"`: its server half *is* FedAvg, and
+    `build_aggregator` says so explicitly if you try.
+    """
     model.train()
     opt = torch.optim.SGD(model.parameters(), lr=lr)
     n = len(X)
+
+    # The anchor is `w_t`, the weights this round *started* from — not
+    # the previous local iterate. Snapshotted before the first step and
+    # detached, so it is a constant the optimizer never touches.
+    anchor = [p.detach().clone() for p in model.parameters()] if mu > 0 else None
+
     for _ in range(steps):
         idx = torch.randint(0, n, (min(batch_size, n),))
         opt.zero_grad()
         loss = F.cross_entropy(model(X[idx]), y[idx])
+        if anchor is not None:
+            proximal = sum(
+                ((p - a) ** 2).sum() for p, a in zip(model.parameters(), anchor)
+            )
+            loss = loss + (mu / 2.0) * proximal
         loss.backward()
         opt.step()
     return flatten(model)

@@ -165,6 +165,19 @@ class ClientApp(ABC):
     def on_round_start(self, round: int) -> None:
         """Called before `train`. Override for logging or setup."""
 
+    def on_control_variate(self, c: list[float]) -> None:
+        """The server's global control variate `c`, when the configured
+        aggregator maintains one.
+
+        **SCAFFOLD only.** Called immediately before `train` on rounds
+        where the server sent one, so an implementation can hold it and
+        apply the `(c - c_i)` correction during local training. Never
+        called otherwise — which is every aggregator but `scaffold` — so
+        this stays a no-op for clients that do not implement it.
+
+        `c` has the same length as the round's weights.
+        """
+
     def on_round_end(self, round: int, accepted: bool) -> None:
         """Called after submission. `accepted` is the server's own answer
         — `False` usually means the round closed on quorum or timeout
@@ -252,6 +265,14 @@ def run(
 
         weights = decode_weights(task.model_weights)
         app.on_round_start(task.round)
+
+        # SCAFFOLD's `c`, when the server's aggregator maintains one.
+        # `HasField` rather than truthiness: an unset `optional bytes`
+        # reads as empty, and "no control variate" is a different fact
+        # from "a control variate that happens to be empty" — the same
+        # distinction `local_loss` needs on the way up.
+        if task.HasField("control_variate"):
+            app.on_control_variate(decode_weights(task.control_variate))
         result = app.train(weights, task.round)
 
         if len(result.weights) != len(weights):

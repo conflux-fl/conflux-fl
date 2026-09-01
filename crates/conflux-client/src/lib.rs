@@ -234,6 +234,18 @@ pub trait ClientApp {
     /// Called before [`Self::train`]. Override for logging or setup.
     fn on_round_start(&mut self, _round: u64) {}
 
+    /// The server's global control variate `c`, when the configured
+    /// aggregator maintains one.
+    ///
+    /// **SCAFFOLD only.** Called immediately before [`Self::train`] on
+    /// rounds where the server sent one, so an implementation can hold
+    /// it and apply the `(c − c_i)` correction during local training.
+    /// Never called otherwise, which is every aggregator but `scaffold`
+    /// — so this stays a no-op for clients that do not implement it.
+    ///
+    /// `c` has the same length as the round's weights.
+    fn on_control_variate(&mut self, _c: &[f32]) {}
+
     /// Called after submission. `accepted` is the server's own answer —
     /// `false` usually means the round closed on quorum or timeout while
     /// this client was still training, which is ordinary.
@@ -307,6 +319,14 @@ pub async fn run<A: ClientApp>(app: &mut A, config: RunConfig) -> Result<usize, 
 
         let weights = decode_weights(&task.model_weights)?;
         app.on_round_start(task.round);
+
+        // SCAFFOLD's `c`, when the server's aggregator maintains one.
+        // Delivered before `train` because the correction is applied
+        // *during* local training, not after it.
+        if let Some(raw) = task.control_variate.as_ref() {
+            let c = decode_weights(raw)?;
+            app.on_control_variate(&c);
+        }
         let result = app.train(&weights, task.round);
 
         if result.weights.len() != weights.len() {

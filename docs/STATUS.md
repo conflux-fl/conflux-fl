@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** Then Phase 23: the `ClientApp` SDK — ADR 0005's question (3), resolved in Python *and* in Rust, which is what finally lets a client populate ADR 0012's fields at all and takes FedNova/SCAFFOLD/FedProx/q-FedAvg from blocked to buildable. `crates/conflux-client` proves the loop closes with no Python process anywhere (0.67 local-only → 0.996 federated, on a problem no client can solve alone), and needed no server, node, or proto change to do it. Adding it to CI turned up a false published claim: the declared MSRV of 1.85 **did not build eight of the twelve crates that promised it** — corrected to 1.88. 490 tests (23 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fifteen crates. Version 0.2.0.
+Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** Then Phase 23: the `ClientApp` SDK — ADR 0005's question (3), resolved in Python *and* in Rust, which is what finally lets a client populate ADR 0012's fields at all and takes FedNova/SCAFFOLD/FedProx/q-FedAvg from blocked to buildable. `crates/conflux-client` proves the loop closes with no Python process anywhere (0.67 local-only → 0.996 federated, on a problem no client can solve alone), and needed no server, node, or proto change to do it. Adding it to CI turned up a false published claim: the declared MSRV of 1.85 **did not build eight of the twelve crates that promised it** — corrected to 1.88. Then **FedNova and SCAFFOLD** — 21 methods across five families, and the last two blocked on client-side plumbing; SCAFFOLD needed a `TaskResponse` field going *down* that nobody had noticed was missing, making it the only method whose algorithm needs the server to send state to clients. Before that, running `qfedavg` end to end found that **`round.rs` dropped all three ADR 0012 fields on the last hop before aggregation** — `..Default::default()` reset them to `None`, so q-FedAvg silently ran as FedAvg and FedNova/SCAFFOLD would have too. Every unit test on both sides of that function passed. Fixed, pinned by a red-first test, and q-FedAvg is now demonstrated live. Finally **FedProx**, which needed no server work at all — the proximal term implemented client-side where it belongs, measured to cut client drift 62% at `μ = 1.0`, with an honest null result on whether it helps at this harness's scale. **The aggregation catalog is closed: 21 server-side methods across five families, plus FedProx client-side.** 509 tests (23 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fifteen crates. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -1914,6 +1914,304 @@ longer one being made on incomplete information — "one static binary"
 for `crowdsource`/`edge` is now a demonstrated option rather than a
 claim.
 
+## Defect: ADR 0012's fields never reached any aggregator (2026-09-01)
+
+Found by doing the one thing nothing had done — running `qfedavg`
+**end to end** instead of unit-testing its pieces.
+
+### What happened
+
+Three arms of the MNIST harness on one shared non-IID partition
+(Dirichlet α=0.3, shards of 374/92/611/570/1353) produced **byte-identical
+held-out accuracy at every round**: `fedavg`, `qfedavg` with `q=0`, and
+`qfedavg` with `q=1` all read 0.8720 at round 5, 0.8930 at round 9,
+0.8990 at round 15. Three different aggregators cannot agree to four
+decimals. The server's own config log confirmed `aggregator = qfedavg`,
+`fairness_q = 1` — so it was configured correctly and behaving as
+FedAvg anyway.
+
+### The cause
+
+[`round.rs`](../crates/conflux-server/src/round.rs)'s
+`reencode_passing_deltas` rebuilds every `ClientDelta` after the
+reputation filter and before `aggregate`:
+
+```rust
+ClientDelta {
+    client_id: delta.client_id.clone(),
+    round: delta.round,
+    weights: encode_weights(weights),
+    num_samples: delta.num_samples,
+    ..Default::default()      // <- local_steps, local_loss, control_variate -> None
+}
+```
+
+`..Default::default()` reset **all three ADR 0012 fields to `None`** on
+the last hop before aggregation. Every one of them was dead on arrival:
+
+- **q-FedAvg** found no `local_loss`, hit its documented `!any_loss`
+  branch, and silently returned FedAvg.
+- **FedNova** would never have seen `local_steps`.
+- **SCAFFOLD** would never have seen `control_variate`.
+
+The plumbing on either side was correct the whole time. The client SDKs
+send the fields (both of them), and `optional_field_reassembly.rs`
+proves they survive chunk reassembly at the server. Neither test covered
+the one function *between* them that rebuilds the struct — and rebuilding
+is exactly where a field gets dropped.
+
+### Why nothing noticed
+
+**The failure had no symptom.** The experiment converged, the accuracy
+was good, the logs were clean, and the configured method never ran.
+q-FedAvg's fallback is not logged — `conflux-core` has no `tracing`
+dependency at all — so "q-FedAvg degraded to FedAvg" is invisible from
+the outside. That is a direct violation of the project's own "say so,
+out loud" principle, and it is what turned a one-line bug into an
+undetectable one. **Recommended follow-up:** decide whether
+`conflux-core` should take a `tracing` dependency for exactly these
+degradation points. It is an architecture decision, not a fix, so it is
+recorded here rather than made unilaterally.
+
+This is also the clearest argument yet for end-to-end runs over unit
+tests. Every unit test involved passed, before and after.
+
+### The fix, and the proof
+
+The three fields are now carried through explicitly, with a comment
+saying that any future `ClientDelta` field must be added there too. Two
+tests in a new `round::tests` module pin it — the first was **confirmed
+failing before the fix** (`left: None, right: Some(30)`), the second
+asserts absent stays absent rather than becoming `Some(0.0)`.
+
+Re-running the same three arms on the same partition, they now separate:
+
+| Arm | Final held-out accuracy | Loss |
+|---|---|---|
+| `fedavg` (sample-count-weighted mean) | 0.8940 | 0.3309 |
+| `qfedavg`, `q = 0` (reduces to the *unweighted* mean) | 0.8950 | 0.3328 |
+| `qfedavg`, `q = 1` (loss-weighted) | 0.8800 | 0.3702 |
+
+The `q = 0` row is the sanity check: q-FedAvg's math at `q = 0` collapses
+to the unweighted mean, which is *near* but not equal to FedAvg's
+sample-weighted mean — and with shards ranging 92 to 1353 the gap is
+real. Its closeness to `fedavg`, next to `q = 1`'s clear separation, is
+what confirms the code path rather than merely a changed number.
+
+**q-FedAvg scoring lower is not a regression.** It is a *fairness*
+method: it trades mean accuracy for a more uniform distribution across
+clients. Global held-out accuracy is not the quantity it optimizes, and
+this harness does not measure per-client spread — so this run
+establishes that the method is **live**, not that it is beneficial.
+Measuring the fairness claim needs a per-client accuracy metric the
+harness does not have yet.
+
+### Two harness problems found on the way
+
+- **`run_demo.sh`'s health gate is a false positive.** It polls a
+  hardcoded `http://127.0.0.1:8080/health` and accepts any 200. This
+  machine has an unrelated service on `0.0.0.0:8080` answering
+  `{"status":true}`, so the gate passed while `conflux-server`'s own
+  admin listener was panicking with `AddrInUse`. The FL pipeline still
+  worked (gRPC is a separate port), but the check proves nothing. All
+  four demo scripts share the pattern. `CONFLUX_HTTP_ADDR` already makes
+  the port configurable; the script should use it and poll the port it
+  actually set.
+- **The eval client misses rounds** — it prints 1, 2, 4, 5 rather than
+  every round, because it polls `FetchTask` passively and rounds close
+  faster than it samples. Cosmetic, but it makes a run look like it
+  stalled.
+
+## FedNova and SCAFFOLD, and the health gate (2026-09-01)
+
+The last two methods blocked on a client-side change. Both are in
+`optimization.rs`; **21 aggregation methods across five families.**
+
+### FedNova
+
+Wang, Liu, Liang, Joshi & Poor (2020). Normalizes each client's progress
+by the number of local steps it took, so a client that trained longer
+does not silently get more pull — FedAvg averages *endpoints*, which
+biases the objective toward whoever travelled furthest, and that bias
+does not wash out with more rounds.
+
+**Two of this project's own documents said FedNova "fits
+`AveragingWeighting` cleanly". Building it showed that is wrong.**
+Expanding the update and collecting terms leaves
+
+```text
+x_{t+1} = x_t·(1 − τ_eff·S) + τ_eff·Σ_k (p_k/τ_k)·x_k,   S = Σ_k p_k/τ_k
+```
+
+which is a weighted average of the clients' weights only if
+`τ_eff·S = 1`. By Cauchy–Schwarz `(Σ p_k τ_k)(Σ p_k/τ_k) ≥ 1`, with
+equality **iff every `τ_k` is equal** — which is exactly when FedNova
+degenerates to FedAvg. So the single regime where the `AveragingWeighting`
+formulation would have been correct is the regime where the method does
+nothing. FedNova needs `x_t` and is therefore **stateful**, using ADR
+0012's `Mutex` pattern. Both `AGGREGATION_LANDSCAPE.md` and ADR 0012 are
+corrected in place rather than quietly re-stated.
+
+**Measured end to end** — 5 clients, non-IID (Dirichlet α=0.3), and
+deliberately heterogeneous local step counts of `3/10/30/60/90`, since
+equal step counts are precisely where FedNova has no effect:
+
+| Run | Final held-out accuracy |
+|---|---|
+| `fedavg`, client lr 0.1 | 0.886 |
+| `fednova`, client lr 0.1 | **0.718** |
+| `fednova`, client lr 0.03 | 0.875 |
+
+The middle row is not a defect, and the third row is what establishes
+that. FedNova's server step here is `Σ_k τ_eff·p_k/τ_k = 3.50×` FedAvg's
+— a number Cauchy–Schwarz guarantees is ≥ 1 and which this configuration
+makes large. At the harness's stock lr that overshoots; at
+`0.1/3.5 ≈ 0.03` it converges comparably to FedAvg. **The implementation
+is faithful and the hyperparameter was untuned for it** — worth stating
+plainly, because "our new method scored worse" is the kind of result that
+gets quietly dropped.
+
+Adversarial cases pinned: `τ_k = 0` is treated as *absent* rather than
+zero (the formula divides by `τ_k`), an absurd `τ_k` is clamped by
+`MAX_PLAUSIBLE_LOCAL_STEPS`, and a batch reporting no steps at all falls
+back to FedAvg — which is what FedNova reduces to when every `τ` is
+equal anyway.
+
+### SCAFFOLD, and the wire half nobody had noticed was missing
+
+Karimireddy, Kale, Mohri, Reddi, Stich & Suresh (2020). Corrects each
+client's local drift by `(c − c_i)`, the gap between the server's
+estimate of the global update direction and the client's own.
+
+**SCAFFOLD is the first method in the catalog whose algorithm requires
+the server to send *state* down to clients.** ADR 0012 added
+`ClientDelta.control_variate`, which carries each client's `Δc_i`
+**up** — and that is the half everyone had been thinking about. There
+was no field going the other way, so `c` could be maintained perfectly
+and never delivered, and a client that never learns `c` cannot compute
+the correction at all. Added:
+
+- `TaskResponse.control_variate` (`optional bytes`, field 4) — the same
+  additive, backward-compatible move ADR 0012 made upstream.
+- `Aggregator::control_variate()`, defaulting to `None`, so the other
+  twenty methods leave the field absent and nothing changes for them —
+  the shape `requires_trusted_reference` already established.
+- Delivery in **both** connection modes. Populating only `fetch_task`
+  would have made SCAFFOLD work in pull mode and silently degrade in
+  push mode.
+- `on_control_variate` on both client SDKs, called *before* `train`,
+  because the correction is applied during local training rather than
+  after it.
+
+`CONFLUX_SCAFFOLD_NUM_CLIENTS` is new and is the paper's `N` — the
+**total** client population, not the round's sample. SCAFFOLD damps its
+control-variate update by `1/N` precisely because only `|S|` of the `N`
+clients contributed evidence; substituting the batch size would turn
+that damping off and change the method rather than rescale it. A batch
+only ever shows `|S|`, so nothing on the server can infer it.
+
+Pinned by tests: `c` is damped by `N` and not by batch size, a
+wrong-length variate is ignored rather than zero-padded (ADR 0012 says a
+reader of the field must length-check it — the transport cannot, being
+opaque to model architecture), a non-finite variate cannot reach stored
+state, and a client sending no variate still contributes its weights.
+
+### The demo health gate
+
+All four `run_demo.sh` scripts polled a hardcoded
+`http://127.0.0.1:8080/health` and accepted any 200. Now they check
+three things instead: the server process is still alive, the port
+answers, and the answer is *ours* (`conflux-server` reports
+`{"status":"ok"}` — a string, where the unrelated local service that
+fooled the old check returned a boolean). The port is configurable via
+`CONFLUX_ADMIN_PORT` and is now passed to the server as
+`CONFLUX_HTTP_ADDR`, so the script polls the port it actually set.
+
+Verified both ways on a machine that has something else on 8080: it now
+fails immediately with the exact retry command
+(`CONFLUX_ADMIN_PORT=18080 ./run_demo.sh …`), and succeeds on a free
+port.
+
+### Verification
+
+507 tests (484 unit/integration + 23 doc), fmt clean, clippy clean under
+`-D warnings`; 9 Python SDK tests. Adding `TaskResponse.control_variate`
+broke 10 exhaustive struct literals across tests and examples, exactly
+as ADR 0012 predicted — all are fixtures, where `..Default::default()`
+is the right idiom, unlike the pass-through that caused the earlier
+defect.
+
+### Still not built
+
+~~**FedProx**~~ — **built 2026-09-01**, see the entry below. It needed no
+server work at all, which is precisely why it kept getting deferred.
+
+## FedProx, and the catalog closed (2026-09-01)
+
+The last method on the list, and the one that needed no server work at
+all — which is exactly why it had gone unbuilt: there was nothing in
+`conflux-core` to add, so it kept falling off the end of every plan.
+
+**Where it actually lives.** FedProx (Li, Sahu, Zaheer, Sanjabi,
+Talwalkar & Smith, 2018/2020) minimizes
+`h_k(w; w_t) = F_k(w) + (μ/2)‖w − w_t‖²` instead of the local loss
+alone. Every term of that is client-side. `train_steps(..., mu=)` in the
+MNIST harness now implements it, exposed as `--mu`, anchored to the
+round's **starting** weights (snapshotted and detached before the first
+step — not the previous local iterate, which would be a different
+method).
+
+**Measured directly**, since the end-to-end signal is weak by design:
+
+| | drift `‖w − w_t‖` after 40 local steps |
+|---|---|
+| `μ = 0` (plain local SGD) | 3.79 |
+| `μ = 1.0` | **1.42** |
+
+A 62% reduction in how far a client wanders from the round's starting
+point. That is the entire mechanism, measured on its own terms.
+
+**End to end, the honest result is a null one.** On 5 clients, Dirichlet
+α=0.2, heterogeneous step counts `3/10/30/60/90`, 12 rounds:
+
+| Run | Final accuracy | Loss |
+|---|---|---|
+| `μ = 0` (FedAvg) | 0.875 | 0.363 |
+| `μ = 0.05` | 0.873 | 0.365 |
+| `μ = 2.0` | 0.852 | 0.518 |
+
+Small `μ` makes **no measurable difference** at this scale — the gap is
+far inside the ±0.06 run-to-run spread `r4` measured. Large `μ`
+visibly over-constrains, which is the paper's own predicted trade and
+what confirms the knob is genuinely live rather than silently inert.
+FedProx's published benefit comes from settings with more severe
+heterogeneity *and* straggler dropout, and this harness simulates
+neither. Reported rather than tuned toward, and worth stating plainly:
+**implementing a method is not the same as demonstrating it helps.**
+
+### `aggregator = "fedprox"` now teaches instead of confusing
+
+There is deliberately no `fedprox` in the registry — its server half
+*is* FedAvg, and registering it would let a config claim to run FedProx
+while a client with `μ = 0` quietly ran FedAvg. But "unknown aggregator"
+was the wrong answer too: someone writing that name has not made a
+typo. It now returns a dedicated `ClientSideOnly` error naming the
+proximal term and the `--mu` flag.
+
+**And the error's list of alternatives was stale** — it hardcoded twelve
+names while twenty-one were registered, because nine methods landed
+after it was written and nothing connected the two. It is now generated
+from `conflux-config`'s registry, the same source `build_aggregator`
+checks, so the alternatives cannot disagree with what actually works.
+A test asserts every registered name appears in it.
+
+### The catalog is closed
+
+**21 server-side methods across five families, plus FedProx client-side.**
+Every method in `AGGREGATION_LANDSCAPE.md`'s survey is now either built
+or explicitly declined with a reason. 509 tests, clippy clean under
+`-D warnings`, fmt clean, 9 Python SDK tests.
+
 ## Research-line entry point
 
 The DSS research now has its own harness (scaffolded 2026-08-31 with the
@@ -1971,11 +2269,16 @@ remaining method work all converges on one decision:
 Both carry `local_steps`, `local_loss` and `control_variate`, so all four
 are now ordinary build tasks rather than a pending decision:
 
-- **q-FedAvg** stops being inert the moment a client reports a
-  `local_loss` — no server work at all.
+- ~~**q-FedAvg** stops being inert the moment a client reports a
+  `local_loss` — no server work at all.~~ **Wrong, and now fixed.** A
+  client reporting one was necessary but not sufficient: the server
+  dropped the field before aggregating. See the defect entry above.
+  **q-FedAvg is now live and demonstrated end to end.**
 - **FedProx** is entirely client-side; its server half *is* FedAvg.
-- **FedNova** and **SCAFFOLD** need their server-side aggregators
-  written, against fields a client can now actually send.
+- ~~**FedNova** and **SCAFFOLD** need their server-side aggregators
+  written, against fields a client can now actually send.~~ **Both built
+  2026-09-01** — see the entry above. SCAFFOLD also needed a wire field
+  going *down*, which nothing had noticed was missing.
 
 The decision that remains from ADR 0005 is (2), client code
 distribution — which blocks no method.

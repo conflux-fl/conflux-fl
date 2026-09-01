@@ -71,6 +71,13 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         task_id: format!("round-{round}"),
         round,
         model_weights: encode_weights(&weights),
+        // Push mode must carry exactly what pull mode carries, or
+        // SCAFFOLD would work under one connection mode and silently
+        // degrade under the other.
+        control_variate: state
+            .aggregator
+            .control_variate()
+            .map(|c| encode_weights(&c)),
     });
 
     let timeout = Duration::from_secs(state.config.round_timeout_secs.value);
@@ -293,7 +300,23 @@ fn reencode_passing_deltas(
             round: delta.round,
             weights: encode_weights(weights),
             num_samples: delta.num_samples,
-            ..Default::default()
+            // ADR 0012's fields are carried through explicitly rather
+            // than left to `..Default::default()`, which resets them to
+            // `None`. This is the last hop before `aggregate`, so
+            // dropping them here is indistinguishable from a client
+            // never sending them: `qfedavg` finds no `local_loss` and
+            // quietly falls back to FedAvg, FedNova never sees a step
+            // count, SCAFFOLD never sees a control variate. Nothing
+            // fails — the configured method simply does not run.
+            //
+            // Only `weights` is deliberately *not* copied: it is
+            // re-encoded above because server-side privacy may have
+            // transformed it. Any future field added to `ClientDelta`
+            // has to be added here too, and the tests below are what
+            // will notice if it is not.
+            local_steps: delta.local_steps,
+            local_loss: delta.local_loss,
+            control_variate: delta.control_variate.clone(),
         })
         .collect()
 }
@@ -428,4 +451,70 @@ async fn fetch_and_inject_trusted_reference(
         });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conflux_proto::decode_weights;
+
+    /// ADR 0012's three optional fields must survive the *last* hop
+    /// before aggregation.
+    ///
+    /// `optional_field_reassembly.rs` already proves they survive chunk
+    /// reassembly, and the client SDKs prove they are sent. Neither
+    /// covers this function, which is the only place between the two
+    /// that rebuilds a `ClientDelta` from scratch — and rebuilding is
+    /// exactly where a field gets silently dropped.
+    ///
+    /// The cost of dropping them is not a visible failure: `qfedavg`
+    /// reads `local_loss`, finds nothing, and quietly falls back to
+    /// FedAvg. The experiment still converges, the logs stay clean, and
+    /// the configured method never ran. Same for FedNova's
+    /// `local_steps` and SCAFFOLD's `control_variate`.
+    #[test]
+    fn reencoding_preserves_the_optional_fields_the_aggregators_read() {
+        let variate = encode_weights(&[0.5_f32, 0.25]);
+        let delta = ClientDelta {
+            client_id: "c0".to_string(),
+            round: 7,
+            weights: encode_weights(&[1.0_f32, 2.0]),
+            num_samples: 42,
+            local_steps: Some(30),
+            local_loss: Some(2.31),
+            control_variate: Some(variate.clone()),
+        };
+        let decoded = vec![("c0".to_string(), vec![1.0_f32, 2.0])];
+        let passed: HashSet<String> = ["c0".to_string()].into_iter().collect();
+
+        let out = reencode_passing_deltas(std::slice::from_ref(&delta), &decoded, &passed);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(decode_weights(&out[0].weights).unwrap(), vec![1.0, 2.0]);
+        assert_eq!(out[0].num_samples, 42);
+        assert_eq!(out[0].local_steps, Some(30), "FedNova reads this");
+        assert_eq!(out[0].local_loss, Some(2.31), "q-FedAvg reads this");
+        assert_eq!(out[0].control_variate, Some(variate), "SCAFFOLD reads this");
+    }
+
+    /// And absent must stay absent — the same distinction the wire
+    /// format goes to trouble to preserve.
+    #[test]
+    fn reencoding_does_not_invent_optional_fields_that_were_never_sent() {
+        let delta = ClientDelta {
+            client_id: "c0".to_string(),
+            round: 1,
+            weights: encode_weights(&[1.0_f32]),
+            num_samples: 5,
+            ..Default::default()
+        };
+        let decoded = vec![("c0".to_string(), vec![1.0_f32])];
+        let passed: HashSet<String> = ["c0".to_string()].into_iter().collect();
+
+        let out = reencode_passing_deltas(std::slice::from_ref(&delta), &decoded, &passed);
+
+        assert_eq!(out[0].local_steps, None);
+        assert_eq!(out[0].local_loss, None);
+        assert_eq!(out[0].control_variate, None);
+    }
 }

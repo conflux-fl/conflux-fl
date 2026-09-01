@@ -85,7 +85,8 @@ mod weights;
 pub use averaging::{AveragingWeighting, FedAvg, SampleCountWeighting, WeightedAverageAggregator};
 pub use flanders::{ClientFlandersDiagnostic, FlandersAggregator};
 pub use optimization::{
-    FedAvgMAggregator, FedOptAggregator, FedOptParams, FedOptVariant, QFedAvgAggregator,
+    FedAvgMAggregator, FedNovaAggregator, FedOptAggregator, FedOptParams, FedOptVariant,
+    MAX_PLAUSIBLE_LOCAL_STEPS, QFedAvgAggregator, ScaffoldAggregator,
 };
 pub use robust::{
     BulyanFilter, CoordinateWiseAggregator, CoordinateWiseRobustStatistic, DistanceMatrix,
@@ -187,6 +188,24 @@ pub trait Aggregator: Send + Sync {
     /// and `aggregate` is not, so the server does the I/O first and
     /// hands the result across.
     fn set_trusted_reference(&self, _reference: TrustedReference) {}
+
+    /// This method's current global control variate, if it maintains one.
+    ///
+    /// `None` for every method except SCAFFOLD, which is the only one
+    /// whose algorithm requires the server to send state *down* to
+    /// clients as well as receive it. The round pipeline calls this when
+    /// building each `TaskResponse`; returning `None` leaves the wire
+    /// field absent, so nothing changes for the eighteen methods that
+    /// ignore it — the additive-extension rule ADR 0002 exists to
+    /// protect, and the same shape as `requires_trusted_reference`
+    /// above.
+    ///
+    /// Returns owned weights rather than a borrow because the value
+    /// lives behind this aggregator's own `Mutex` (ADR 0012) and a
+    /// reference could not outlive the guard.
+    fn control_variate(&self) -> Option<Vec<f32>> {
+        None
+    }
 }
 
 // Registers every shipped, config-selectable family member into
@@ -218,6 +237,12 @@ inventory::submit! {
 }
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "qfedavg" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "fednova" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "scaffold" }
 }
 inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadagrad" }
@@ -256,19 +281,52 @@ inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "centered_clipping" }
 }
 
+/// The registered aggregator names, formatted for an error message.
+///
+/// Read from `conflux-config`'s compile-time registry, which is the same
+/// source `build_aggregator` checks against — so the list of
+/// alternatives cannot disagree with the set that actually works.
+fn known_aggregators() -> String {
+    conflux_config::registered_names(conflux_config::StrategyKind::Aggregator)
+        .into_iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[derive(Debug, thiserror::Error)]
 /// Why an aggregator name couldn't be turned into an `Aggregator`.
 pub enum AggregatorBuildError {
     #[error(
-        "unknown aggregator \"{0}\" — not a registered conflux-core strategy \
-         (known: \"fedavg\", \"krum\", \"multi_krum\", \"trimmed_mean\", \"median\", \
-         \"faba\", \"bulyan\", \"geometric_median\", \"median_of_means\", \
-         \"divide_and_conquer\", \"foolsgold\", \"centered_clipping\")"
+        "unknown aggregator \"{0}\" — not a registered conflux-core strategy (known: {known})",
+        known = known_aggregators()
     )]
     /// The name isn't in the catalog — almost always a typo in a resolved
     /// `aggregator` config value, since the set of names is fixed at
     /// compile time.
+    ///
+    /// The alternatives are read from the registry rather than written
+    /// out here. The hardcoded version named twelve methods long after
+    /// twenty-one were registered — an error that lists the alternatives
+    /// is only useful if it cannot go stale.
     Unknown(String),
+
+    #[error(
+        "\"{0}\" is a client-side method and has no server-side aggregator — its server \
+         half *is* FedAvg. Set aggregator = \"fedavg\" and enable the method in your \
+         ClientApp instead: FedProx adds the proximal term (mu/2)*||w - w_global||^2 to \
+         the client's own local loss, which the harnesses expose as --mu."
+    )]
+    /// A real, cited method this framework genuinely supports — but
+    /// entirely inside the client's training loop, so naming it here is
+    /// a category error rather than a typo.
+    ///
+    /// Its own variant instead of falling through to [`Self::Unknown`]:
+    /// someone who writes `aggregator = "fedprox"` has not misspelled
+    /// anything, and being told the name is unrecognized would send them
+    /// looking for the wrong thing. ADR 0004's client/server split is
+    /// what makes this category exist at all.
+    ClientSideOnly(String),
 }
 
 /// The algorithm-tuning values `build_aggregator` needs, gathered into
@@ -318,6 +376,12 @@ pub struct AggregatorParams {
     pub fairness_q: Option<f32>,
     /// q-FedAvg's Lipschitz estimate. `None` uses `1.0`.
     pub server_lipschitz: Option<f32>,
+    /// SCAFFOLD's client population `N`. `None` uses `1`.
+    ///
+    /// The total deployment size, not the round's sample — see
+    /// [`ScaffoldAggregator`] for why the distinction changes the method
+    /// rather than merely scaling it.
+    pub scaffold_num_clients: Option<u32>,
 }
 
 /// Builds a variant's parameters, letting config override the paper's
@@ -343,6 +407,7 @@ impl Default for AggregatorParams {
             server_momentum: None,
             fairness_q: None,
             server_lipschitz: None,
+            scaffold_num_clients: None,
         }
     }
 }
@@ -451,6 +516,14 @@ pub fn build_aggregator(
             params.fairness_q.unwrap_or(0.0),
             params.server_lipschitz.unwrap_or(1.0),
         ))),
+        // No parameters of its own: FedNova's behaviour is entirely
+        // determined by what clients report (`local_steps`) and the
+        // sample counts FedAvg already uses.
+        "fednova" => Ok(Box::new(optimization::FedNovaAggregator::new())),
+        "scaffold" => Ok(Box::new(optimization::ScaffoldAggregator::new(
+            params.server_learning_rate.unwrap_or(1.0),
+            params.scaffold_num_clients.unwrap_or(1),
+        ))),
         "fedavgm" => {
             let mut m = FedAvgMAggregator::new();
             if let Some(beta) = params.server_momentum {
@@ -473,6 +546,10 @@ pub fn build_aggregator(
             FedOptVariant::Yogi,
             fedopt_params(FedOptVariant::Yogi, &params),
         ))),
+        // A real method whose whole algorithm lives in the client's
+        // training loop. Answered specifically, because "unknown" would
+        // be actively misleading — the framework does support it.
+        "fedprox" => Err(AggregatorBuildError::ClientSideOnly("fedprox".to_string())),
         other => Err(AggregatorBuildError::Unknown(other.to_string())),
     }
 }
@@ -625,7 +702,41 @@ mod tests {
         // usable here — match directly instead.
         match build_aggregator("does_not_exist", AggregatorParams::default()) {
             Err(AggregatorBuildError::Unknown(name)) => assert_eq!(name, "does_not_exist"),
+            Err(other) => panic!("expected Unknown, got {other}"),
             Ok(_) => panic!("expected an error, got a constructed Aggregator"),
+        }
+    }
+
+    /// FedProx is a real, supported method whose whole algorithm lives
+    /// in the client's training loop, so it must not be reported as an
+    /// unknown name — that would send someone looking for a typo they
+    /// did not make.
+    #[test]
+    fn a_client_side_method_is_distinguished_from_a_typo() {
+        match build_aggregator("fedprox", AggregatorParams::default()) {
+            Err(AggregatorBuildError::ClientSideOnly(name)) => {
+                assert_eq!(name, "fedprox");
+            }
+            Err(other) => panic!("expected ClientSideOnly, got {other}"),
+            Ok(_) => panic!("fedprox has no server-side aggregator to build"),
+        }
+    }
+
+    /// The alternatives an unknown name is offered come from the
+    /// registry, so they cannot drift from the set that actually works.
+    /// A hardcoded list did drift — it named twelve while twenty-one
+    /// were registered.
+    #[test]
+    fn the_unknown_name_error_lists_every_registered_aggregator() {
+        let message = build_aggregator("nope", AggregatorParams::default())
+            .err()
+            .expect("unknown name errors")
+            .to_string();
+        for &name in NAMES {
+            assert!(
+                message.contains(name),
+                "the error should offer {name} as an alternative, got: {message}"
+            );
         }
     }
 

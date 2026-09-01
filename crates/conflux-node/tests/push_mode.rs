@@ -37,6 +37,7 @@ fn task(round: u64, weights: &[f32]) -> TaskResponse {
         task_id: format!("round-{round}"),
         round,
         model_weights: encode_weights(weights),
+        ..Default::default()
     }
 }
 

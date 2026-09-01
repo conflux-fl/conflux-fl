@@ -24,7 +24,8 @@ impl RoundDispatcher for TestDispatcher {
         Ok(TaskResponse {
             task_id: "task-1".to_string(),
             round: 1,
-            model_weights: vec![0, 0, 128, 63], // f32 1.0, little-endian
+            model_weights: vec![0, 0, 128, 63], // f32 1.0, little-endian,
+            ..Default::default()
         })
     }
 
@@ -34,11 +35,13 @@ impl RoundDispatcher for TestDispatcher {
                 task_id: "task-1".to_string(),
                 round: 1,
                 model_weights: vec![],
+                ..Default::default()
             },
             TaskResponse {
                 task_id: "task-2".to_string(),
                 round: 2,
                 model_weights: vec![],
+                ..Default::default()
             },
         ];
         Ok(Box::pin(tokio_stream::iter(tasks.into_iter().map(Ok))))

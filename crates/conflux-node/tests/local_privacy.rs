@@ -34,6 +34,7 @@ impl RoundDispatcher for RecordingUpstream {
             task_id: "round-1".to_string(),
             round: 1,
             model_weights: Vec::new(),
+            ..Default::default()
         })
     }
 

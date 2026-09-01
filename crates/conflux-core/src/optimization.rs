@@ -1211,3 +1211,790 @@ mod tests {
         assert!(p1[0] > 100.0, "the mean-based Δ should not: {p1:?}");
     }
 }
+
+/// The largest local step count this method will honour.
+///
+/// `local_steps` is self-reported and unauthenticated, exactly like
+/// `num_samples`, and FedNova divides by it — so it is the *small*
+/// values that are dangerous, not the large ones. A client reporting
+/// `τ_k = 1` while everyone else reports 1000 buys a thousandfold
+/// amplification of its own update. The ceiling here does not fix that
+/// (nothing on the server can, without authenticating the count); it
+/// bounds `τ_eff`, which a single client claiming `u32::MAX` would
+/// otherwise drag to absurdity for the whole batch.
+///
+/// See [`crate::weights`]'s `MAX_PLAUSIBLE_SAMPLE_COUNT` for the same
+/// reasoning applied to the other self-reported scalar.
+pub const MAX_PLAUSIBLE_LOCAL_STEPS: u32 = 1 << 20;
+
+/// **FedNova** — Wang, Liu, Liang, Joshi & Poor (2020), *Tackling the
+/// Objective Inconsistency Problem in Heterogeneous Federated
+/// Optimization*, NeurIPS.
+///
+/// # The problem it solves
+///
+/// FedAvg averages clients' *final weights*. When clients take different
+/// numbers of local steps — because they have different amounts of data,
+/// or different hardware, or simply drop out early — the client that
+/// took more steps has travelled further, and averaging the endpoints
+/// silently weights it more. The optimum FedAvg converges to is then not
+/// the optimum of the objective anyone wrote down. That is the
+/// "objective inconsistency" of the title, and it is a bias, not noise:
+/// more rounds do not remove it.
+///
+/// FedNova normalizes each client's *progress* by the number of steps it
+/// took, then rescales by the batch's effective step count:
+///
+/// ```text
+/// x_{t+1} = x_t − τ_eff · Σ_k p_k · (x_t − x_k) / τ_k
+///     p_k = n_k / Σn                (the FedAvg weight)
+///     τ_eff = Σ_k p_k τ_k           (weighted mean step count)
+/// ```
+///
+/// # Why this is stateful, contradicting two of this project's own docs
+///
+/// `AGGREGATION_LANDSCAPE.md` and ADR 0012 both record FedNova as
+/// "fits `AveragingWeighting` cleanly" — a per-client reweighting needing
+/// only the new `local_steps` field. **That is wrong**, and it is worth
+/// writing down why, because the error is not obvious.
+///
+/// Expanding the update above and collecting the `x_t` terms gives
+///
+/// ```text
+/// x_{t+1} = x_t · (1 − τ_eff·S) + τ_eff · Σ_k (p_k/τ_k) · x_k,
+///     where S = Σ_k p_k/τ_k
+/// ```
+///
+/// which is a weighted average of the clients' weights *only* if
+/// `τ_eff·S = 1`. By Cauchy–Schwarz, `(Σ p_k τ_k)(Σ p_k/τ_k) ≥ 1` with
+/// equality **iff every `τ_k` is equal** — which is precisely the case
+/// where FedNova degenerates to FedAvg and does nothing. So the one
+/// regime where the `AveragingWeighting` formulation would be correct is
+/// the regime where the method has no effect; everywhere it matters, the
+/// `x_t` term is real and must be carried across rounds.
+///
+/// It therefore follows ADR 0012's `Mutex` pattern like the rest of this
+/// module.
+///
+/// # Fidelity notes
+///
+/// - **`x_t` is this aggregator's own previous output**, the same
+///   approach [`FedOptAggregator`] and [`QFedAvgAggregator`] take, and
+///   for the same reason: the server's checkpoint is what it last
+///   emitted.
+/// - **A client reporting no `local_steps` is given the batch's mean
+///   `τ`**, so it is weighted exactly as FedAvg would weight it — no
+///   opinion, no penalty. A batch where *nobody* reports one falls back
+///   to FedAvg outright, because with all `τ_k` equal that is what
+///   FedNova reduces to anyway.
+/// - **`τ_k = 0` is treated as absent, not as zero.** The formula
+///   divides by `τ_k`; a client honestly reporting that it took no steps
+///   has no normalized direction to contribute, and one dishonestly
+///   reporting it would otherwise produce an infinity.
+pub struct FedNovaAggregator {
+    /// `x_t`. ADR 0012's pattern.
+    state: Mutex<Option<Vec<f32>>>,
+}
+
+impl Default for FedNovaAggregator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FedNovaAggregator {
+    /// A fresh aggregator with no `x_t` yet — round one seeds it.
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(None),
+        }
+    }
+}
+
+/// One client's `(p_k, τ_k)`, already validated.
+struct NovaTerm {
+    /// `n_k / Σn`, in `f64` — see the module's overflow notes.
+    p: f64,
+    /// `τ_k`, clamped to [`MAX_PLAUSIBLE_LOCAL_STEPS`] and never zero.
+    tau: f64,
+}
+
+impl Aggregator for FedNovaAggregator {
+    fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
+        if updates.is_empty() {
+            return Err(AggregatorError::EmptyBatch);
+        }
+        let decoded = decode_and_validate(updates)?;
+        let dim = decoded[0].len();
+
+        let mut guard = self
+            .state
+            .lock()
+            .expect("FedNovaAggregator state mutex poisoned");
+
+        let reseed = match guard.as_ref() {
+            None => true,
+            // A dimension change means a different model; the stored
+            // `x_t` describes something else and differencing against it
+            // would be meaningless.
+            Some(x) => x.len() != dim,
+        };
+        if reseed {
+            let seed = crate::FedAvg::default().aggregate(updates)?;
+            *guard = Some(seed.clone());
+            return Ok(seed);
+        }
+
+        // `τ_k = 0` is not a step count, it is a missing one — see the
+        // type docs.
+        let reported: Vec<Option<u32>> = updates
+            .iter()
+            .map(|u| u.local_steps.filter(|t| *t > 0))
+            .collect();
+        if reported.iter().all(Option::is_none) {
+            // Nobody is running FedNova. With every `τ_k` equal (to
+            // whatever we would substitute), FedNova *is* FedAvg, so
+            // this returns the same answer by a shorter route rather
+            // than pretending to have done something else.
+            let out = crate::FedAvg::default().aggregate(updates)?;
+            guard.as_mut().expect("checked above").copy_from_slice(&out);
+            return Ok(out);
+        }
+
+        // The mean of what *was* reported, substituted for what was not.
+        let reported_sum: f64 = reported.iter().flatten().map(|t| *t as f64).sum();
+        let reported_count = reported.iter().flatten().count() as f64;
+        let default_tau = (reported_sum / reported_count).max(1.0);
+
+        // `p_k` normalized here rather than after accumulating: summing
+        // raw `num_samples * weight` products first is the overflow that
+        // Tier 6 found in four separate places.
+        let total_samples: f64 = updates.iter().map(|u| u.num_samples as f64).sum();
+        let equal_share = 1.0 / updates.len() as f64;
+
+        let terms: Vec<NovaTerm> = updates
+            .iter()
+            .zip(&reported)
+            .map(|(u, tau)| NovaTerm {
+                // A batch reporting no samples at all is degenerate but
+                // legal; weighting it uniformly beats dividing by zero.
+                p: if total_samples > 0.0 {
+                    u.num_samples as f64 / total_samples
+                } else {
+                    equal_share
+                },
+                tau: tau
+                    .map(|t| t.min(MAX_PLAUSIBLE_LOCAL_STEPS) as f64)
+                    .unwrap_or(default_tau),
+            })
+            .collect();
+
+        let tau_eff: f64 = terms.iter().map(|t| t.p * t.tau).sum();
+        if !tau_eff.is_finite() || tau_eff <= 0.0 {
+            let out = crate::FedAvg::default().aggregate(updates)?;
+            guard.as_mut().expect("checked above").copy_from_slice(&out);
+            return Ok(out);
+        }
+
+        let global = guard.as_mut().expect("checked above");
+
+        // x_{t+1} = x_t + τ_eff · Σ_k (p_k/τ_k) · (x_k − x_t)
+        //
+        // Written as an ascent on `(x_k − x_t)` rather than a descent on
+        // `(x_t − x_k)` to match this crate's sign convention, and
+        // accumulated in `f64`: `x_k − x_t` between two finite `f32`s can
+        // reach `2·f32::MAX`, which overflows `f32` before the scaling
+        // that would have brought it back.
+        let mut delta = vec![0.0f64; dim];
+        for (term, w) in terms.iter().zip(&decoded) {
+            let scale = tau_eff * term.p / term.tau;
+            if !scale.is_finite() {
+                continue;
+            }
+            for (acc, (x, prev)) in delta.iter_mut().zip(w.iter().zip(global.iter())) {
+                *acc += scale * (*x as f64 - *prev as f64);
+            }
+        }
+
+        let next: Vec<f32> = global
+            .iter()
+            .zip(&delta)
+            .map(|(x, d)| (*x as f64 + d) as f32)
+            .collect();
+
+        if let Some(index) = next.iter().position(|w| !w.is_finite()) {
+            return Err(AggregatorError::NonFiniteWeights {
+                client_id: "<fednova server optimizer>".to_string(),
+                index,
+            });
+        }
+
+        global.copy_from_slice(&next);
+        Ok(next)
+    }
+}
+
+/// **SCAFFOLD** — Karimireddy, Kale, Mohri, Reddi, Stich & Suresh (2020),
+/// *SCAFFOLD: Stochastic Controlled Averaging for Federated Learning*,
+/// ICML.
+///
+/// # The problem it solves
+///
+/// On non-IID data each client's local optimum sits somewhere different
+/// from the global one, so local training *drifts* toward it. Averaging
+/// drifted models gives a global model biased toward whoever drifted
+/// furthest — and unlike a variance problem, more clients per round does
+/// not fix it. SCAFFOLD corrects each client's gradient by
+/// `(c − c_i)`: the difference between the server's estimate of the
+/// global update direction and this client's own. The correction cancels
+/// the client's drift without either side needing the other's data.
+///
+/// # The half that did not exist before this method
+///
+/// SCAFFOLD is the first method in Conflux whose algorithm requires the
+/// server to send *state* down to clients, not just weights. ADR 0012
+/// added `ClientDelta.control_variate`, carrying each client's `Δc_i`
+/// **up**; there was no corresponding field going down, so `c` could be
+/// maintained and never delivered — and a client that never learns `c`
+/// cannot compute `(c − c_i)`. `TaskResponse.control_variate` and the
+/// [`Aggregator::control_variate`] hook are that missing half.
+///
+/// # The update (Algorithm 1, option II)
+///
+/// ```text
+/// x ← x + η_g · (1/|S|) · Σ_{i∈S} Δy_i
+/// c ← c + (1/N)  · Σ_{i∈S} Δc_i
+/// ```
+///
+/// Note the two denominators differ, and deliberately so: the model moves
+/// by the mean over *participating* clients, while the control variate is
+/// damped by the total client population `N`, because it is an estimate
+/// of a global quantity that only `|S|` clients contributed evidence
+/// about this round. Using `|S|` for both would let `c` swing with
+/// whoever happened to be sampled.
+///
+/// # Fidelity notes
+///
+/// - **`Δy_i` is derived, not received.** Conflux transmits full weight
+///   vectors rather than deltas (ADR 0004), so `Δy_i = y_i − x_t` is
+///   computed here against this aggregator's own previous output — the
+///   same approach [`FedOptAggregator`], [`QFedAvgAggregator`] and
+///   [`FedNovaAggregator`] take.
+/// - **`Δc_i` is received**, in `ClientDelta.control_variate`, and is
+///   length-checked against the model. The transport cannot check it
+///   (ADR 0004: it is opaque to model architecture), so this is the
+///   first place that can.
+/// - **`num_clients` is the `N` above.** It cannot be inferred from a
+///   batch, which only ever shows `|S|`. Defaulting it to the batch size
+///   would silently turn the `1/N` damping into `1/|S|` and change the
+///   method.
+/// - **A client that sends no `Δc_i` still contributes its `Δy_i`.**
+///   Excluding it would discard real training; contributing nothing to
+///   `c` is the honest reading of "this client is not running SCAFFOLD".
+pub struct ScaffoldAggregator {
+    /// `η_g`, the global step size. `1.0` is the paper's default and
+    /// makes the model update the plain mean of the `Δy_i`.
+    pub server_learning_rate: f32,
+    /// `N` — the total client population, not this round's sample.
+    pub num_clients: u32,
+    /// `(x_t, c)`. ADR 0012's pattern, as everywhere else in this module.
+    state: Mutex<Option<(Vec<f32>, Vec<f32>)>>,
+}
+
+impl Default for ScaffoldAggregator {
+    fn default() -> Self {
+        Self::new(1.0, 1)
+    }
+}
+
+impl ScaffoldAggregator {
+    /// `server_learning_rate` is `η_g`; `num_clients` is `N`.
+    ///
+    /// `num_clients` is clamped to at least 1 — a zero would divide the
+    /// control-variate update by nothing.
+    pub fn new(server_learning_rate: f32, num_clients: u32) -> Self {
+        Self {
+            server_learning_rate,
+            num_clients: num_clients.max(1),
+            state: Mutex::new(None),
+        }
+    }
+}
+
+impl Aggregator for ScaffoldAggregator {
+    fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
+        if updates.is_empty() {
+            return Err(AggregatorError::EmptyBatch);
+        }
+        let decoded = decode_and_validate(updates)?;
+        let dim = decoded[0].len();
+
+        let mut guard = self
+            .state
+            .lock()
+            .expect("ScaffoldAggregator state mutex poisoned");
+
+        let reseed = match guard.as_ref() {
+            None => true,
+            Some((x, _)) => x.len() != dim,
+        };
+        if reseed {
+            // Round one: no `x_t` to difference against, so there is no
+            // `Δy_i` and no correction to apply. The plain mean is the
+            // answer, and `c` starts at zero — the paper's own
+            // initialization, and the value that makes the correction a
+            // no-op until evidence arrives.
+            let seed = crate::FedAvg::default().aggregate(updates)?;
+            *guard = Some((seed.clone(), vec![0.0; dim]));
+            return Ok(seed);
+        }
+
+        let (global, control) = guard.as_mut().expect("checked above");
+
+        // x ← x + η_g · mean_i(Δy_i), with 1/|S| folded into each term
+        // rather than applied to a total that has already overflowed —
+        // the Tier 6 lesson, applied here rather than rediscovered.
+        let share = 1.0 / decoded.len() as f64;
+        let lr = self.server_learning_rate as f64;
+        let mut model_step = vec![0.0f64; dim];
+        for w in &decoded {
+            for (acc, (y, x)) in model_step.iter_mut().zip(w.iter().zip(global.iter())) {
+                // f64: two finite f32s can be 2·f32::MAX apart, which
+                // overflows f32 before any scaling brings it back.
+                *acc += share * (*y as f64 - *x as f64);
+            }
+        }
+
+        // c ← c + (1/N) · Σ Δc_i, over whoever actually sent one.
+        let damping = 1.0 / self.num_clients as f64;
+        let mut variate_step = vec![0.0f64; dim];
+        let mut contributors = 0usize;
+        for update in updates {
+            let Some(raw) = update.control_variate.as_ref() else {
+                continue;
+            };
+            let Ok(dc) = conflux_proto::decode_weights(raw) else {
+                // Undecodable is a malformed submission, not a zero
+                // correction. Skipped rather than guessed at.
+                continue;
+            };
+            // The length check ADR 0012 says an aggregator reading this
+            // field must perform: a short or long variate is not
+            // interpretable against this model, and zero-padding it
+            // would manufacture a correction the client never sent.
+            if dc.len() != dim || dc.iter().any(|v| !v.is_finite()) {
+                continue;
+            }
+            contributors += 1;
+            for (acc, v) in variate_step.iter_mut().zip(&dc) {
+                *acc += damping * *v as f64;
+            }
+        }
+
+        let next: Vec<f32> = global
+            .iter()
+            .zip(&model_step)
+            .map(|(x, d)| (*x as f64 + lr * d) as f32)
+            .collect();
+
+        if let Some(index) = next.iter().position(|w| !w.is_finite()) {
+            return Err(AggregatorError::NonFiniteWeights {
+                client_id: "<scaffold server optimizer>".to_string(),
+                index,
+            });
+        }
+
+        // `c` is only advanced once the model update is known good.
+        // Writing a state that a later validation then rejects is
+        // exactly how `centered_clipping` was left permanently `NaN`.
+        if contributors > 0 {
+            let next_control: Vec<f32> = control
+                .iter()
+                .zip(&variate_step)
+                .map(|(c, d)| (*c as f64 + d) as f32)
+                .collect();
+            if next_control.iter().all(|v| v.is_finite()) {
+                control.copy_from_slice(&next_control);
+            }
+        }
+
+        global.copy_from_slice(&next);
+        Ok(next)
+    }
+
+    /// Hands `c` to the round pipeline for dispatch. This is the half of
+    /// SCAFFOLD that no other method needs.
+    fn control_variate(&self) -> Option<Vec<f32>> {
+        self.state
+            .lock()
+            .expect("ScaffoldAggregator state mutex poisoned")
+            .as_ref()
+            .map(|(_, c)| c.clone())
+    }
+}
+
+#[cfg(test)]
+mod fednova_tests {
+    use super::*;
+    use conflux_proto::encode_weights;
+
+    fn delta_ns(id: &str, weights: &[f32], num_samples: u64, steps: Option<u32>) -> ClientDelta {
+        ClientDelta {
+            client_id: id.to_string(),
+            round: 1,
+            weights: encode_weights(weights),
+            num_samples,
+            local_steps: steps,
+            ..Default::default()
+        }
+    }
+
+    /// Round one has no `x_t` to difference against, so it is FedAvg and
+    /// establishes the state — the same contract `FedOpt` and `q-FedAvg`
+    /// have.
+    #[test]
+    fn the_first_round_is_fedavg_and_seeds_the_state() {
+        let agg = FedNovaAggregator::new();
+        let batch = vec![
+            delta_ns("a", &[0.0, 0.0], 10, Some(5)),
+            delta_ns("b", &[2.0, 4.0], 10, Some(50)),
+        ];
+        let out = agg.aggregate(&batch).unwrap();
+        assert_eq!(out, vec![1.0, 2.0], "equal samples -> plain mean");
+    }
+
+    /// The property the method exists for. Two clients, equal data, but
+    /// one trained 10x longer. FedAvg averages the endpoints and lets the
+    /// long-running client pull the model most of the way to itself;
+    /// FedNova normalizes by step count first.
+    #[test]
+    fn a_client_that_trained_longer_does_not_get_extra_pull() {
+        let seed = vec![
+            delta_ns("a", &[0.0], 10, Some(1)),
+            delta_ns("b", &[0.0], 10, Some(1)),
+        ];
+
+        let nova = FedNovaAggregator::new();
+        nova.aggregate(&seed).unwrap(); // x_t = [0.0]
+
+        // `a` took 1 step and moved 1.0; `b` took 10 steps and moved 10.0.
+        // Per *step* they made identical progress.
+        let batch = vec![
+            delta_ns("a", &[1.0], 10, Some(1)),
+            delta_ns("b", &[10.0], 10, Some(10)),
+        ];
+
+        let fedavg = crate::FedAvg::default().aggregate(&batch).unwrap();
+        let out = nova.aggregate(&batch).unwrap();
+
+        // FedAvg lands at the midpoint of the endpoints, 5.5 — dominated
+        // by whoever ran longer.
+        assert!((fedavg[0] - 5.5).abs() < 1e-5, "fedavg = {}", fedavg[0]);
+
+        // FedNova: p = 0.5 each, tau_eff = 0.5*1 + 0.5*10 = 5.5.
+        // step = 5.5 * (0.5/1 * 1.0 + 0.5/10 * 10.0) = 5.5 * 1.0 = 5.5
+        // Both clients contribute the *same* normalized direction (1.0
+        // per step), which is the whole point — neither dominates.
+        assert!((out[0] - 5.5).abs() < 1e-4, "fednova = {}", out[0]);
+
+        // Now the case that separates them: `b` runs 10x longer but makes
+        // the *same total* progress, i.e. far less per step.
+        let nova2 = FedNovaAggregator::new();
+        nova2.aggregate(&seed).unwrap();
+        let batch2 = vec![
+            delta_ns("a", &[1.0], 10, Some(1)),
+            delta_ns("b", &[1.0], 10, Some(10)),
+        ];
+        let fedavg2 = crate::FedAvg::default().aggregate(&batch2).unwrap();
+        let out2 = nova2.aggregate(&batch2).unwrap();
+
+        assert!((fedavg2[0] - 1.0).abs() < 1e-5, "fedavg2 = {}", fedavg2[0]);
+        // tau_eff = 5.5; step = 5.5 * (0.5*1.0 + 0.05*1.0) = 3.025
+        assert!(
+            (out2[0] - 3.025).abs() < 1e-3,
+            "fednova2 = {} — must differ from fedavg's 1.0",
+            out2[0]
+        );
+    }
+
+    /// With every client on the same step count FedNova *is* FedAvg —
+    /// the degenerate case, and the one where the discarded
+    /// `AveragingWeighting` formulation would have been correct.
+    #[test]
+    fn equal_step_counts_reduce_exactly_to_fedavg() {
+        let seed = vec![
+            delta_ns("a", &[0.0], 10, Some(7)),
+            delta_ns("b", &[0.0], 10, Some(7)),
+        ];
+        let agg = FedNovaAggregator::new();
+        agg.aggregate(&seed).unwrap();
+
+        let batch = vec![
+            delta_ns("a", &[1.0, -2.0], 10, Some(7)),
+            delta_ns("b", &[3.0, 6.0], 30, Some(7)),
+        ];
+        let expected = crate::FedAvg::default().aggregate(&batch).unwrap();
+        let out = agg.aggregate(&batch).unwrap();
+
+        for (o, e) in out.iter().zip(&expected) {
+            assert!((o - e).abs() < 1e-4, "got {o}, fedavg says {e}");
+        }
+    }
+
+    /// A batch where nobody reports a step count must not silently
+    /// invent one — it falls back to FedAvg, which is what FedNova
+    /// reduces to when every tau is equal anyway.
+    #[test]
+    fn a_batch_reporting_no_steps_falls_back_to_fedavg() {
+        let seed = vec![
+            delta_ns("a", &[0.0], 10, None),
+            delta_ns("b", &[0.0], 10, None),
+        ];
+        let agg = FedNovaAggregator::new();
+        agg.aggregate(&seed).unwrap();
+
+        let batch = vec![
+            delta_ns("a", &[1.0], 10, None),
+            delta_ns("b", &[5.0], 30, None),
+        ];
+        let expected = crate::FedAvg::default().aggregate(&batch).unwrap();
+        assert_eq!(agg.aggregate(&batch).unwrap(), expected);
+    }
+
+    /// `tau = 0` is a missing step count, not a zero one. The formula
+    /// divides by tau; treating a reported zero literally produces an
+    /// infinity from a finite, validation-passing submission — the exact
+    /// failure shape Tier 6 found four times elsewhere.
+    #[test]
+    fn a_zero_step_count_does_not_divide_by_zero() {
+        let seed = vec![
+            delta_ns("a", &[0.0], 10, Some(4)),
+            delta_ns("b", &[0.0], 10, Some(4)),
+        ];
+        let agg = FedNovaAggregator::new();
+        agg.aggregate(&seed).unwrap();
+
+        let batch = vec![
+            delta_ns("a", &[1.0], 10, Some(0)),
+            delta_ns("b", &[2.0], 10, Some(4)),
+        ];
+        let out = agg.aggregate(&batch).unwrap();
+        assert!(out[0].is_finite(), "got {}", out[0]);
+    }
+
+    /// An absurd step count must not drag `tau_eff` — and therefore the
+    /// whole batch's step size — to infinity.
+    #[test]
+    fn an_absurd_step_count_is_clamped_rather_than_believed() {
+        let seed = vec![
+            delta_ns("a", &[0.0], 10, Some(4)),
+            delta_ns("b", &[0.0], 10, Some(4)),
+        ];
+        let agg = FedNovaAggregator::new();
+        agg.aggregate(&seed).unwrap();
+
+        let batch = vec![
+            delta_ns("a", &[1.0], 10, Some(u32::MAX)),
+            delta_ns("b", &[1.0], 10, Some(4)),
+        ];
+        let out = agg.aggregate(&batch).unwrap();
+        assert!(out[0].is_finite(), "got {}", out[0]);
+    }
+
+    /// Cross-round: extreme-but-finite weights must not poison `x_t` for
+    /// every later round, which is how `centered_clipping` was broken.
+    #[test]
+    fn an_extreme_finite_update_does_not_permanently_poison_the_state() {
+        let agg = FedNovaAggregator::new();
+        agg.aggregate(&[
+            delta_ns("a", &[0.0], 10, Some(2)),
+            delta_ns("b", &[0.0], 10, Some(2)),
+        ])
+        .unwrap();
+
+        let hostile = vec![
+            delta_ns("a", &[f32::MAX], 10, Some(1)),
+            delta_ns("b", &[-f32::MAX], 10, Some(1000)),
+        ];
+        // May legitimately reject; must not panic, and must not store
+        // a non-finite state.
+        let _ = agg.aggregate(&hostile);
+
+        let honest = vec![
+            delta_ns("a", &[1.0], 10, Some(5)),
+            delta_ns("b", &[1.0], 10, Some(5)),
+        ];
+        let out = agg.aggregate(&honest).unwrap();
+        assert!(
+            out.iter().all(|w| w.is_finite()),
+            "state was permanently poisoned: {out:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scaffold_tests {
+    use super::*;
+    use conflux_proto::encode_weights;
+
+    fn delta_cv(id: &str, weights: &[f32], variate: Option<&[f32]>) -> ClientDelta {
+        ClientDelta {
+            client_id: id.to_string(),
+            round: 1,
+            weights: encode_weights(weights),
+            num_samples: 10,
+            control_variate: variate.map(encode_weights),
+            ..Default::default()
+        }
+    }
+
+    /// Round one seeds `x_t` and starts `c` at zero — the paper's own
+    /// initialization, and the one that makes the correction a no-op
+    /// until any evidence exists.
+    #[test]
+    fn the_first_round_seeds_the_state_and_a_zero_control_variate() {
+        let agg = ScaffoldAggregator::new(1.0, 10);
+        let out = agg
+            .aggregate(&[
+                delta_cv("a", &[0.0, 2.0], None),
+                delta_cv("b", &[2.0, 4.0], None),
+            ])
+            .unwrap();
+        assert_eq!(out, vec![1.0, 3.0]);
+        assert_eq!(agg.control_variate(), Some(vec![0.0, 0.0]));
+    }
+
+    /// The half that did not exist before: the server has to be able to
+    /// hand `c` back out. Without this the correction is uncomputable
+    /// client-side, however correct the server's own arithmetic is.
+    #[test]
+    fn the_control_variate_is_exposed_for_dispatch_and_damped_by_n_not_by_batch_size() {
+        // N = 4, batch = 2. Damping must use 4.
+        let agg = ScaffoldAggregator::new(1.0, 4);
+        agg.aggregate(&[delta_cv("a", &[0.0], None), delta_cv("b", &[0.0], None)])
+            .unwrap();
+
+        agg.aggregate(&[
+            delta_cv("a", &[1.0], Some(&[8.0])),
+            delta_cv("b", &[1.0], Some(&[4.0])),
+        ])
+        .unwrap();
+
+        // c = 0 + (1/4)(8) + (1/4)(4) = 3.0.  Had it used |S| = 2 it
+        // would be 6.0 — the silent method change the type docs warn of.
+        let c = agg.control_variate().expect("scaffold maintains one");
+        assert!((c[0] - 3.0).abs() < 1e-5, "c = {}, expected 3.0", c[0]);
+    }
+
+    /// Every other method must leave the wire field absent, so adding
+    /// SCAFFOLD changed nothing for the eighteen that ignore it.
+    #[test]
+    fn other_aggregators_expose_no_control_variate() {
+        assert_eq!(crate::FedAvg::default().control_variate(), None);
+        assert_eq!(FedNovaAggregator::new().control_variate(), None);
+        assert_eq!(FedAvgMAggregator::new().control_variate(), None);
+    }
+
+    /// The length check ADR 0012 says a reader of this field must do.
+    /// The transport cannot: it is opaque to model architecture.
+    #[test]
+    fn a_wrong_length_control_variate_is_ignored_rather_than_padded() {
+        let agg = ScaffoldAggregator::new(1.0, 2);
+        agg.aggregate(&[
+            delta_cv("a", &[0.0, 0.0], None),
+            delta_cv("b", &[0.0, 0.0], None),
+        ])
+        .unwrap();
+
+        // Two-weight model, one-element variate.
+        agg.aggregate(&[
+            delta_cv("a", &[1.0, 1.0], Some(&[5.0])),
+            delta_cv("b", &[1.0, 1.0], None),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            agg.control_variate(),
+            Some(vec![0.0, 0.0]),
+            "a mismatched variate must contribute nothing, not be zero-padded"
+        );
+    }
+
+    /// A non-finite variate must not reach the stored state — the
+    /// `centered_clipping` lesson, applied to the other piece of state
+    /// this method keeps.
+    #[test]
+    fn a_non_finite_control_variate_cannot_poison_c() {
+        let agg = ScaffoldAggregator::new(1.0, 2);
+        agg.aggregate(&[delta_cv("a", &[0.0], None), delta_cv("b", &[0.0], None)])
+            .unwrap();
+
+        agg.aggregate(&[
+            delta_cv("a", &[1.0], Some(&[f32::NAN])),
+            delta_cv("b", &[1.0], Some(&[2.0])),
+        ])
+        .unwrap();
+
+        let c = agg.control_variate().unwrap();
+        assert!(c[0].is_finite(), "c = {}", c[0]);
+        // Only `b`'s finite 2.0 counted: 0 + (1/2)(2.0) = 1.0
+        assert!((c[0] - 1.0).abs() < 1e-5, "c = {}", c[0]);
+    }
+
+    /// A client that sends no variate still contributes its model
+    /// update — excluding it would discard real training.
+    #[test]
+    fn a_client_without_a_variate_still_contributes_its_weights() {
+        let agg = ScaffoldAggregator::new(1.0, 2);
+        agg.aggregate(&[delta_cv("a", &[0.0], None), delta_cv("b", &[0.0], None)])
+            .unwrap();
+
+        let out = agg
+            .aggregate(&[
+                delta_cv("a", &[4.0], None),
+                delta_cv("b", &[2.0], Some(&[1.0])),
+            ])
+            .unwrap();
+        // x = 0 + 1.0 * mean(4-0, 2-0) = 3.0
+        assert!((out[0] - 3.0).abs() < 1e-5, "x = {}", out[0]);
+    }
+
+    /// The server learning rate scales the model step and nothing else.
+    #[test]
+    fn the_server_learning_rate_scales_the_model_step() {
+        let agg = ScaffoldAggregator::new(0.5, 2);
+        agg.aggregate(&[delta_cv("a", &[0.0], None), delta_cv("b", &[0.0], None)])
+            .unwrap();
+        let out = agg
+            .aggregate(&[delta_cv("a", &[4.0], None), delta_cv("b", &[4.0], None)])
+            .unwrap();
+        assert!(
+            (out[0] - 2.0).abs() < 1e-5,
+            "x = {}, expected 0.5*4",
+            out[0]
+        );
+    }
+
+    /// Cross-round: an extreme-but-finite batch must not leave the
+    /// aggregator permanently unusable.
+    #[test]
+    fn an_extreme_finite_update_does_not_permanently_poison_the_state() {
+        let agg = ScaffoldAggregator::new(1.0, 2);
+        agg.aggregate(&[delta_cv("a", &[0.0], None), delta_cv("b", &[0.0], None)])
+            .unwrap();
+
+        let _ = agg.aggregate(&[
+            delta_cv("a", &[f32::MAX], Some(&[f32::MAX])),
+            delta_cv("b", &[-f32::MAX], Some(&[-f32::MAX])),
+        ]);
+
+        let out = agg
+            .aggregate(&[delta_cv("a", &[1.0], None), delta_cv("b", &[1.0], None)])
+            .unwrap();
+        assert!(out.iter().all(|w| w.is_finite()), "poisoned: {out:?}");
+        assert!(
+            agg.control_variate().unwrap().iter().all(|v| v.is_finite()),
+            "c poisoned"
+        );
+    }
+}

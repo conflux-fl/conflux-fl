@@ -129,9 +129,16 @@ codec needed.
   state," not an ad hoc solution specific to FoolsGold/DSS — future
   contributors adding a stateful method have a named precedent to follow
   rather than reinventing the approach.
-- FedNova becomes buildable as a straightforward `AveragingWeighting`
-  member (`StepNormalizedWeighting`, per `AGGREGATION_LANDSCAPE.md`)
-  once `local_steps` is populated by at least one real client path.
+- FedNova becomes buildable once `local_steps` is populated by at least
+  one real client path. ~~As a straightforward `AveragingWeighting`
+  member (`StepNormalizedWeighting`, per
+  `AGGREGATION_LANDSCAPE.md`).~~ **Corrected 2026-09-01 by building
+  it:** FedNova is *not* a weighting. Its update leaves an `x_t` term
+  that vanishes only when `τ_eff·Σ(p_k/τ_k) = 1`, which by
+  Cauchy–Schwarz holds iff every `τ_k` is equal — exactly when FedNova
+  reduces to FedAvg. It needs cross-round state, and uses this ADR's own
+  `Mutex` pattern. The prediction was wrong about the *shape*; the
+  plumbing this ADR added was still what unblocked it.
 - SCAFFOLD and FedOpt still each need their own dedicated phase brief
   after this ADR lands — this document unblocks the plumbing, it doesn't
   scope either method's own algorithm.
@@ -198,6 +205,20 @@ files in this workspace. They now end in `..Default::default()`, which is
 what makes the claim true *going forward*: the next optional field will
 break none of them. New code should follow that idiom for the same
 reason.
+
+> **Caveat added 2026-09-01, after this advice caused a defect.**
+> `..Default::default()` is right for a literal that *constructs* a value
+> — a test fixture, a builder. It is **wrong** for one that *transforms*
+> an existing value, because there it silently resets every field the
+> transform does not name. `conflux-server`'s `reencode_passing_deltas`
+> rebuilt each `ClientDelta` after reputation filtering and ended in
+> `..Default::default()`, which reset all three of this ADR's fields to
+> `None` on the last hop before `aggregate`. q-FedAvg found no
+> `local_loss` and silently ran as FedAvg; FedNova and SCAFFOLD would
+> have been dead on arrival too. Nothing failed — the configured method
+> just never ran, which is why it survived every unit test on both sides
+> of that function. **In a pass-through, name every field explicitly and
+> let the compiler break the next person who adds one.**
 
 ### What is now unblocked, and what is not
 

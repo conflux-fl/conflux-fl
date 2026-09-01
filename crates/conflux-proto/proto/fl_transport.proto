@@ -96,6 +96,23 @@ message TaskResponse {
   // a network of ReLU hidden units from all-zero weights cannot break
   // symmetry and will not learn.
   bytes model_weights = 3;
+
+  // --- SCAFFOLD ---------------------------------------------------------
+  // The server's global control variate `c`, same little-endian f32
+  // encoding and same length as `model_weights`.
+  //
+  // This is the *downstream* half of ADR 0012's control-variate plumbing.
+  // `ClientDelta.control_variate` already carried a client's `Δc_i` up;
+  // without this field the server had nowhere to put `c` on the way back,
+  // and SCAFFOLD's correction `(c − c_i)` is not computable by a client
+  // that never learns `c`. Adding it is the same additive,
+  // backward-compatible move ADR 0012 made for the upstream fields:
+  // absent means "the configured aggregator maintains no control
+  // variate", which is every method except SCAFFOLD.
+  //
+  // Only the aggregator that owns one populates this — see
+  // `Aggregator::control_variate`.
+  optional bytes control_variate = 4;
 }
 
 // One chunk of a streamed client update. Large deltas are split across

@@ -36,6 +36,7 @@ impl RoundDispatcher for FlakyDispatcher {
                 task_id: "task-1".to_string(),
                 round: 1,
                 model_weights: vec![],
+                ..Default::default()
             }),
             Err(tonic::Status::unavailable(
                 "upstream task source disappeared",

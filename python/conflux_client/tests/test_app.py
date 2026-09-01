@@ -118,6 +118,49 @@ def test_a_subclass_only_has_to_write_train():
     # The optional hooks have working defaults.
     app.on_round_start(0)
     app.on_round_end(0, accepted=True)
+    app.on_control_variate([0.0, 0.0])
+
+
+def test_the_downstream_control_variate_distinguishes_absent_from_empty():
+    """SCAFFOLD's `c` travels down in `TaskResponse.control_variate`.
+
+    The same absent-vs-zero trap the upward fields have: protobuf reads
+    an unset `optional bytes` as `b""`, so a truthiness check cannot tell
+    "this aggregator maintains no control variate" from "it maintains an
+    empty one". `run` uses `HasField`; this pins the distinction the
+    field's presence semantics rest on.
+    """
+    import fl_transport_pb2 as pb2
+
+    task = pb2.TaskResponse(task_id="t", round=1, model_weights=encode_weights([1.0]))
+    assert not task.HasField("control_variate"), "unset must be absent"
+
+    task.control_variate = b""
+    assert task.HasField("control_variate"), "explicitly-empty is present, not absent"
+
+    c = [0.25, -0.5]
+    task.control_variate = encode_weights(c)
+    assert task.HasField("control_variate")
+    assert decode_weights(task.control_variate) == c
+
+
+def test_on_control_variate_is_delivered_before_train():
+    """The correction is applied *during* local training, so `c` has to
+    arrive before `train`, not after it."""
+    order = []
+
+    class Recorder(ClientApp):
+        def on_control_variate(self, c):
+            order.append(("variate", list(c)))
+
+        def train(self, weights, round):
+            order.append(("train", list(weights)))
+            return TrainResult(weights=list(weights), num_samples=1)
+
+    app = Recorder()
+    app.on_control_variate([1.0, 2.0])
+    app.train([0.0, 0.0], 1)
+    assert [k for k, _ in order] == ["variate", "train"], order
 
 
 if __name__ == "__main__":

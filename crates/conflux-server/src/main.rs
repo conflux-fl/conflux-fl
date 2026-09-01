@@ -439,6 +439,7 @@ fn overrides_from_env() -> Overrides {
         server_tau: var("CONFLUX_SERVER_TAU"),
         server_momentum: var("CONFLUX_SERVER_MOMENTUM"),
         fairness_q: var("CONFLUX_FAIRNESS_Q"),
+        scaffold_num_clients: var("CONFLUX_SCAFFOLD_NUM_CLIENTS"),
         server_lipschitz: var("CONFLUX_SERVER_LIPSCHITZ"),
         min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
         reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),

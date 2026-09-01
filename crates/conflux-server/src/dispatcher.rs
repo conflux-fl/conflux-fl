@@ -27,6 +27,13 @@ impl RoundDispatcher for AppState {
             task_id: format!("round-{round}"),
             round,
             model_weights: conflux_proto::encode_weights(&weights),
+            // SCAFFOLD's `c`. `None` for every other method, which
+            // leaves the field absent on the wire — see
+            // `Aggregator::control_variate`.
+            control_variate: self
+                .aggregator
+                .control_variate()
+                .map(|c| conflux_proto::encode_weights(&c)),
         })
     }
 

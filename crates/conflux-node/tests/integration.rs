@@ -130,6 +130,7 @@ async fn local_hop_forwards_fetch_task_and_submit_delta_to_upstream() {
             task_id: "round-1".to_string(),
             round: 1,
             model_weights: encode_weights(&[1.0, 2.0]),
+            ..Default::default()
         },
         received: Arc::clone(&received),
     };
@@ -187,6 +188,7 @@ async fn fetch_task_retries_through_transient_upstream_failures() {
             task_id: "round-5".to_string(),
             round: 5,
             model_weights: vec![],
+            ..Default::default()
         },
     };
     let upstream_addr = spawn_grpc(flaky).await;

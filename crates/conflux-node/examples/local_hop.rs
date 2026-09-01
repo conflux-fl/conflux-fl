@@ -38,6 +38,7 @@ impl RoundDispatcher for FakeServer {
             task_id: "round-1".into(),
             round: 1,
             model_weights: encode_weights(&[0.5, 0.5, 0.5]),
+            ..Default::default()
         })
     }
     async fn subscribe_tasks(&self, _c: &str) -> Result<TaskStream, DispatchError> {
@@ -48,6 +49,7 @@ impl RoundDispatcher for FakeServer {
                     task_id: "round-1".into(),
                     round: 1,
                     model_weights: encode_weights(&[0.5, 0.5, 0.5]),
+                    ..Default::default()
                 }))
                 .await;
             std::future::pending::<()>().await;
