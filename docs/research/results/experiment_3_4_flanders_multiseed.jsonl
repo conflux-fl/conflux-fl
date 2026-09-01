@@ -1,0 +1,6 @@
+{"aggregator":"krum","seed":42,"attack":"poison","final_accuracy":0.7180}
+{"aggregator":"flanders","seed":42,"attack":"poison","final_accuracy":0.1050}
+{"aggregator":"krum","seed":1337,"attack":"poison","final_accuracy":0.7030}
+{"aggregator":"flanders","seed":1337,"attack":"poison","final_accuracy":0.1360}
+{"aggregator":"krum","seed":2024,"attack":"poison","final_accuracy":0.6470}
+{"aggregator":"flanders","seed":2024,"attack":"poison","final_accuracy":0.1020}

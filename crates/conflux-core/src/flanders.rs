@@ -61,12 +61,19 @@
 //!   the `robust` family's existing knob rather than adding a parallel
 //!   one; the paper's own experiments keep `m − b`, which is the same
 //!   quantity expressed as a count.
-//! - **No parameter subsampling.** The paper samples 500 coordinates for
-//!   tractability on real models. This implementation uses all of them,
-//!   which is exact and is fine at the dimensions Conflux's synthetic
-//!   experiments run at. A deployment on a large model would want the
-//!   subsampling; it is not implemented rather than being approximated
-//!   silently.
+//! - **Parameter subsampling, per the paper.** FLANDERS samples 500
+//!   coordinates "for tractability on real models", and so does this
+//!   (`max_forecast_dim`). A model with fewer coordinates is fitted
+//!   whole, so synthetic experiments at `dim = 3` are unaffected.
+//!
+//!   This was originally left unimplemented, on the reasoning that
+//!   omitting it was more honest than approximating it. That reasoning
+//!   was wrong, and expensively so: the MAR coefficient matrix is
+//!   `d × d`, which at a 50,890-parameter model is 20.7 GB for a single
+//!   allocation. Running it on real MNIST OOM-killed the server process
+//!   twice. The bound is not an approximation of the paper — it *is* the
+//!   paper, and leaving it out made the implementation unable to do the
+//!   thing the paper was written to do.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -228,6 +235,22 @@ pub struct FlandersAggregator {
     /// iteration count; a handful is enough at these sizes and the
     /// estimate is refit from scratch every round anyway.
     pub als_iterations: usize,
+    /// How many model coordinates the MAR forecast is fitted over.
+    ///
+    /// **A safety bound, not a tuning knob.** The MAR coefficient matrix
+    /// `A` is `d × d`, so fitting allocates `O(d²)`. At a
+    /// 50,890-parameter model that is **20.7 GB for a single matrix**,
+    /// and the server process is OOM-killed in the third round — the
+    /// first round with enough history to fit anything. That is not
+    /// hypothetical: it happened, twice, and took the desktop session
+    /// with it.
+    ///
+    /// The bound is the paper's own answer. FLANDERS samples 500
+    /// coordinates "for tractability on real models", and 500 is the
+    /// default here. A model with fewer coordinates than this is fitted
+    /// whole, so every synthetic experiment at `dim = 3` is unaffected
+    /// and its results are unchanged.
+    pub max_forecast_dim: usize,
     /// `Mutex` per ADR 0012 — `aggregate` takes `&self`.
     history: Mutex<VecDeque<HashMap<String, Vec<f32>>>>,
     /// The previous output, which is the current global model — needed
@@ -246,6 +269,7 @@ impl FlandersAggregator {
             byzantine_fraction: 0.2,
             ridge: 1e-6,
             als_iterations: 5,
+            max_forecast_dim: 500,
             history: Mutex::new(VecDeque::new()),
             global: Mutex::new(None),
             last_diagnostics: Mutex::new(Vec::new()),
@@ -333,21 +357,38 @@ impl FlandersAggregator {
     }
 }
 
-/// Builds the `d × h` observation matrix for `clients`, in the given
-/// column order, from one round's snapshot.
+/// The coordinates the forecast is fitted over.
+///
+/// Evenly spaced across the whole vector rather than the first `limit`,
+/// and deterministic rather than randomly sampled: a contiguous prefix
+/// would forecast one layer of a real network and ignore every other,
+/// while a random draw would make a round's anomaly scores depend on an
+/// RNG this crate's aggregators do not otherwise carry. The paper
+/// specifies *how many* coordinates to sample, not which, so this takes
+/// the option that is both reproducible and spread out.
+fn forecast_coordinates(dim: usize, limit: usize) -> Vec<usize> {
+    if dim <= limit || limit == 0 {
+        return (0..dim).collect();
+    }
+    (0..limit).map(|i| i * dim / limit).collect()
+}
+
+/// Builds the `|coords| × h` observation matrix for `clients`, in the
+/// given column order, from one round's snapshot.
 fn observation(
     snapshot: &HashMap<String, Vec<f32>>,
     order: &[String],
     dim: usize,
+    coords: &[usize],
 ) -> Option<Matrix> {
-    let mut m = zeros(dim, order.len());
+    let mut m = zeros(coords.len(), order.len());
     for (col, id) in order.iter().enumerate() {
         let w = snapshot.get(id)?;
         if w.len() != dim {
             return None;
         }
-        for (row, value) in w.iter().enumerate() {
-            m[row][col] = *value as f64;
+        for (row, &c) in coords.iter().enumerate() {
+            m[row][col] = w[c] as f64;
         }
     }
     Some(m)
@@ -389,14 +430,18 @@ impl Aggregator for FlandersAggregator {
 
         // Stacked consecutive pairs from the history plus the current
         // round: (Θ_{t-j-1} → Θ_{t-j}).
+        // The coordinates the MAR fit runs over. This is what keeps the
+        // `O(d²)` coefficient matrix bounded — see `max_forecast_dim`.
+        let coords = forecast_coordinates(dim, self.max_forecast_dim);
+
         let mut forecast: Option<HashMap<String, Vec<f64>>> = None;
         if order.len() >= 2 && history.len() >= 2 {
             let mut snapshots: Vec<&HashMap<String, Vec<f32>>> = history.iter().collect();
             let mut pairs = Vec::new();
             for w in snapshots.windows(2) {
                 if let (Some(x), Some(y)) = (
-                    observation(w[0], &order, dim),
-                    observation(w[1], &order, dim),
+                    observation(w[0], &order, dim, &coords),
+                    observation(w[1], &order, dim, &coords),
                 ) {
                     pairs.push((x, y));
                 }
@@ -404,15 +449,15 @@ impl Aggregator for FlandersAggregator {
             if !pairs.is_empty()
                 && let Some((a, b)) = self.fit_mar(&pairs)
             {
-                // Θ̂_t = Â Θ_{t-1} B̂.
+                // Θ̂_t = Â Θ_{t-1} B̂, over the sampled coordinates.
                 let last = snapshots.pop().expect("history is non-empty");
-                if let Some(prev) = observation(last, &order, dim) {
+                if let Some(prev) = observation(last, &order, dim, &coords) {
                     let predicted = matmul(&matmul(&a, &prev), &b);
                     let mut map = HashMap::new();
                     for (col, id) in order.iter().enumerate() {
                         map.insert(
                             id.clone(),
-                            (0..dim)
+                            (0..coords.len())
                                 .map(|row| predicted[row][col])
                                 .collect::<Vec<f64>>(),
                         );
@@ -427,10 +472,15 @@ impl Aggregator for FlandersAggregator {
         for (u, w) in updates.iter().zip(&decoded) {
             let (score, from_forecast) = match forecast.as_ref().and_then(|f| f.get(&u.client_id)) {
                 Some(prediction) => (
-                    w.iter()
+                    // Over the sampled coordinates only — the forecast
+                    // exists for exactly those, and comparing a full
+                    // update against a shorter prediction would silently
+                    // score only its prefix.
+                    coords
+                        .iter()
                         .zip(prediction)
-                        .map(|(a, b)| {
-                            let d = *a as f64 - b;
+                        .map(|(&c, p)| {
+                            let d = w[c] as f64 - p;
                             d * d
                         })
                         .sum::<f64>(),
@@ -563,6 +613,74 @@ mod tests {
         let m = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
         let rhs = vec![vec![1.0], vec![2.0]];
         assert!(solve(m, rhs).is_none());
+    }
+
+    #[test]
+    fn the_forecast_is_bounded_at_real_model_dimension() {
+        // The regression test for an OOM that killed the server process
+        // twice and the desktop session with it.
+        //
+        // The MAR coefficient matrix `A` is `d x d`. At MNIST's 50,890
+        // parameters that is 50890^2 * 8 bytes = 20.7 GB for one matrix,
+        // and `fit_mar` allocates several. Nothing caught it because
+        // every synthetic experiment runs at `dim = 3`, where the same
+        // allocation is 72 bytes, and the first round that can even
+        // trigger it is round three — the first with enough history to
+        // fit anything.
+        //
+        // This runs at a dimension large enough that an unbounded `d x d`
+        // would exhaust memory, for enough rounds to reach the fit.
+        let dim = 50_890;
+        let f = FlandersAggregator::new(fedavg());
+        assert_eq!(f.max_forecast_dim, 500, "the paper's own sample size");
+
+        let mut base: Vec<f32> = (0..dim).map(|i| (i % 17) as f32 * 0.01).collect();
+        for round in 0..4 {
+            for (i, w) in base.iter_mut().enumerate() {
+                *w += ((round + i) % 7) as f32 * 1e-4;
+            }
+            let mut hostile = base.clone();
+            hostile[dim / 2] += 50.0;
+
+            let out = f
+                .aggregate(&[
+                    delta("a", &base),
+                    delta("b", &base),
+                    delta("hostile", &hostile),
+                ])
+                .expect("must not OOM or fail");
+            assert_eq!(out.len(), dim);
+            assert!(out.iter().all(|w| w.is_finite()), "round {round}");
+        }
+
+        // And the filter still did its job on the sampled coordinates.
+        assert!(
+            f.last_diagnostics().iter().any(|d| d.forecast_available),
+            "a forecast should be available by round 4"
+        );
+    }
+
+    #[test]
+    fn coordinate_sampling_spreads_across_the_whole_vector() {
+        // A contiguous prefix would forecast one layer of a real network
+        // and ignore every other, so the choice of *which* coordinates
+        // matters even though the paper only fixes how many.
+        let coords = forecast_coordinates(50_890, 500);
+        assert_eq!(coords.len(), 500);
+        assert_eq!(coords[0], 0);
+        assert!(
+            *coords.last().unwrap() > 50_000,
+            "sampling must reach the end of the vector, got {:?}",
+            coords.last()
+        );
+        assert!(
+            coords.windows(2).all(|w| w[0] < w[1]),
+            "strictly increasing"
+        );
+
+        // Small models are fitted whole — this is why dim = 3 experiments
+        // are bit-for-bit unaffected by the bound existing.
+        assert_eq!(forecast_coordinates(3, 500), vec![0, 1, 2]);
     }
 
     #[test]

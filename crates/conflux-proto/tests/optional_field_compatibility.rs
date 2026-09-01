@@ -13,7 +13,12 @@
 //! is why 75 of them across this workspace now end in
 //! `..Default::default()`. Worth stating plainly, because the ADR's
 //! wording does not distinguish the two and the distinction cost a
-//! workspace-wide edit.)
+//! workspace-wide edit.
+//!
+//! That idiom was paid for and then tested: adding a *third* optional
+//! field — `local_loss`, for q-FedAvg — broke exactly one literal in the
+//! whole workspace, the one below that deliberately names every field
+//! because its whole job is to notice when the schema grows.)
 
 use conflux_proto::{ClientDelta, DeltaChunk, decode_weights, encode_weights};
 use prost::Message;
@@ -171,6 +176,7 @@ fn delta_chunk_carries_both_fields_too() {
         num_samples: 10,
         local_steps: Some(7),
         control_variate: Some(encode_weights(&[0.1, 0.2])),
+        local_loss: Some(0.42),
     };
 
     let decoded = DeltaChunk::decode(chunk.encode_to_vec().as_slice()).unwrap();

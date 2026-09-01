@@ -381,6 +381,342 @@ impl Aggregator for FedOptAggregator {
     }
 }
 
+/// **FedAvgM** — Hsu, Qi & Brown, 2019, "Measuring the Effects of
+/// Non-Identical Data Distribution for Federated Visual Classification".
+///
+/// FedAvg with a momentum buffer on the server, and nothing else:
+///
+/// ```text
+/// v ← β v + Δw          the paper's own line, §4.2
+/// w ← w − v
+/// ```
+///
+/// It is the simplest member of this family and the one every adaptive
+/// method is measured against — Reddi et al.'s own results table carries
+/// a FedAvgM column, so a framework with FedOpt and without this cannot
+/// reproduce it.
+///
+/// # Fidelity notes (ADR 0008)
+///
+/// - **`Δw` is `num_samples`-weighted**, per the paper's
+///   `Δw = Σ (n_k/n) Δw_k`. This is the *opposite* choice from
+///   [`FedOptAggregator`], whose Algorithm 2 specifies an unweighted
+///   mean — the two papers genuinely disagree, and each is implemented
+///   as written rather than harmonized.
+/// - **Sign convention.** The paper writes `w ← w − v` because its `Δw`
+///   is a descent direction. Conflux's clients return trained *weights*,
+///   so the natural quantity here is `Δ = aggregate − x_t`, an ascent
+///   direction, and the update is `x ← x + v`. Identical arithmetic,
+///   opposite sign convention; nothing about the method changes.
+/// - **`η = 1.0` is the paper's own value** here, not a placeholder:
+///   "The learning rate of the server optimizer is held constant at
+///   1.0." That is the one honest default in this whole family.
+/// - **Classical momentum, not Nesterov.** The paper's §4.2 equation is
+///   classical (`v ← βv + Δw`), while its experiments say Nesterov
+///   accelerated gradient. The two disagree inside the paper; this
+///   implements the equation as written, and says so rather than
+///   picking silently.
+/// - **State does not survive a restart**, like every stateful method
+///   here.
+pub struct FedAvgMAggregator {
+    /// Momentum coefficient `β`. The paper sweeps
+    /// `{0, 0.7, 0.9, 0.97, 0.99, 0.997}` and reports 0.9 working well
+    /// broadly, which is the default.
+    pub beta: f32,
+    /// Server learning rate. `1.0` per the paper.
+    pub server_learning_rate: f32,
+    /// `None` means the `num_samples`-weighted mean the paper
+    /// specifies — i.e. plain FedAvg. `Some` swaps in another base,
+    /// which is a documented extension rather than the paper.
+    base: Option<Box<dyn Aggregator>>,
+    /// `(x_t, v)` — ADR 0012's pattern, as everywhere else here.
+    state: Mutex<Option<(Vec<f32>, Vec<f32>)>>,
+}
+
+impl Default for FedAvgMAggregator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FedAvgMAggregator {
+    /// FedAvgM with the paper's `β = 0.9` and `η = 1.0`.
+    pub fn new() -> Self {
+        Self {
+            beta: 0.9,
+            server_learning_rate: 1.0,
+            base: None,
+            state: Mutex::new(None),
+        }
+    }
+
+    /// Computes `Δw` from `base` rather than the paper's weighted mean.
+    /// A documented deviation, same terms as
+    /// [`FedOptAggregator::with_base`].
+    pub fn with_base(mut self, base: Box<dyn Aggregator>) -> Self {
+        self.base = Some(base);
+        self
+    }
+
+    /// The current momentum buffer, or `None` before the first round.
+    /// Read-only, for tests and diagnostics.
+    pub fn momentum(&self) -> Option<Vec<f32>> {
+        self.state
+            .lock()
+            .expect("FedAvgMAggregator state mutex poisoned")
+            .as_ref()
+            .map(|(_, v)| v.clone())
+    }
+}
+
+impl Aggregator for FedAvgMAggregator {
+    fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
+        if updates.is_empty() {
+            return Err(AggregatorError::EmptyBatch);
+        }
+        let decoded = decode_and_validate(updates)?;
+        let dim = decoded[0].len();
+
+        let aggregate = match &self.base {
+            Some(base) => base.aggregate(updates)?,
+            // The paper's `Σ (n_k/n) Δw_k` — which is exactly FedAvg.
+            None => crate::FedAvg::default().aggregate(updates)?,
+        };
+
+        let mut guard = self
+            .state
+            .lock()
+            .expect("FedAvgMAggregator state mutex poisoned");
+
+        let reseed = match guard.as_ref() {
+            None => true,
+            Some((global, _)) => global.len() != dim,
+        };
+        if reseed {
+            // Round one is `x_0`: no previous global, so no `Δw` and no
+            // momentum step. Same as Algorithm 2's initialization.
+            *guard = Some((aggregate.clone(), vec![0.0; dim]));
+            return Ok(aggregate);
+        }
+
+        let (global, velocity) = guard.as_mut().expect("checked above");
+        let beta = self.beta as f64;
+        let eta = self.server_learning_rate as f64;
+
+        let mut next = Vec::with_capacity(dim);
+        for ((target, previous), v) in aggregate.iter().zip(global.iter()).zip(velocity.iter_mut())
+        {
+            // `f64` for the same reason as everywhere else in this crate:
+            // a momentum buffer accumulates, so an `f32` overflow here
+            // would be permanent rather than momentary.
+            let delta = *target as f64 - *previous as f64;
+            let updated = beta * *v as f64 + delta;
+            *v = updated as f32;
+            next.push((*previous as f64 + eta * updated) as f32);
+        }
+
+        if let Some(index) = next.iter().position(|w| !w.is_finite()) {
+            return Err(AggregatorError::NonFiniteWeights {
+                client_id: "<fedavgm server optimizer>".to_string(),
+                index,
+            });
+        }
+
+        global.copy_from_slice(&next);
+        Ok(next)
+    }
+}
+
+/// **q-FedAvg** — Li, Sanjabi, Beirami & Smith, 2020, "Fair Resource
+/// Allocation in Federated Learning" (ICLR), Algorithm 2.
+///
+/// The only fairness-oriented method in the catalog. Every other method
+/// here optimizes the *mean* — q-FedAvg optimizes the accuracy
+/// *distribution*, by weighting each client by its own loss raised to a
+/// power `q`, so clients the model currently serves badly pull harder:
+///
+/// ```text
+/// Δw_k = L(w_t − w̄_k)                                local update, scaled by L
+/// Δ_k  = F_k^q(w_t) · Δw_k                            weighted by loss^q
+/// h_k  = q·F_k^{q−1}(w_t)·‖Δw_k‖² + L·F_k^q(w_t)
+/// w_{t+1} = w_t − (Σ Δ_k) / (Σ h_k)
+/// ```
+///
+/// `q = 0` recovers FedAvg exactly. Larger `q` trades mean accuracy for
+/// a more uniform one — the paper's whole point is that this is a dial,
+/// not a free improvement.
+///
+/// # This needs something no other method here needs
+///
+/// `F_k(w_t)` is **the client's own local loss at the round's starting
+/// model**, which is not derivable from the update. It arrives as
+/// `ClientDelta::local_loss`, the third optional field ADR 0012's
+/// mechanism carries. A client that does not report one is treated as
+/// having no opinion and falls back to `num_samples` weighting for that
+/// round — an unreported loss must not be read as a loss of zero, which
+/// `q > 0` would turn into zero weight.
+///
+/// # Fidelity notes (ADR 0008)
+///
+/// - **Sign convention.** The paper's `Δw_k = L(w_t − w̄_k)` is a descent
+///   direction, and it subtracts. Conflux's clients return trained
+///   weights, so this works with `d_k = w̄_k − w_t` and adds. Identical
+///   arithmetic.
+/// - **`L` is not derived.** The paper estimates the Lipschitz constant
+///   once by grid search at `q = 0` and reuses it across `q` (its Lemma
+///   3). Conflux cannot do that estimation — it never sees a loss
+///   surface — so `L` is config-supplied (`server_lipschitz`, builtin
+///   `1.0`) and is a placeholder in the same sense `clip_radius` is.
+///   It is the inverse of the client learning rate in the paper's own
+///   framing.
+/// - **`q` is the method.** Builtin `0.0`, which is exactly FedAvg. That
+///   is deliberate: selecting `qfedavg` without choosing a `q` should
+///   behave like the thing it generalizes rather than silently applying
+///   a fairness trade nobody asked for.
+/// - **Self-reported loss is trusted, and the direction matters.** Every
+///   other unauthenticated field here can only be *inflated* to gain
+///   influence; this one is the same, but more directly — q-FedAvg
+///   weights *up* whoever claims a high loss. That is the published
+///   method's own assumption, and it is why this is not a robustness
+///   method and must not be read as one.
+pub struct QFedAvgAggregator {
+    /// The fairness exponent. `0.0` is FedAvg.
+    pub q: f32,
+    /// The Lipschitz estimate `L`. See the fidelity notes.
+    pub lipschitz: f32,
+    /// `w_t`, tracked as this aggregator's own previous output — the
+    /// same approach [`FedOptAggregator`] uses, and for the same reason.
+    state: Mutex<Option<Vec<f32>>>,
+}
+
+impl Default for QFedAvgAggregator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QFedAvgAggregator {
+    /// q-FedAvg with `q = 0` (i.e. FedAvg) and `L = 1`.
+    pub fn new() -> Self {
+        Self {
+            q: 0.0,
+            lipschitz: 1.0,
+            state: Mutex::new(None),
+        }
+    }
+
+    /// With an explicit fairness exponent and Lipschitz estimate.
+    pub fn with_params(q: f32, lipschitz: f32) -> Self {
+        Self {
+            q,
+            lipschitz,
+            state: Mutex::new(None),
+        }
+    }
+}
+
+impl Aggregator for QFedAvgAggregator {
+    fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
+        if updates.is_empty() {
+            return Err(AggregatorError::EmptyBatch);
+        }
+        let decoded = decode_and_validate(updates)?;
+        let dim = decoded[0].len();
+
+        let mut guard = self
+            .state
+            .lock()
+            .expect("QFedAvgAggregator state mutex poisoned");
+
+        let reseed = match guard.as_ref() {
+            None => true,
+            Some(w) => w.len() != dim,
+        };
+        if reseed {
+            // Round one: no `w_t` to difference against. The paper's
+            // Algorithm 2 needs one, so this round is the plain
+            // sample-count mean, which also establishes `w_t`.
+            let seed = crate::FedAvg::default().aggregate(updates)?;
+            *guard = Some(seed.clone());
+            return Ok(seed);
+        }
+        let global = guard.as_mut().expect("checked above");
+
+        // Every client must report a loss for the method to mean
+        // anything. If none does, this is FedAvg wearing a different
+        // name, and saying so beats pretending otherwise.
+        let any_loss = updates.iter().any(|u| u.local_loss.is_some());
+        if !any_loss {
+            let out = crate::FedAvg::default().aggregate(updates)?;
+            global.copy_from_slice(&out);
+            return Ok(out);
+        }
+
+        let q = self.q as f64;
+        let l = self.lipschitz as f64;
+
+        let mut numerator = vec![0.0f64; dim];
+        let mut h_sum = 0.0f64;
+
+        for (u, w) in updates.iter().zip(&decoded) {
+            // A client that reported nothing is given the batch's
+            // neutral loss of 1.0, so `F^q = 1` and it is weighted
+            // exactly as FedAvg would weight it — no opinion, no
+            // penalty.
+            let loss = u.local_loss.map_or(1.0f64, |f| f as f64).max(0.0);
+
+            // d_k = w̄_k − w_t (ascent); the paper's Δw_k = L(w_t − w̄_k)
+            // is −L·d_k.
+            let mut sq = 0.0f64;
+            for (x, prev) in w.iter().zip(global.iter()) {
+                let d = l * (*x as f64 - *prev as f64);
+                sq += d * d;
+            }
+
+            let f_q = loss.powf(q);
+            let f_q_minus_1 = if q == 0.0 { 0.0 } else { loss.powf(q - 1.0) };
+
+            // h_k = q·F^{q−1}·‖Δw_k‖² + L·F^q
+            let h = q * f_q_minus_1 * sq + l * f_q;
+            if !h.is_finite() {
+                continue;
+            }
+            h_sum += h;
+
+            // Σ Δ_k, with the sign flipped into Conflux's ascent
+            // convention so the final step adds rather than subtracts.
+            for (acc, (x, prev)) in numerator.iter_mut().zip(w.iter().zip(global.iter())) {
+                *acc += f_q * l * (*x as f64 - *prev as f64);
+            }
+        }
+
+        if h_sum <= 0.0 || !h_sum.is_finite() {
+            // Nothing usable — every client's weight collapsed. Falling
+            // back to the plain mean beats returning the model unchanged
+            // and silently stalling the experiment.
+            let out = crate::FedAvg::default().aggregate(updates)?;
+            global.copy_from_slice(&out);
+            return Ok(out);
+        }
+
+        let next: Vec<f32> = global
+            .iter()
+            .zip(&numerator)
+            .map(|(w, acc)| (*w as f64 + acc / h_sum) as f32)
+            .collect();
+
+        if let Some(index) = next.iter().position(|w| !w.is_finite()) {
+            return Err(AggregatorError::NonFiniteWeights {
+                client_id: "<qfedavg server optimizer>".to_string(),
+                index,
+            });
+        }
+
+        global.copy_from_slice(&next);
+        Ok(next)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,12 +732,295 @@ mod tests {
         }
     }
 
+    fn delta_n(client_id: &str, weights: &[f32], num_samples: u64) -> ClientDelta {
+        ClientDelta {
+            client_id: client_id.to_string(),
+            round: 1,
+            weights: encode_weights(weights),
+            num_samples,
+            ..Default::default()
+        }
+    }
+
     fn batch(weights: &[f32]) -> Vec<ClientDelta> {
         vec![
             delta("a", weights),
             delta("b", weights),
             delta("c", weights),
         ]
+    }
+
+    #[test]
+    fn fedavgm_accumulates_momentum_across_rounds() {
+        // The property the method exists for: a consistent pull in one
+        // direction compounds, so the same Δ produces a *larger* step
+        // each round. Classical momentum, `v ← βv + Δ`.
+        let agg = FedAvgMAggregator::new();
+        agg.aggregate(&batch(&[0.0])).unwrap();
+
+        let mut previous = 0.0f32;
+        let mut last_step = 0.0f32;
+        for round in 0..4 {
+            let target = previous + 1.0;
+            let out = agg.aggregate(&batch(&[target])).unwrap();
+            let step = out[0] - previous;
+            assert!(
+                step > last_step,
+                "round {round}: momentum should compound, {step} !> {last_step}"
+            );
+            last_step = step;
+            previous = out[0];
+        }
+    }
+
+    #[test]
+    fn fedavgm_with_beta_zero_is_plain_fedavg() {
+        // `v ← 0·v + Δ` is just `Δ`, so `x ← x + Δ` returns the
+        // aggregate itself. A useful identity: it means the momentum is
+        // the only thing this adds, and β = 0 is in the paper's own
+        // sweep.
+        let mut agg = FedAvgMAggregator::new();
+        agg.beta = 0.0;
+        agg.aggregate(&batch(&[0.0, 0.0])).unwrap();
+        let out = agg.aggregate(&batch(&[1.0, 2.0])).unwrap();
+        assert!(
+            (out[0] - 1.0).abs() < 1e-6 && (out[1] - 2.0).abs() < 1e-6,
+            "got {out:?}, expected the plain aggregate"
+        );
+    }
+
+    #[test]
+    fn fedavgm_weights_by_sample_count_unlike_fedopt() {
+        // The two papers genuinely disagree, and each is implemented as
+        // written. FedAvgM's Δw is `Σ (n_k/n) Δw_k`; FedOpt's Algorithm 2
+        // line 10 is an unweighted mean. A client with 10x the samples
+        // should therefore move FedAvgM more than it moves FedAdam.
+        let lopsided = vec![delta_n("small", &[0.0], 1), delta_n("large", &[10.0], 100)];
+
+        let m = FedAvgMAggregator::new();
+        let a = FedOptAggregator::new(FedOptVariant::Adam);
+        let m1 = m.aggregate(&lopsided).unwrap()[0];
+        let a1 = a.aggregate(&lopsided).unwrap()[0];
+
+        assert!(
+            m1 > a1,
+            "sample-count weighting should favour the large client: \
+             fedavgm={m1} fedadam={a1}"
+        );
+        assert!((m1 - 9.9).abs() < 0.2, "weighted mean ~9.9, got {m1}");
+        assert!((a1 - 5.0).abs() < 0.2, "unweighted mean 5.0, got {a1}");
+    }
+
+    #[test]
+    fn fedavgm_survives_extreme_but_finite_updates() {
+        let agg = FedAvgMAggregator::new();
+        for w in [0.0, f32::MAX, -f32::MAX, 1.0] {
+            match agg.aggregate(&batch(&[w, w])) {
+                Ok(out) => assert!(out.iter().all(|x| x.is_finite()), "got {out:?}"),
+                Err(_) => { /* refusing is a pass */ }
+            }
+        }
+    }
+
+    fn delta_loss(client_id: &str, weights: &[f32], loss: f32) -> ClientDelta {
+        ClientDelta {
+            client_id: client_id.to_string(),
+            round: 1,
+            weights: encode_weights(weights),
+            num_samples: 10,
+            local_loss: Some(loss),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn qfedavg_with_q_zero_matches_fedavg() {
+        // The identity the paper states: q = 0 recovers FedAvg. If this
+        // drifts, the "fairness dial" framing is false — there would be
+        // no setting at which the method is the thing it generalizes.
+        let q0 = QFedAvgAggregator::with_params(0.0, 1.0);
+        let plain = crate::FedAvg::default();
+
+        let round1 = vec![
+            delta_loss("a", &[0.0, 0.0], 1.0),
+            delta_loss("b", &[0.0, 0.0], 1.0),
+        ];
+        q0.aggregate(&round1).unwrap();
+
+        let round2 = vec![
+            delta_loss("a", &[1.0, 2.0], 0.5),
+            delta_loss("b", &[3.0, 4.0], 9.0),
+        ];
+        let got = q0.aggregate(&round2).unwrap();
+        let want = plain.aggregate(&round2).unwrap();
+
+        for (g, w) in got.iter().zip(&want) {
+            assert!(
+                (g - w).abs() < 1e-4,
+                "q=0 must equal fedavg: {got:?} vs {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_higher_loss_client_pulls_harder_when_q_is_positive() {
+        // The method's entire purpose. Two clients pulling in opposite
+        // directions, identical in every way except reported loss: with
+        // q > 0 the aggregate must land nearer the one the model is
+        // serving badly.
+        let agg = QFedAvgAggregator::with_params(2.0, 1.0);
+        agg.aggregate(&[delta_loss("a", &[0.0], 1.0), delta_loss("b", &[0.0], 1.0)])
+            .unwrap();
+
+        let out = agg
+            .aggregate(&[
+                delta_loss("well-served", &[-1.0], 0.1),
+                delta_loss("badly-served", &[1.0], 5.0),
+            ])
+            .unwrap();
+
+        assert!(
+            out[0] > 0.0,
+            "the high-loss client should dominate, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn larger_q_shifts_the_direction_further_toward_the_worst_served_client() {
+        // q is a dial, not a switch: the *direction* should move
+        // monotonically toward the high-loss client as q grows.
+        //
+        // Direction, specifically — not the landing position. An earlier
+        // version of this test asserted on `out[0]` directly and failed
+        // at q = 4, and the implementation was right. `h_k` carries a
+        // `q·F^{q−1}·‖Δw_k‖²` term that grows with q, so the denominator
+        // grows and the *step shrinks* even as the direction keeps
+        // turning. That coupling is the paper's own Lipschitz-based step
+        // bound doing its job, not a defect: q-FedAvg becomes both more
+        // fairness-weighted and more cautious at once.
+        //
+        // Isolating direction from step size: with tiny deltas the
+        // quadratic term vanishes, `h_k → L·F^q`, and the step reduces
+        // to the loss-weighted mean direction `Σ F^q d_k / Σ F^q`, which
+        // *is* monotone in q.
+        let epsilon = 1e-3;
+        let mut previous = f32::NEG_INFINITY;
+        for q in [0.0f32, 1.0, 2.0, 4.0] {
+            let agg = QFedAvgAggregator::with_params(q, 1.0);
+            agg.aggregate(&[delta_loss("a", &[0.0], 1.0), delta_loss("b", &[0.0], 1.0)])
+                .unwrap();
+            let out = agg
+                .aggregate(&[
+                    delta_loss("well-served", &[-epsilon], 0.5),
+                    delta_loss("badly-served", &[epsilon], 4.0),
+                ])
+                .unwrap();
+            // Normalized so the comparison is about direction alone.
+            let direction = out[0] / epsilon;
+            assert!(
+                direction > previous,
+                "q={q}: direction should turn further toward the high-loss \
+                 client, {direction} !> {previous}"
+            );
+            previous = direction;
+        }
+        assert!(
+            previous > 0.5,
+            "at q = 4 the direction should be dominated by the high-loss \
+             client, got {previous}"
+        );
+    }
+
+    #[test]
+    fn the_step_magnitude_is_non_monotone_in_q() {
+        // The other half of what the direction test discovered, and it
+        // is stranger than "bigger q, smaller step". Two effects compete:
+        //
+        //   direction — `F^q` weighting turns the step toward the
+        //               high-loss client, which *increases* how far the
+        //               aggregate lands from the origin;
+        //   step size — `h_k`'s `q·F^{q−1}·‖Δw_k‖²` term grows with q,
+        //               which *decreases* it.
+        //
+        // Neither dominates throughout, so the magnitude rises and then
+        // falls. Measured here: 0.538 at q=1, 0.624 at q=2, 0.499 at
+        // q=4.
+        //
+        // This is recorded because two successive versions of these
+        // tests assumed monotonicity — first upward, then downward — and
+        // both failed against a correct implementation. q is not a
+        // simple "more fairness" dial: it trades mean accuracy,
+        // uniformity, *and* convergence speed simultaneously, and the
+        // net effect on any one of them is not monotone.
+        let step = |q: f32| {
+            let agg = QFedAvgAggregator::with_params(q, 1.0);
+            agg.aggregate(&[delta_loss("a", &[0.0], 1.0), delta_loss("b", &[0.0], 1.0)])
+                .unwrap();
+            agg.aggregate(&[
+                delta_loss("well-served", &[-1.0], 0.5),
+                delta_loss("badly-served", &[1.0], 4.0),
+            ])
+            .unwrap()[0]
+                .abs()
+        };
+
+        let (s1, s2, s4) = (step(1.0), step(2.0), step(4.0));
+        assert!(
+            s2 > s1,
+            "the direction effect should win first: {s2} !> {s1}"
+        );
+        assert!(
+            s4 < s2,
+            "and the step-size penalty should win eventually: {s4} !< {s2}"
+        );
+    }
+
+    #[test]
+    fn a_client_reporting_no_loss_is_neutral_not_zero() {
+        // `local_loss` is optional, and `q > 0` would turn a missing
+        // value read as 0.0 into *zero weight* — silently excluding
+        // every client that has not been upgraded to report it.
+        let agg = QFedAvgAggregator::with_params(2.0, 1.0);
+        agg.aggregate(&[delta_loss("a", &[0.0], 1.0), delta_loss("b", &[0.0], 1.0)])
+            .unwrap();
+
+        let mut silent = delta_loss("silent", &[1.0], 0.0);
+        silent.local_loss = None;
+        let out = agg
+            .aggregate(&[silent, delta_loss("vocal", &[-1.0], 1.0)])
+            .unwrap();
+
+        assert!(
+            out[0].abs() < 0.9,
+            "a silent client must still count, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_batch_with_no_reported_losses_is_plain_fedavg() {
+        // No loss anywhere means the method has nothing to work with.
+        // Behaving as FedAvg is honest; inventing weights is not.
+        let agg = QFedAvgAggregator::with_params(2.0, 1.0);
+        agg.aggregate(&batch(&[0.0, 0.0])).unwrap();
+        let out = agg.aggregate(&batch(&[1.0, 3.0])).unwrap();
+        let want = crate::FedAvg::default()
+            .aggregate(&batch(&[1.0, 3.0]))
+            .unwrap();
+        assert_eq!(out, want);
+    }
+
+    #[test]
+    fn qfedavg_survives_extreme_but_finite_updates() {
+        let agg = QFedAvgAggregator::with_params(2.0, 1.0);
+        for (w, loss) in [(0.0, 1.0), (f32::MAX, 1e30), (-f32::MAX, 0.0), (1.0, 1.0)] {
+            match agg.aggregate(&[
+                delta_loss("a", &[w, w], loss),
+                delta_loss("b", &[1.0, 1.0], 1.0),
+            ]) {
+                Ok(out) => assert!(out.iter().all(|x| x.is_finite()), "got {out:?}"),
+                Err(_) => { /* refusing is a pass */ }
+            }
+        }
     }
 
     #[test]

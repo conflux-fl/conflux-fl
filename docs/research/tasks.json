@@ -19,7 +19,7 @@
     {
       "id": "r2",
       "title": "Decide the stability/collusion combination rule",
-      "status": "blocked-on-decision",
+      "status": "decision-ready",
       "priority": "high",
       "why": "\u00a75.12 established the AND-gate is trading away something real: collusion-only scores 1.09 against non-identical stable colluders where stability-only scores 17.13 (no better than undefended fedavg). The gate's conservatism has a measured cost.",
       "approach": "Do NOT simply flip to OR. The AND-gate exists to protect legitimately-noisy honest clients from being penalized for instability alone -- Claim 2's problem, which \u00a75.4 measured as real. \u00a75.12's scenario contains no non-IID minority, so it cannot see that cost. First run the ablation against the \u00a75.4 fairness scenario WITH a non-IID minority present; then decide between AND, OR, and a weighted combination.",
@@ -31,7 +31,7 @@
       "blocked_by": [
         "user decision on whether to change a mechanism \u00a76.1 defined"
       ],
-      "notes": "Evidence strengthened 2026-09-01 (section 5.14): collusion-only DSS is best or tied-best on all six attacks at 20% malicious and holds at 60%, one to two orders of magnitude ahead of the shipped gate. Third independent finding pointing the same way after 5.6 and 5.12. Still blocked on the same thing: none of these attacks includes a legitimately-noisy honest majority, which is exactly what the stability conjunct protects."
+      "notes": "UNBLOCKED 2026-09-01 (section 5.15). The blocker was never the experiment: run_fairness_experiment.rs called build_aggregator directly (so no dss_ name resolved) and was single-round (so DSS's gate could not fire \u2014 stability returns 1.0 below two trace entries). Both fixed; Experiment 2.11 ran 6,720 rows, 20 seeds, 20 rounds, zero attackers. RESULT: dropping the stability conjunct does NOT reopen Claim 2. Collusion-only DSS scores 1.030 +/- 0.177 minority/majority influence at the widest shift \u2014 a CI containing 1.0, i.e. parity \u2014 while krum (0.636) and flanders_krum (0.746) both down-weight the minority. The shipped gate returns fedavg's numbers exactly and buys no fairness the collusion-only variant lacks. The objection is removed; the decision to change DSS's default is the project owner's and has NOT been made here. Thresholds unchanged."
     },
     {
       "id": "r3",
@@ -52,7 +52,7 @@
     {
       "id": "r4",
       "title": "Multi-seed the real-data validation",
-      "status": "todo",
+      "status": "partially-done",
       "priority": "medium",
       "why": "\u00a75.13 is one seed per cell. That is adequate for its negative result about clip_radius (a default losing to no-defense at every tested tau doesn't need many seeds) but not for the comparative krum/trimmed_mean claims, which are currently corroboration rather than evidence.",
       "approach": "benchmark.py already sweeps (aggregator x split x attack); it needs a --seeds dimension, and run_demo.sh needs to thread a seed through partition_data.py. Then 5 seeds over the existing grid.",
@@ -61,7 +61,8 @@
         "python/conflux_client/examples/benchmark.py",
         "python/conflux_client/examples/e2e_pytorch_mnist/run_demo.sh"
       ],
-      "blocked_by": []
+      "blocked_by": [],
+      "notes": "Half done 2026-09-01. run_demo.sh gained CONFLUX_DEMO_SEED, and section 5.16.1 used it for a 3-seed check of the headline comparison. But it seeds the DATA PARTITION ONLY -- the trainer clients keep their own uncontrolled randomness, discovered by the same nominal seed 42 giving krum 0.655 in 5.16 and 0.718 in 5.16.1. That 0.063 spread is a useful free measurement of harness variance (the finding's gap is 9.1x larger), but full reproducibility needs the trainers seeded too, and benchmark.py still does not expose the seed at all."
     },
     {
       "id": "r5",
@@ -149,9 +150,10 @@
     {
       "id": "r8",
       "title": "Re-run the FLANDERS comparison on a real model",
-      "status": "todo",
+      "status": "done",
       "why": "Section 5.14 is entirely at dim=3. FLANDERS's cost and signal both scale with model dimension in a way DSS's scalar traces do not, so the comparison that most favours DSS is also the one least tested at scale. Section 5.13 is the standing caution.",
-      "how": "benchmark.py against e2e_pytorch_mnist, aggregators dss_fedavg / flanders_krum / krum, >=5 seeds."
+      "how": "benchmark.py against e2e_pytorch_mnist, aggregators dss_fedavg / flanders_krum / krum, >=5 seeds.",
+      "notes": "Done 2026-09-01 (section 5.16). Running FLANDERS on a real model first OOM-killed the server twice \u2014 its MAR matrix is d x d, so 20.7 GB at 50,890 parameters. Fixed with the paper's own 500-coordinate subsampling (8+ GB -> 258 MB). The accuracy result reproduces and strengthens 5.14's Finding 3: undefended, flanders(=FLANDERS+Krum) and krum are indistinguishable (0.671 vs 0.669); under attack krum holds at 0.655 while flanders collapses to 0.102, below undefended fedavg's 0.181. Single-seed; 5.16.1 adds a 3-seed check of that one comparison. STRUCTURAL LIMIT: DSS cannot be measured on real data at all, because the harness drives the real server binary and AGENT.md's rule keeps DSS out of build_aggregator."
     }
   ]
 }

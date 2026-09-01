@@ -314,6 +314,9 @@ impl AppState {
                 // just reported.
                 server_learning_rate: Some(config.server_learning_rate.value),
                 server_tau: Some(config.server_tau.value),
+                server_momentum: Some(config.server_momentum.value),
+                fairness_q: Some(config.fairness_q.value),
+                server_lipschitz: Some(config.server_lipschitz.value),
             },
         )
         .expect("unknown aggregator in resolved config");

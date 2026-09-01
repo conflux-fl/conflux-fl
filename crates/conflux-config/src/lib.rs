@@ -242,6 +242,37 @@ pub struct Overrides {
     ///
     /// Ignored by every aggregator outside the `optimization` family.
     pub server_tau: Option<f32>,
+    /// FedAvgM's server momentum `β` (Hsu, Qi & Brown, 2019).
+    ///
+    /// Builtin fallback `0.9`. Unlike `server_learning_rate` this is a
+    /// real default rather than a placeholder — it sits inside the
+    /// paper's own sweep (`{0, 0.7, 0.9, 0.97, 0.99, 0.997}`) and is
+    /// where it reports consistent gains. But that sweep is wide, and
+    /// the paper's central finding is that momentum matters *more* as
+    /// client data gets less identical, so a genuinely non-IID
+    /// deployment should tune it rather than leave it.
+    ///
+    /// `0.0` recovers plain FedAvg exactly. Read only by `fedavgm`.
+    pub server_momentum: Option<f32>,
+    /// q-FedAvg's fairness exponent `q` (Li, Sanjabi, Beirami & Smith,
+    /// 2020).
+    ///
+    /// Builtin fallback `0.0`, which is **exactly FedAvg**. That is
+    /// deliberate: selecting `qfedavg` without choosing a `q` should
+    /// behave like the method it generalizes, not silently apply a
+    /// fairness trade nobody asked for. Larger `q` weights high-loss
+    /// clients up, flattening the accuracy *distribution* at some cost
+    /// to its mean — and, less obviously, to convergence speed.
+    pub fairness_q: Option<f32>,
+    /// q-FedAvg's Lipschitz estimate `L`.
+    ///
+    /// Builtin fallback `1.0`, and a placeholder in the same sense
+    /// `clip_radius` is. The paper estimates it once by grid search at
+    /// `q = 0` and reuses it; Conflux never sees a loss surface, so it
+    /// cannot do that estimation and takes the value instead. In the
+    /// paper's own framing it is the inverse of the client learning
+    /// rate.
+    pub server_lipschitz: Option<f32>,
     /// Whether `conflux-reputation`'s pre-aggregation contribution filter
     /// runs at all, independent of which aggregator is selected. Builtin
     /// fallback `false`: every shipped aggregator's default behavior
@@ -376,6 +407,18 @@ pub struct ResolvedConfig {
     ///
     /// See the same field on [`Overrides`] for the full description.
     pub server_tau: Resolved<f32>,
+    /// FedAvgM's server momentum `β`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub server_momentum: Resolved<f32>,
+    /// q-FedAvg's fairness exponent `q`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub fairness_q: Resolved<f32>,
+    /// q-FedAvg's Lipschitz estimate `L`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub server_lipschitz: Resolved<f32>,
     /// Whether the pre-aggregation reputation filter runs.
     ///
     /// See the same field on [`Overrides`] for the full description.
@@ -741,6 +784,42 @@ pub fn resolve(
         &file_source,
         &env_var!("SERVER_TAU"),
     );
+    let server_momentum = layer(
+        0.9_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.server_momentum),
+        env.server_momentum,
+        cli.server_momentum,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("SERVER_MOMENTUM"),
+    );
+    let fairness_q = layer(
+        0.0_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.fairness_q),
+        env.fairness_q,
+        cli.fairness_q,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("FAIRNESS_Q"),
+    );
+    let server_lipschitz = layer(
+        1.0_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.server_lipschitz),
+        env.server_lipschitz,
+        cli.server_lipschitz,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("SERVER_LIPSCHITZ"),
+    );
     let reputation_filter_enabled = layer(
         false,
         None,
@@ -904,6 +983,9 @@ pub fn resolve(
         clip_radius,
         server_learning_rate,
         server_tau,
+        server_momentum,
+        fairness_q,
+        server_lipschitz,
         reputation_filter_enabled,
         client_side_privacy_transform,
         privacy_mechanism,
@@ -1028,6 +1110,24 @@ impl ResolvedConfig {
             "server_tau",
             LoggedValue::Number(self.server_tau.value.to_string()),
             &self.server_tau.source,
+        ));
+        lines.push(log_line(
+            format,
+            "server_momentum",
+            LoggedValue::Number(self.server_momentum.value.to_string()),
+            &self.server_momentum.source,
+        ));
+        lines.push(log_line(
+            format,
+            "fairness_q",
+            LoggedValue::Number(self.fairness_q.value.to_string()),
+            &self.fairness_q.source,
+        ));
+        lines.push(log_line(
+            format,
+            "server_lipschitz",
+            LoggedValue::Number(self.server_lipschitz.value.to_string()),
+            &self.server_lipschitz.source,
         ));
         lines.push(log_line(
             format,

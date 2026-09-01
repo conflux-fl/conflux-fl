@@ -84,7 +84,9 @@ mod weights;
 
 pub use averaging::{AveragingWeighting, FedAvg, SampleCountWeighting, WeightedAverageAggregator};
 pub use flanders::{ClientFlandersDiagnostic, FlandersAggregator};
-pub use optimization::{FedOptAggregator, FedOptParams, FedOptVariant};
+pub use optimization::{
+    FedAvgMAggregator, FedOptAggregator, FedOptParams, FedOptVariant, QFedAvgAggregator,
+};
 pub use robust::{
     BulyanFilter, CoordinateWiseAggregator, CoordinateWiseRobustStatistic, DistanceMatrix,
     DivideAndConquerFilter, FabaFilter, FilteredAggregator, GeometricMedianStatistic, KrumFilter,
@@ -212,6 +214,12 @@ inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadam" }
 }
 inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedavgm" }
+}
+inventory::submit! {
+    StrategyEntry { kind: StrategyKind::Aggregator, name: "qfedavg" }
+}
+inventory::submit! {
     StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadagrad" }
 }
 inventory::submit! {
@@ -304,6 +312,12 @@ pub struct AggregatorParams {
     /// The `optimization` family's `τ`. See
     /// [`Self::server_learning_rate`].
     pub server_tau: Option<f32>,
+    /// FedAvgM's momentum `β`. `None` uses the paper's `0.9`.
+    pub server_momentum: Option<f32>,
+    /// q-FedAvg's fairness exponent. `None` uses `0.0`, i.e. FedAvg.
+    pub fairness_q: Option<f32>,
+    /// q-FedAvg's Lipschitz estimate. `None` uses `1.0`.
+    pub server_lipschitz: Option<f32>,
 }
 
 /// Builds a variant's parameters, letting config override the paper's
@@ -326,6 +340,9 @@ impl Default for AggregatorParams {
             clip_radius: 1.0,
             server_learning_rate: None,
             server_tau: None,
+            server_momentum: None,
+            fairness_q: None,
+            server_lipschitz: None,
         }
     }
 }
@@ -423,6 +440,27 @@ pub fn build_aggregator(
         // paper's Algorithm 2, so a discriminant is the honest shape.
         // They read `AggregatorParams::server_learning_rate` and friends
         // rather than the robust family's `byzantine_fraction`.
+        // FedAvgM: momentum only, no adaptive denominator, and — unlike
+        // the three below — `num_samples`-weighted, because its own
+        // paper specifies that. `β` and `η` are the paper's values.
+        // The only fairness-oriented method in the catalog. `q = 0` is
+        // the builtin and is exactly FedAvg — selecting this without
+        // choosing a `q` should not silently apply a trade nobody asked
+        // for.
+        "qfedavg" => Ok(Box::new(QFedAvgAggregator::with_params(
+            params.fairness_q.unwrap_or(0.0),
+            params.server_lipschitz.unwrap_or(1.0),
+        ))),
+        "fedavgm" => {
+            let mut m = FedAvgMAggregator::new();
+            if let Some(beta) = params.server_momentum {
+                m.beta = beta;
+            }
+            if let Some(eta) = params.server_learning_rate {
+                m.server_learning_rate = eta;
+            }
+            Ok(Box::new(m))
+        }
         "fedadagrad" => Ok(Box::new(FedOptAggregator::with_params(
             FedOptVariant::Adagrad,
             fedopt_params(FedOptVariant::Adagrad, &params),

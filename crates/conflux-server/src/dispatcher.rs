@@ -52,6 +52,8 @@ impl RoundDispatcher for AppState {
         // exactly: a client repeats it on every chunk, so it is read from
         // whichever chunk arrived first rather than requiring chunk 0.
         let local_steps = first.local_steps;
+        // Same scalar convention as `local_steps` and `num_samples`.
+        let local_loss = first.local_loss;
 
         let mut sorted = chunks;
         sorted.sort_by_key(|c| c.chunk_index);
@@ -85,6 +87,7 @@ impl RoundDispatcher for AppState {
             num_samples,
             local_steps,
             control_variate,
+            local_loss,
         };
 
         let buffer = self

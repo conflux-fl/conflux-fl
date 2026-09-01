@@ -3,7 +3,7 @@
   "one_sentence_goal": "Determine whether cross-round temporal signals (deviation-trace stability and inter-client correlation) can distinguish colluding Sybils from a legitimate non-IID majority, which no single-round aggregation rule can do.",
   "status": "active",
   "last_updated": "2026-09-01",
-  "last_session_summary": "Closed the most serious gap in the novelty positioning: FLANDERS (Gabrielli et al., 2024) was the closest published prior art to DSS and was cited nowhere. Implemented it faithfully in conflux-core (MAR(1) + ALS, top-k filter) and ran a 10,800-row head-to-head (Experiment 2.10, section 5.14). Four findings: DSS beats FLANDERS ~15x on the adaptive attacker; FLANDERS collapses to worse-than-undefended in the majority-attacker regime it was built for, while DSS holds; FLANDERS is worse than plain FedAvg against every Sybil attack tested, for a structural reason now pinned as a unit test (a stable colluder is the most forecastable client in the batch); and collusion-only DSS dominates everything, including the shipped AND-gate, by one to two orders of magnitude. DSS's composability claim was withdrawn \u2014 FLANDERS has that shape and published first.",
+  "last_session_summary": "Two things. (1) Unblocked task r2 and answered it. The blocker was never the experiment: run_fairness_experiment.rs called build_aggregator directly so no dss_ name resolved, and it was single-round so DSS's gate could not fire at all (stability returns 1.0 below two trace entries) \u2014 a dss_ row would have printed FedAvg's numbers and looked like a measurement. Both fixed; Experiment 2.11 (6,720 rows, 20 seeds, 20 rounds, zero attackers) shows dropping the stability conjunct does NOT reopen Claim 2: collusion-only DSS sits at 1.030 +/- 0.177 minority/majority influence, a CI containing parity, while krum (0.636) and flanders_krum (0.746) both down-weight the shifted minority. (2) Started r8, the real-model validation of section 5.14, and hit a structural limit worth recording.",
   "phase": "post-validation; hypothesis partially supported, three open design questions",
   "hypothesis_status": {
     "claim_1_sybil_blind_spot": "demonstrated empirically (\u00a75.1, \u00a75.2)",
@@ -11,15 +11,17 @@
     "dss_core_hypothesis": "supported on ONE attack shape only (temporally unstable colluders, \u00a75.5: fedavg 161.3 -> 1.18). Does not catch stable colluders, by its own design.",
     "dss_safety_as_a_wrapper": "resolved 2026-08-31 (\u00a75.11). Was the most serious problem found; wrapping a robust base could regress it up to 577x. Now cannot do materially worse than what it wraps.",
     "dss_under_solo_attacker": "OPEN. Still fails with a fragile base. Cause isolated (\u00a75.8.1): the shared deviation reference is itself unstable when the base method is. Design problem, not arithmetic.",
-    "dss_vs_closest_prior_art": "measured 2026-09-01 (section 5.14). DSS 0.64 vs FLANDERS 9.41 on adaptive_evasion; at 60% malicious DSS 0.44 vs FLANDERS 1901.7 (worse than undefended FedAvg's 1659.1). The two fail on opposite attack shapes: DSS's gate needs instability and misses stable colluders, FLANDERS rewards forecastability and prefers them."
+    "dss_vs_closest_prior_art": "measured 2026-09-01 (section 5.14). DSS 0.64 vs FLANDERS 9.41 on adaptive_evasion; at 60% malicious DSS 0.44 vs FLANDERS 1901.7 (worse than undefended FedAvg's 1659.1). The two fail on opposite attack shapes: DSS's gate needs instability and misses stable colluders, FLANDERS rewards forecastability and prefers them.",
+    "claim_2_fairness_cost_of_the_gate": "measured 2026-09-01 (section 5.15). The stability conjunct buys no fairness the collusion-only variant lacks \u2014 the shipped gate returns fedavg's numbers exactly with zero attackers, and collusion-only is already at parity. The objection blocking r2 is removed. The decision to change DSS's default remains the project owner's; thresholds are unchanged."
   },
   "what_changed_this_session": [
-    "conflux-core/src/flanders.rs: FLANDERS implemented faithfully (MAR(1) via alternating least squares, delta = squared L2, top-k, paper's cold-start branch). Registered in the catalog paired with Krum, per the paper's own phi.",
-    "conflux-core/src/optimization.rs: the optimization family \u2014 FedAdagrad/FedAdam/FedYogi (Reddi et al. 2021, Algorithm 2). Unrelated to the research line; closes the framework's largest catalog gap.",
-    "run_experiment.rs: new `flanders_<base>` prefix, so DSS and FLANDERS run on identical batches.",
-    "New Experiment 2.10 (10,800 rows, 5 seeds) and research doc section 5.14.",
-    "Section 6.5's novelty table gained the FLANDERS row it was missing; contribution 3 withdrawn.",
-    "paper/dss.tex: related work, contributions, a new results section, and two bibliography entries."
+    "run_fairness_experiment.rs: gained --rounds (default 1, so Experiment 2.3 stays reproducible) and now shares run_experiment.rs's aggregator-name dispatch via a new examples/common/ module.",
+    "New Experiment 2.11 (temporal non-IID fairness) and research doc section 5.15.",
+    "paper/dss.tex: a new section (sec:temporalfairness). Caught and fixed a duplicate sec:fairness label while validating.",
+    "BASELINES.md: consolidated tables for Experiments 2.10 and 2.11.",
+    "Experiment 2.3 regenerated after the refactor \u2014 values unchanged except last-digit rounding on geometric_median and foolsgold (worst relative difference 3.7e-5, every group mean identical to six decimals), which is the disclosed Tier 6 arithmetic change.",
+    "Experiment 3.3 (section 5.16): the FLANDERS comparison on real MNIST. Found and fixed a d x d allocation that OOM-killed the server twice, then measured that FLANDERS+Krum collapses to 0.102 under attack where bare Krum holds at 0.655.",
+    "Experiment 3.4 (section 5.16.1): the krum-vs-flanders comparison across 3 seeds. krum 0.689 +/- 0.042, flanders 0.114 +/- 0.021, non-overlapping, same direction every seed. flanders sits at chance (0.100 for 10-class MNIST)."
   ],
   "conclusions_overturned_by_measurement": [
     "\u00a75.8 predicted a mechanical epsilon fix would replace the chaotic regime with a predictable one. It did not: it made results reproducible (cross-seed CV 1.03 -> 0.43) but not better, and the \u00a75.9 joint transient window came back byte-identical. The two did not share a root cause.",
@@ -27,13 +29,17 @@
     "\u00a75.6 concluded the AND-gate was numerically identical to stability-only. That was an artifact of its identical-Sybil attack model. Against non-identical colluders, collusion-only scores 1.09 where stability-only scores 17.13.",
     "\u00a75.10 found a genuine clip-radius optimum at dim=3. It does not transfer: on a 50,890-parameter model the curve is monotonic toward FedAvg with no optimum anywhere.",
     "Section 6.5's contribution 3 ('composability with any existing Aggregator') was not novel. FLANDERS (2024) is a pre-aggregation filter over an arbitrary base. Withdrawn rather than defended.",
-    "FLANDERS's headline claim \u2014 resilience when malicious clients far exceed legitimate ones \u2014 does not hold against the adaptive attacker in our reproduction: at 60% malicious it scores 1901.7 against undefended FedAvg's 1659.1. Reported as what the numbers show; it is one attack family at dim=3 and is not a refutation of the paper's own evaluation."
+    "FLANDERS's headline claim \u2014 resilience when malicious clients far exceed legitimate ones \u2014 does not hold against the adaptive attacker in our reproduction: at 60% malicious it scores 1901.7 against undefended FedAvg's 1659.1. Reported as what the numbers show; it is one attack family at dim=3 and is not a refutation of the paper's own evaluation.",
+    "Task r2's premise was wrong. It was marked 'blocked on the non-IID fairness test' for three sessions; the fairness test was not the obstacle. The harness could neither name a DSS variant nor exercise one, and nothing surfaced that because the sweep list only ever held catalog names.",
+    "The stability conjunct was assumed to be protecting Claim 2. Measured with zero attackers over 20 rounds, it protects nothing: the gate never fires, and the collusion-only variant it was guarding against is already at minority/majority parity (1.030 +/- 0.177).",
+    "Section 5.14 said FLANDERS's d-scaling was a cost 'nothing here measures'. Measuring it showed it is not a cost but a wall: quadratic in model dimension, 20.7 GB at 50,890 parameters, unrunnable without the paper's subsampling. DSS's scalar traces are constant in d. That is the sharpest distinction between the two methods and it was nearly missed.",
+    "Section 5.14's fairness note said flanders_krum 'holds' where flanders_fedavg was harmful. On a real model the paper's own Krum pairing is the harmful one: 0.102 against bare Krum's 0.655."
   ],
   "reproducibility": {
-    "total_result_rows": 39131,
+    "total_result_rows": 45893,
     "seeds_per_synthetic_cell": 5,
     "seeds_per_real_data_cell": 1,
-    "known_gap": "Real-data runs (3.1/3.2) are single-seed. Adequate for the negative result about clip_radius; not adequate for anything comparative."
+    "known_gap": "CONFLUX_DEMO_SEED (added 2026-09-01) seeds the real-data partition but not the trainers. Residual run-to-run variance measured at 0.063 for krum; the effects being reported are ~9x larger. Synthetic experiments remain 5-seed. Real-data: section 5.16 is n=1, section 5.16.1 is n=3."
   },
   "environment": {
     "compute": "local CPU only",
@@ -41,9 +47,11 @@
     "python": "python/conflux_client/.venv, torch 2.13.0+cpu, torchvision 0.28.0+cpu",
     "cost": "none -- no API-based models involved"
   },
-  "next_action": "Task r2 (the stability/collusion combination rule) is now the highest-value open item: section 5.14 is the third independent piece of evidence that the AND-gate is the limiting component, and collusion-only DSS dominates across six attacks and four malicious ratios. It stays blocked on the non-IID fairness test, which is what would show whether dropping the stability conjunct reopens Claim 2.",
+  "next_action": "Research line: task r2's decision (the AND-gate combination rule) is measurement-ready and waiting on a research judgment -- section 5.15 removed the objection that blocked it. Framework: four methods (FedProx, SCAFFOLD, FedNova, q-FedAvg's real use) now wait on ADR 0005's Python SDK decision, which is the single highest-leverage open question.",
   "blocked_on_user": [
-    "Whether to change the AND-gate's combination rule (task r2). \u00a75.12 shows it discards real signal, but flipping it risks reopening Claim 2 against honest non-IID clients -- a research judgment, not a code change.",
-    "Whether DSS is being taken toward publication. If so, tasks p1-p3 matter; if it stays an internal research line, they don't."
+    "Whether to change DSS's shipped combination rule (task r2). The measurement objection is gone as of section 5.15 \u2014 collusion-only does not reopen Claim 2 and is fairer than krum or flanders_krum \u2014 but changing an unvalidated research method's default is a research judgment, not a code change, and has deliberately not been made.",
+    "Whether DSS should be reachable by the real-data harness at all. AGENT.md's rule keeps it out of build_aggregator, and the e2e demos drive the real conflux-server binary, so DSS cannot be validated on a real model through the standard path. The rule that protects users from an unvalidated method is also what prevents it being validated.",
+    "Whether DSS is being taken toward publication (task p1).",
+    "Whether DSS should be reachable by the real-data harness. It cannot be measured on a real model today because the harness drives the production server binary and AGENT.md keeps DSS out of the catalog. Every real-data result in the document is therefore about catalog methods only."
   ]
 }

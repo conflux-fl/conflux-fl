@@ -1,6 +1,6 @@
 # Conflux — Status
 
-Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then FedAdagrad/FedAdam/FedYogi, closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **17 aggregation methods across five families.** 469 tests (21 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fourteen crates. Version 0.2.0.
+Last updated: 2026-09-01 — **stabilization Tiers 1–6 complete, ADR 0011/0012 built, and the `optimization` family shipped**. Three remotely-triggerable defects fixed, the admin API authenticated, the project made releasable (Apache-2.0, workspace-inherited metadata, declared MSRVs, a compose file, evnx-managed env config, CI), the public API documented, reviewed, and demonstrated, the three production-hardening defects a post-Tier-4 audit found closed, and — Tier 6 — four more found by testing the stateful aggregators *across rounds*, which nothing had done: `centered_clipping` could be driven to a permanently `NaN` reference by one finite update, and a client could evade DSS's stability gate by submitting larger ones. Then the two deferred plumbing ADRs: 0012's optional proto fields (unblocking FedNova/SCAFFOLD/FedOpt) and 0011's trusted-reference sidecar, which makes **FLTrust** the first method in the catalog able to resist a colluding *majority*. Then the whole `optimization` family — FedAvgM, FedAdagrad, FedAdam, FedYogi and q-FedAvg — closing the framework's largest catalog gap, and **FLANDERS** — implemented to compare DSS against its closest published prior art, which found that DSS beats it ~15× on the adaptive attacker and that FLANDERS scores worse than undefended FedAvg against stable Sybils. **19 aggregation methods across five families.** 482 tests (21 doc-tests, up from zero), clippy clean under `-D warnings`, fmt clean. Fourteen crates. Version 0.2.0.
 
 ## Done
 - [x] Git repo initialized
@@ -1547,6 +1547,226 @@ re-generated after a later refactor of the linear solver and came back
 `docs/research/AGENT.md` requires. `.env.example` and `USAGE.md` are both
 at exact 50/50 parity with the code.
 
+## Defect: FLANDERS was unrunnable on a real model (2026-09-01)
+
+Found by running it, in the worst way: `conflux-server` was OOM-killed
+twice at **8.3 GB and 6.6 GB resident**, and because the box has 14 GB
+with swap already full, the kernel's global OOM killer took the desktop
+session with it.
+
+**Cause.** `FlandersAggregator`'s MAR coefficient matrix is `d × d`. At
+MNIST's 50,890 parameters that is `50890² × 8 bytes` = **20.7 GB for a
+single allocation**, and `fit_mar` builds several. It first fires in
+round *three* — the first round with enough history to fit anything —
+which is why a two-round smoke test passed and a six-round sweep died.
+
+**Why nothing caught it.** Every synthetic experiment runs at `dim = 3`,
+where the same allocation is 72 bytes. The entire test suite, the
+adversarial suites included, ran at a dimension four orders of magnitude
+below where the defect lives.
+
+**The fix is the paper's own.** FLANDERS samples 500 coordinates "for
+tractability on real models"; `max_forecast_dim` now does the same
+(evenly spaced, deterministic — a contiguous prefix would forecast one
+layer of a real network and ignore every other). Peak RSS at
+`dim = 50,890` went from >8 GB to **258 MB**, and there is now a
+regression test at that dimension.
+
+**The comment that predicted it.** The implementation's own fidelity
+note said: *"The paper samples 500 coordinates for tractability on real
+models. This implementation uses all of them... A deployment on a large
+model would want the subsampling; it is not implemented rather than
+being approximated silently."* The hazard was documented, correctly, and
+then walked into. The reasoning was the error: subsampling is not an
+approximation *of* the paper, it **is** the paper, and omitting it left
+the method unable to run at the scale it was written for.
+
+**A second, smaller leak fixed alongside.** All four e2e demo harnesses
+kept their `mktemp -d` work directory unconditionally — "kept for
+inspection". On most Linux systems `/tmp` is tmpfs, so that is *RAM*:
+23 abandoned directories at ~22 MB each had accumulated. They now clean
+up on success and are kept only on failure, or with
+`CONFLUX_KEEP_WORK_DIR=1`.
+
+**Verification.** 469 → **471 tests**, 0 failed. Experiment 2.10 re-runs
+**byte-identical** (dim = 3 is below the bound, so no published result
+moved). Peak RSS for the full workspace test run: 1.3 GB.
+
+## conflux-web synced to 0.2.0, and FedAvgM (2026-09-01)
+
+### The documentation site had drifted badly
+
+Measured rather than estimated: **5 of the then-17 aggregation methods
+missing** (`fltrust`, `flanders`, `fedadagrad`, `fedadam`, `fedyogi`),
+**5 of 26 config parameters missing**, and **zero files** mentioning the
+trusted-reference sidecar, the optimization family, ADR 0012's proto
+fields, `max_update_bytes`, admin-token auth, graceful shutdown, or the
+`/health` breaking change. Nine sessions of framework work had landed
+with none of it reaching the site.
+
+Now at parity. What changed:
+
+- **`reference/aggregation-catalog`** restructured from one flat table
+  into the five families, with all 19 methods and the two measured
+  cautions (`flanders` must be paired with a robust base; `clip_radius`
+  and `server_learning_rate` are placeholders, not recommendations).
+- **`reference/configuration-catalog`** — all 26 resolved parameters.
+- **`reference/crates`**, `guides/architecture`, and a blog post — 13 →
+  14 crates.
+- **New `crate-deep-dives/conflux-trusted-reference`** — the sidecar as a
+  boundary drawn as a process, and why the server can call one without
+  linking one.
+- **`guides/deployment`** — the `/health` JSON shape as a flagged
+  breaking change, why `degraded` returns 200 and `stopped` 503,
+  SIGTERM draining, `max_update_bytes`, and four new checklist items.
+- **`guides/extending`** — ADR 0012's `Mutex` state pattern with the
+  three obligations that come with statefulness, the add-a-proto-field
+  recipe, and ADR 0011's trusted-family hooks.
+- **`conflux-proto`/`conflux-net`/`conflux-core`/`conflux-server` deep
+  dives** — optional-field wire compatibility, the sidecar client, the
+  byte bound and why every payload field must count toward it, the
+  round-loop health fix.
+- **`getting-started`** — the new `/health` output and the admin-token
+  requirement.
+
+42 pages, builds clean. Two errors I introduced and caught while
+verifying: a blog line where I changed "Two of them" (the count of
+zero-dependency anchor crates) along with the crate count, which made it
+disagree with the two crates it then named; and a claim that "the three
+families below each answer that ceiling", when `optimization` is
+explicitly orthogonal to it.
+
+### FedAvgM shipped — the `optimization` family is now four
+
+Hsu, Qi & Brown (2019). `v ← βv + Δw`, `w ← w − v`, and nothing else.
+The baseline every adaptive method is measured against, including Reddi
+et al.'s own results table — a framework with FedOpt and without this
+cannot reproduce it. (Took the catalog to 18; q-FedAvg below makes 19.)
+
+Built as its own type rather than a fourth `FedOptVariant`, because that
+enum's honesty rests on its three arms differing in exactly one line of
+Algorithm 2 and FedAvgM has no second moment at all.
+
+**Two paper-level disagreements, both implemented as written rather than
+harmonized:**
+
+- **The two papers weight differently.** FedAvgM's `Δw` is
+  `Σ (n_k/n) Δw_k` — sample-count weighted. FedOpt's Algorithm 2 line 10
+  is an *unweighted* mean. A test
+  (`fedavgm_weights_by_sample_count_unlike_fedopt`) pins the difference
+  so nobody later "fixes" one to match the other.
+- **The FedAvgM paper disagrees with itself.** §4.2's equation is
+  classical momentum; its experiments say Nesterov. The equation is what
+  ships, and the discrepancy is documented rather than silently
+  resolved.
+
+`β` is config-reachable as `server_momentum` (builtin 0.9 — a *real*
+default, inside the paper's own sweep, unlike `server_learning_rate`'s
+placeholder). `η` is fixed at 1.0 by that paper, so it is the one
+honest default in this family.
+
+### q-FedAvg shipped — and the ADR 0012 recipe proved itself
+
+Li, Sanjabi, Beirami & Smith (2020), Algorithm 2. The **only
+fairness-oriented method in the catalog**: it weights each client by its
+own loss raised to `q`, flattening the accuracy *distribution* rather
+than only improving its mean. `q = 0` is exactly FedAvg, which is the
+builtin — selecting the method without choosing a `q` should behave like
+the thing it generalizes, not silently apply a trade.
+
+It needed a third optional wire field (`local_loss`), which is the first
+independent exercise of ADR 0012's add-a-field recipe. **It broke
+exactly one struct literal in the whole workspace** — the compatibility
+test that deliberately names every field because noticing schema growth
+is its job. The `..Default::default()` idiom introduced when the first
+two fields landed did what it was for, and byte-level backward
+compatibility still holds with three optional fields present. Only two
+of the recipe's three edits applied: a fixed-size scalar needs no
+`max_update_bytes` accounting.
+
+**Two of my test premises were wrong here, and the implementation was
+right both times.** I assumed the step magnitude would rise
+monotonically with `q`, then that it would fall monotonically. It does
+neither — 0.538 at `q=1`, 0.624 at `q=2`, 0.499 at `q=4` — because two
+effects compete: `F^q` weighting turns the update further toward the
+worst-served client and *lengthens* the step, while `h_k`'s
+`q·F^{q−1}·‖Δw_k‖²` term grows with `q` and *shortens* it. So **`q` is
+not a simple "more fairness" dial**: it trades mean accuracy,
+uniformity, and convergence speed simultaneously, non-monotonically.
+Both facts are pinned as tests now rather than left as intuitions.
+
+Unusable until a client reports `local_loss` — with none reported it
+falls back to FedAvg, which is honest but is not q-FedAvg. Like FedNova
+and SCAFFOLD, its remaining blocker is ADR 0005.
+
+**Four methods now wait on that one decision** (FedProx, SCAFFOLD,
+FedNova, q-FedAvg's real use). Everything buildable *without* a client
+change is built. That is the strongest argument yet for settling the
+Python SDK question.
+
+**Verification.** 471 → **482 tests**, 0 failed. Clippy clean under
+`-D warnings`, fmt clean. **19 methods across five families.**
+`.env.example` and `USAGE.md` both back at exact **53/53** parity.
+
+## Experiment 3.3 — the FLANDERS comparison on a real model (2026-09-01)
+
+Task `r8`, and the reason it mattered: §5.14's headline claims were
+entirely at `dim = 3`, and §5.13 is the standing evidence that a
+synthetic conclusion need not survive a real one.
+
+**Getting there is the defect recorded above** — FLANDERS's `d × d`
+matrix, 20.7 GB at 50,890 parameters, two OOM kills. Fixed with the
+paper's own subsampling. The consequence for the research line is
+sharper than the caveat §5.14 wrote: **FLANDERS's forecast is quadratic
+in model dimension and DSS's scalar traces are constant in it.** That is
+a difference of kind, and it was nearly missed.
+
+**The accuracy result reproduces §5.14's Finding 3 and strengthens it.**
+Real MNIST, 50,890-parameter MLP, 3 clients, Dirichlet `α = 0.5`,
+baseline 0.852:
+
+| aggregator | no attack | poisoned |
+|---|---|---|
+| `fedavg` | **0.839** | 0.181 |
+| `krum` | 0.669 | **0.655** |
+| `flanders` (= FLANDERS + Krum) | 0.671 | **0.102** |
+
+`flanders` *is* `krum` plus a pre-filter. Undefended they are
+indistinguishable. Under attack the filter takes its base from 0.655 to
+**0.102 — below undefended FedAvg**. Synthetically only the FedAvg
+pairing was harmful; on a real model the paper's own Krum pairing is.
+
+**A structural limit, worth deciding rather than leaving implied.** DSS
+cannot be measured on real data *at all*: the harness drives the
+production `conflux-server` binary, which builds aggregators from
+`build_aggregator`'s catalog, and `AGENT.md`'s own rule keeps
+`DssAggregator` out of it. The rule that protects users from an
+unvalidated method is the same one preventing it being validated. Every
+real-data result in `docs/research/` is therefore about catalog methods
+only.
+
+**The harness is no longer fixed-seed**, and the headline comparison is
+no longer `n = 1`. `run_demo.sh` gained `CONFLUX_DEMO_SEED` (defaulting
+to the old 42, so existing results reproduce) — the blocker behind task
+`r4`. Repeating `krum` vs `flanders` across three partitions (§5.16.1):
+
+| aggregator | mean ± 95% CI |
+|---|---|
+| `krum` | **0.689 ± 0.042** |
+| `flanders` | **0.114 ± 0.021** |
+
+Non-overlapping, identical direction in every seed, and `flanders` sits
+at chance (0.100 for ten-class MNIST). **Adding FLANDERS's filter in
+front of Krum takes a working defense to approximately random.**
+
+**A limitation the experiment found about itself.** `CONFLUX_DEMO_SEED`
+seeds the data partition but *not* the trainers — noticed because the
+same nominal seed 42 gave `krum` 0.655 in §5.16 and 0.718 in §5.16.1.
+That 0.063 spread is not noise to explain away; it is a free measurement
+of the harness's residual variance, and the effect being reported is
+**9.1× larger than it**. Seeding the trainers is the remaining half of
+`r4`.
+
 ## Research-line entry point
 
 The DSS research now has its own harness (scaffolded 2026-08-31 with the
@@ -1583,16 +1803,36 @@ at the same time. That is a reason to sequence them deliberately, not a
 reason to avoid them.
 
 - ~~ADR 0012's stateful-aggregator proto extension~~ and ~~ADR 0011's
-  trusted-reference sidecar~~ — **both built (2026-08-31)**, see above.
-- **Methods the new plumbing unblocked, none built yet**, each its own
-  phase brief: **FedNova** (`local_steps` is on the wire; the ADR calls
-  it a straightforward `AveragingWeighting` member) · **SCAFFOLD**
-  (`control_variate` is on the wire and reassembles) · **FedOpt**
-  (needs no proto change at all, only the state pattern, which is now
-  documented) · **Zeno** (the sidecar already serves its scoring RPC and
-  a test drives it; nothing consumes it).
-- **Remaining feature gaps**: ADR 0005's Python SDK interface question ·
-  Phase 21's profile-file `inherits` · a `cflux` CLI.
+  trusted-reference sidecar~~ — **both built (2026-08-31)**.
+- ~~FedOpt~~, ~~FedAvgM~~, ~~q-FedAvg~~ — **built (2026-09-01)**, see
+  [phase 22](phases/phase-22-optimization-family.md). The `optimization`
+  family went from empty to five members.
+
+**Everything buildable without a client-side change is now built.** The
+remaining method work all converges on one decision:
+
+| Blocked on | What it needs from a client |
+|---|---|
+| **FedNova** | populate `local_steps` (already on the wire) |
+| **SCAFFOLD** | maintain and send a control variate (already on the wire) |
+| **FedProx** | add a proximal term to its own loss — its server side *is* FedAvg, so there is nothing to build here at all |
+| **q-FedAvg** *(shipped, inert)* | report `local_loss` (already on the wire); with none reported it falls back to FedAvg |
+
+**Four methods, one blocker: ADR 0005's Python SDK question.** That is
+now the single highest-leverage open decision on the framework line, and
+it is a decision rather than a task.
+
+**Zeno** is the exception — it needs no client change. The sidecar
+already serves its scoring RPC and a test drives it over the real hop;
+nothing consumes it. Its combine (score, then keep a top-scoring subset)
+is its own brief. Note that §5.16's measurement of FLANDERS is a caution
+here: a filter that ranks clients can make a robust base *worse*, and
+Zeno is a filter that ranks clients.
+
+**Other feature gaps**: Phase 21's profile-file `inherits` (the last
+open half of spec §11 Open Item 2) · a `cflux` CLI (designed, deliberately
+sequenced last) · `PerClient` epsilon accounting (ADR 0006, gated on
+per-client round history).
 - **Publishing (P1–P3), gated on a decision that hasn't been made.**
   Whether crates.io publishing is intended is still open. If yes:
   **P1** every internal path dependency needs a `version` alongside its
@@ -1607,7 +1847,13 @@ reason to avoid them.
   then `server`). If publishing is *not* intended, P1–P3 all drop and
   the metadata still stands on its own for the license.
 
-Then `conflux-web`, then the DSS research line below.
+`conflux-web` is **synced as of 2026-09-01** — all 19 methods, all 26
+config parameters, the sidecar, the optimization family, and the
+`/health` breaking change. It had drifted through nine sessions of
+framework work before that, so it is worth re-checking whenever a
+catalog entry or config key is added, not batched again.
+
+The DSS research line is below.
 
 **DSS paper (2026-08-31).**
 [`docs/research/paper/dss.tex`](research/paper/dss.tex) — a standalone

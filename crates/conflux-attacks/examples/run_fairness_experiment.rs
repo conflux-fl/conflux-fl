@@ -20,12 +20,42 @@
 //! arbitrary, proxy for the divergence axis in Figure 2 and Claim 2 (§3.3)
 //! — not a fabricated stand-in.
 //!
+//! # Multi-round measurement (`--rounds`, added 2026-09-01)
+//!
+//! This experiment was single-round from the start, which was correct
+//! for the eleven stateless methods it was written against. It is
+//! **structurally unable to measure a cross-round method**, and that
+//! turned out to matter: `DssAggregator` returns a stability score of
+//! `1.0` for every client whose deviation trace is shorter than two
+//! entries, so in a single round its AND-gate can never fire and DSS
+//! behaves exactly like whatever it wraps. Running Experiment 2.3 with a
+//! `dss_` name would have produced its base method's numbers and looked
+//! like a result.
+//!
+//! That is the real reason §6.5's fairness question — "does dropping the
+//! stability conjunct reopen Claim 2?" — stayed open across three
+//! sessions. Not that the measurement was hard, but that the harness
+//! could neither name a DSS variant (it called `build_aggregator`
+//! directly) nor exercise one.
+//!
+//! With `--rounds N > 1`, leave-one-out influence becomes
+//! `‖A_N(full) − A_N(full ∖ {i})‖`: both arms run `N` rounds against the
+//! same per-round seed sequence, with **one** aggregator instance per arm
+//! so cross-round state accumulates. The question it answers is the same
+//! one, asked over an experiment rather than a round — how much did
+//! client `i`'s presence throughout change where the model ended up?
+//!
+//! `--rounds 1` is the default and reproduces the original behavior
+//! exactly, so Experiment 2.3's existing results remain valid and
+//! re-runnable.
+//!
 //! Run via `cargo run --release --example run_fairness_experiment -p
 //! conflux-attacks -- --aggregator ... --shift ...`.
 
 use std::collections::HashMap;
 
-use conflux_core::{AggregatorParams, build_aggregator};
+mod common;
+use common::build_experiment_aggregator;
 use conflux_proto::{ClientDelta, encode_weights};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -37,6 +67,7 @@ struct ClientResult {
     aggregator: String,
     shift: f32,
     seed: u64,
+    rounds: usize,
     client_group: String, // "majority" | "minority"
     client_index: usize,
     /// `‖A(batch) − A(batch ∖ {client_index})‖` — how much removing this
@@ -53,6 +84,8 @@ struct Args {
     seed: u64,
     dim: usize,
     byzantine_fraction: f32,
+    clip_radius: f32,
+    rounds: usize,
 }
 
 fn parse_args() -> Args {
@@ -87,14 +120,18 @@ fn parse_args() -> Args {
         seed: get(&map, "seed", 1),
         dim: get(&map, "dim", 3),
         byzantine_fraction: get(&map, "byzantine-fraction", 0.2),
+        clip_radius: get(&map, "clip-radius", 1.0),
+        // Default 1: the original single-round behavior, so every
+        // existing Experiment 2.3 result stays reproducible.
+        rounds: get(&map, "rounds", 1),
     }
 }
 
 /// Majority centered at [1,1,...,1]; minority centered at
 /// [1+shift, 1, ..., 1] — shifted along one axis only, so `shift` alone
 /// (not a multi-dimensional direction choice) controls the divergence.
-fn build_batch(args: &Args) -> (Vec<ClientDelta>, Vec<(String, usize)>) {
-    let mut rng = StdRng::seed_from_u64(args.seed);
+fn build_batch(args: &Args, seed: u64) -> (Vec<ClientDelta>, Vec<(String, usize)>) {
+    let mut rng = StdRng::seed_from_u64(seed);
     let noise = Normal::new(0.0, 0.3).unwrap();
     let mut deltas = Vec::new();
     let mut groups = Vec::new();
@@ -139,43 +176,53 @@ fn distance(a: &[f32], b: &[f32]) -> f32 {
         .sqrt()
 }
 
+/// Runs `rounds` rounds against one aggregator instance and returns the
+/// final aggregate.
+///
+/// One instance for the whole run, not one per round: that is the entire
+/// point of the multi-round mode. A fresh aggregator each round would
+/// reset the cross-round state being measured and silently reproduce the
+/// single-round result.
+///
+/// `skip` removes one client from every round, which is the leave-one-out
+/// arm. Removing it from *every* round rather than just the last matters
+/// for a stateful method — a client that was present for nineteen rounds
+/// has already shaped the history the twentieth is judged against.
+fn run_arm(args: &Args, skip: Option<usize>) -> Vec<f32> {
+    let aggregator =
+        build_experiment_aggregator(&args.aggregator, args.byzantine_fraction, args.clip_radius);
+
+    let mut last = Vec::new();
+    for round in 0..args.rounds {
+        // Same per-round seed sequence in both arms, so the two differ
+        // only by the removed client and not by the noise draw.
+        let (mut batch, _) = build_batch(args, args.seed + round as u64);
+        if let Some(index) = skip {
+            batch.remove(index);
+        }
+        last = aggregator
+            .aggregate(&batch)
+            .unwrap_or_else(|e| panic!("aggregation failed in round {round}: {e}"));
+    }
+    last
+}
+
 fn main() {
     let args = parse_args();
-    let (batch, groups) = build_batch(&args);
+    // Group labels come from a round-0 batch; membership is identical in
+    // every round, only the noise differs.
+    let (_, groups) = build_batch(&args, args.seed);
 
-    // Fresh aggregator per call — this experiment is single-round
-    // (matching Experiment 2.1's design), so FoolsGold's cross-round
-    // history isn't exercised here; a temporal fairness measurement is
-    // separate future work (see this file's own module doc comment).
-    let full_result = build_aggregator(
-        &args.aggregator,
-        AggregatorParams {
-            byzantine_fraction: args.byzantine_fraction,
-            ..Default::default()
-        },
-    )
-    .unwrap_or_else(|e| panic!("{e}"))
-    .aggregate(&batch)
-    .unwrap_or_else(|e| panic!("full-batch aggregation failed: {e}"));
+    let full_result = run_arm(&args, None);
 
     for (idx, (group, group_idx)) in groups.iter().enumerate() {
-        let mut without_i = batch.clone();
-        without_i.remove(idx);
-        let result_without_i = build_aggregator(
-            &args.aggregator,
-            AggregatorParams {
-                byzantine_fraction: args.byzantine_fraction,
-                ..Default::default()
-            },
-        )
-        .unwrap_or_else(|e| panic!("{e}"))
-        .aggregate(&without_i)
-        .unwrap_or_else(|e| panic!("leave-one-out aggregation failed: {e}"));
+        let result_without_i = run_arm(&args, Some(idx));
 
         let row = ClientResult {
             aggregator: args.aggregator.clone(),
             shift: args.shift,
             seed: args.seed,
+            rounds: args.rounds,
             client_group: group.clone(),
             client_index: *group_idx,
             leave_one_out_influence: distance(&full_result, &result_without_i),

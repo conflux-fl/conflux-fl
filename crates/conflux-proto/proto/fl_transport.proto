@@ -171,6 +171,23 @@ message DeltaChunk {
   // client-controlled byte field would simply relocate the flood into
   // it.
   optional bytes control_variate = 8;
+
+  // This client's local loss `F_k(w)` evaluated at the round's starting
+  // global model, *before* local training. q-FedAvg's fairness input
+  // (Li, Sanjabi, Beirami & Smith, 2020): clients the model currently
+  // serves badly get weighted up, so the accuracy *distribution*
+  // flattens rather than only its mean improving.
+  //
+  // A scalar, so it follows `num_samples`/`local_steps`: repeated on
+  // every chunk, read from whichever arrives first. Fixed-size, so
+  // unlike `control_variate` it does not count toward
+  // `max_update_bytes` — there is no flood to bound in four bytes.
+  //
+  // Self-reported and unauthenticated, and here that matters more than
+  // usual: q-FedAvg weights *up* whoever reports a high loss, so a
+  // client that inflates this buys influence rather than losing it.
+  // That is a property of the published method, not of the transport.
+  optional float local_loss = 9;
 }
 
 // The server's answer to a completed submission.
@@ -220,4 +237,7 @@ message ClientDelta {
   // the same length as `weights` — the transport cannot, being opaque to
   // model architecture.
   optional bytes control_variate = 6;
+  // q-FedAvg's local loss, taken from the first chunk received. See
+  // DeltaChunk.local_loss for what trusting it costs.
+  optional float local_loss = 7;
 }

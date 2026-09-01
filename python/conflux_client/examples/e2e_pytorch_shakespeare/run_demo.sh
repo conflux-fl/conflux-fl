@@ -58,13 +58,23 @@ WORK_DIR="$(mktemp -d)"
 PIDS=()
 
 cleanup() {
+  local exit_code=$?
   echo ""
   echo "=== cleaning up ==="
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" 2>/dev/null || true
   done
   wait 2>/dev/null || true
-  echo "work dir kept for inspection: $WORK_DIR"
+  # Keep the work dir only when something went wrong — that is when you
+  # would want to look at it. Keeping it unconditionally leaked ~22 MB
+  # per run into /tmp, which on most Linux systems is tmpfs and therefore
+  # *RAM*: a 20-run sweep quietly consumed half a gigabyte of memory that
+  # nothing would ever reclaim. Override with CONFLUX_KEEP_WORK_DIR=1.
+  if [ "${CONFLUX_KEEP_WORK_DIR:-0}" = "1" ] || [ "$exit_code" != "0" ]; then
+    echo "work dir kept for inspection: $WORK_DIR"
+  else
+    rm -rf "$WORK_DIR"
+  fi
 }
 trap cleanup EXIT
 

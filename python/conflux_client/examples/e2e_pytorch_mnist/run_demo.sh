@@ -42,13 +42,23 @@ WORK_DIR="$(mktemp -d)"
 PIDS=()
 
 cleanup() {
+  local exit_code=$?
   echo ""
   echo "=== cleaning up ==="
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" 2>/dev/null || true
   done
   wait 2>/dev/null || true
-  echo "work dir kept for inspection: $WORK_DIR"
+  # Keep the work dir only when something went wrong — that is when you
+  # would want to look at it. Keeping it unconditionally leaked ~22 MB
+  # per run into /tmp, which on most Linux systems is tmpfs and therefore
+  # *RAM*: a 20-run sweep quietly consumed half a gigabyte of memory that
+  # nothing would ever reclaim. Override with CONFLUX_KEEP_WORK_DIR=1.
+  if [ "${CONFLUX_KEEP_WORK_DIR:-0}" = "1" ] || [ "$exit_code" != "0" ]; then
+    echo "work dir kept for inspection: $WORK_DIR"
+  else
+    rm -rf "$WORK_DIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -62,7 +72,12 @@ echo "model dimension (flattened MLP parameter count): $DIM"
 
 echo ""
 echo "=== 2. downloading + partitioning MNIST (N=$N_CLIENTS clients, split=${SPLIT_FLAGS[1]}) ==="
-python3 "$SCRIPT_DIR/partition_data.py" --n-clients "$N_CLIENTS" --out-dir "$WORK_DIR" "${SPLIT_FLAGS[@]}"
+# CONFLUX_DEMO_SEED makes a run repeatable *and* varies it: the harness
+# was fixed-seed, which is why every real-data result in docs/research/
+# has been single-seed and why task r4 exists. Defaults to
+# partition_data.py's own 42, so existing results reproduce unchanged.
+python3 "$SCRIPT_DIR/partition_data.py" --n-clients "$N_CLIENTS" --out-dir "$WORK_DIR" \
+  --seed "${CONFLUX_DEMO_SEED:-42}" "${SPLIT_FLAGS[@]}"
 
 echo ""
 echo "=== 3. centralized baseline (target accuracy) ==="

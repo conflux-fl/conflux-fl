@@ -1440,12 +1440,158 @@ legitimately-noisy honest majority, which is precisely the case the
 stability conjunct exists to protect, and Claim 2 would be reopened
 without it.
 
-\paragraph{Limits.} All of the above is at $d = 3$. FLANDERS's cost and
-signal scale with $d$ in a way DSS's do not, and nothing here measures
-that; \S\ref{sec:realdata} is the standing caution that a synthetic
-conclusion need not survive a real model. We also forecast every
-coordinate rather than subsampling 500 as the paper does, which is exact
-at this dimension and is not what a large-model deployment would run.
+\paragraph{On a real model.} We re-ran the central comparison on real
+MNIST with a 50{,}890-parameter MLP, three clients, Dirichlet
+$\alpha = 0.5$, against a centralized baseline of $0.852$.
+
+Reaching it exposed a limit we had understated. FLANDERS's MAR
+coefficient matrix is $d \times d$, so at this model size a single
+allocation is 20.7\,GB; our implementation had omitted the paper's
+500-coordinate subsampling and was consequently unable to run at the
+scale the method targets. With the subsampling restored, peak memory
+falls from over 8\,GB to 258\,MB. \textbf{FLANDERS's forecast is
+quadratic in model dimension where DSS's scalar traces are constant in
+it} --- a difference of kind, not of degree, and the most consequential
+distinction between the two methods.
+
+The accuracy result reproduces \S\ref{sec:flanders}'s Finding 3 and
+strengthens it. Undefended, FLANDERS+Krum and bare Krum are
+indistinguishable ($0.671$ vs $0.669$). Under a persistent Byzantine
+client, \textbf{Krum holds at $0.655$ while FLANDERS+Krum collapses to
+$0.102$} --- below undefended FedAvg's $0.181$, and below its own
+best-round $0.511$, so it degrades as rounds accumulate. In the
+synthetic setting only the FedAvg pairing was harmful; here the harmful
+configuration is the paper's own.
+
+\paragraph{Across seeds.} Repeating the comparison that carries this
+finding over three data partitions:
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\hline
+aggregator & seed 42 & seed 1337 & seed 2024 & mean $\pm$ 95\% CI \\
+\hline
+Krum & 0.718 & 0.703 & 0.647 & $\mathbf{0.689 \pm 0.042}$ \\
+FLANDERS+Krum & 0.105 & 0.136 & 0.102 & $\mathbf{0.114 \pm 0.021}$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The intervals are far apart --- $[0.647, 0.732]$ against
+$[0.093, 0.136]$ --- and the direction is identical in every seed.
+FLANDERS+Krum sits at $0.114$ against a chance rate of $0.100$ for
+ten-class MNIST: adding the filter in front of Krum takes a working
+defense to approximately random.
+
+Worth reporting alongside: our seeding controls the data partition but
+not the trainers' own randomness, which we found by observing the same
+nominal seed produce $0.655$ and $0.718$ for Krum in two runs. That
+$0.063$ spread is a free measurement of the harness's residual variance,
+and the effect we report is $9.1\times$ larger than it --- a stronger
+statement than the confidence intervals alone support.
+
+\paragraph{Limits.} The synthetic results above are at $d = 3$, and the
+real-model result uses three seeds with three clients over six rounds ---
+small enough that the filter dropping one client removes a third of the
+cohort, which plausibly amplifies the effect without creating it. We
+also test one attack, the harness's persistent Byzantine client; none of
+the four attacks FLANDERS's own evaluation uses appears here or in the
+synthetic sweep.
+
+One limit is structural rather than incidental. DSS does not appear in
+the real-model comparison at all: the harness drives the production
+server binary, which constructs aggregators from a catalog that
+deliberately excludes unvalidated research methods. The rule that keeps
+DSS from reaching users is the same one that prevents it being validated
+against them, and we flag this as a design tension rather than an
+oversight.
+
+\section{The Fairness Cost of the Conjunction Gate}
+\label{sec:temporalfairness}
+
+Section~\ref{sec:flanders} and the ablation of \S\ref{sec:ablation} both
+point at DSS's conjunction gate as its limiting component: the
+collusion-only variant outperforms it on every attack we test. Every one
+of those measurements is an attack measurement, and the gate does not
+exist to win them. It exists to protect Claim~2 --- that a client whose
+local distribution genuinely differs from the population should not be
+punished for it. Removing the stability conjunct on attack evidence
+alone would be optimizing against a metric the conjunct was never there
+to serve.
+
+\paragraph{The measurement, and why it did not exist before.} Our
+non-IID fairness experiment (\S\ref{sec:fairness}) is single-round, which
+was correct for the eleven stateless methods it was written against and
+\emph{structurally unable} to measure a cross-round one: DSS returns a
+stability score of $1.0$ for any client whose deviation trace is shorter
+than two entries, so in a single round its gate cannot fire and it
+returns its base method's numbers exactly. A DSS row in that experiment
+would have printed FedAvg's values and looked like a result. We extended
+the harness to run $N$ rounds per arm against a single aggregator
+instance; leave-one-out influence becomes
+$\|A_N(\text{full}) - A_N(\text{full} \setminus \{i\})\|$.
+
+\paragraph{Result.} 6{,}720 rows, 20 seeds, 20 rounds, zero attackers.
+Minority influence divided by majority influence; below $1$ means the
+shifted honest minority is down-weighted.
+
+\begin{center}
+\begin{tabular}{lrrr}
+\hline
+aggregator & shift 1.0 & shift 2.0 & shift 3.0 \\
+\hline
+FedAvg & $1.835 \pm 0.145$ & $2.458 \pm 0.089$ & $2.718 \pm 0.055$ \\
+DSS (gate) & $1.835 \pm 0.145$ & $2.458 \pm 0.089$ & $2.718 \pm 0.055$ \\
+DSS (collusion only) & $1.680 \pm 0.363$ & $1.278 \pm 0.262$ & $\mathbf{1.030 \pm 0.177}$ \\
+Krum & $0.663 \pm 0.533$ & $0.636 \pm 0.511$ & $0.636 \pm 0.511$ \\
+FLANDERS+Krum & $0.752 \pm 0.346$ & $0.709 \pm 0.253$ & $0.746 \pm 0.256$ \\
+FoolsGold & $1.451 \pm 0.369$ & $2.226 \pm 0.482$ & $3.180 \pm 0.704$ \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Dropping the conjunct does not reopen Claim~2.} At the widest
+divergence the collusion-only variant sits at $1.030 \pm 0.177$ --- a
+confidence interval containing $1.0$. The shifted honest minority
+retains influence statistically indistinguishable from the majority's.
+Krum ($0.636$) and FLANDERS+Krum ($0.746$) both do down-weight it, which
+is precisely the failure Claim~2 names, and both are shipped or
+published defaults. The collusion-only variant is measurably fairer than
+the robust methods it would replace.
+
+The conjunction gate, meanwhile, returns FedAvg's numbers to the digit.
+With no attackers and no instability to detect it does nothing at all,
+including nothing protective: it is not buying fairness that the
+collusion-only variant lacks, because the collusion-only variant is
+already at parity.
+
+\paragraph{What it does cost.} The collusion-only variant removes the
+minority's \emph{leverage}: FedAvg gives a 3.0-shifted minority $2.7\times$
+the influence of a majority client and the variant brings that to
+$1.0\times$. Whether that is a cost depends on what fairness is taken to
+mean; parity is the neutral reading, and FedAvg's $2.7\times$ is
+arithmetic rather than fairness, an outlying group pulling a mean
+harder. Its confidence intervals are also consistently wider
+($\pm 0.177$ against FedAvg's $\pm 0.055$), so it is a noisier estimator
+across seeds.
+
+\paragraph{FLANDERS is the least fair method we measured.} At $0.746$ it
+is at or below bare Krum: the filter makes its base less fair rather
+than more. The mechanism is the one \S\ref{sec:flanders} identified,
+seen from the other side. FLANDERS retains clients matching a forecast
+fit over the whole cohort, and a systematically shifted minority is by
+construction harder to forecast from a model the majority dominates. One
+rule, two failures: it rewards stable attackers and it penalizes honest
+outliers.
+
+\paragraph{What this does not settle.} It removes the objection that
+blocked the question; it does not decide it. Whether DSS's shipped
+default should change is a judgment we do not make here, and the
+implementation's thresholds are unchanged. The measurement is also at
+zero attackers by design --- the joint case, a shifted honest minority
+with attackers present, is the transient window of
+\S\ref{sec:joint} and is not re-run here --- and at $d = 3$ with one
+non-IID model.
 
 \section{Conclusions Overturned by Measurement}
 \label{sec:overturned}

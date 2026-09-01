@@ -152,3 +152,106 @@ held-out drawn from roles no client trains on. Chance is 1/65 ≈ 0.015.
 
 Convergence-only smoke reference so far — no aggregator comparison has
 been run on this harness yet (task r5).
+
+## FLANDERS comparison (Experiment 2.10)
+
+Final-round distance, mean ± 95% CI over 5 seeds. 8 honest + 2
+attackers unless the malicious ratio says otherwise. Source:
+`results/experiment_2_10_flanders_comparison.summary.csv`.
+
+| aggregator | `adaptive_evasion` | `persistent_sybil` | `correlated_sybil` | `scaling` |
+|---|---|---|---|---|
+| `fedavg` | 553.045 ± 0.07 | 17.010 ± 0.07 | 17.155 ± 1.16 | 171.473 ± 0.00 |
+| `dss_fedavg` | **0.635 ± 0.34** | 17.010 ± 0.07 | 17.155 ± 1.16 | 171.473 ± 0.00 |
+| `dsscoll_fedavg` | **0.310 ± 0.03** | **0.255 ± 0.05** | **0.251 ± 0.06** | **0.267 ± 0.04** |
+| `flanders_fedavg` | 9.412 ± 7.46 | 24.247 ± 0.05 | 24.511 ± 1.62 | 147.079 ± 117.50 |
+| `flanders_krum` | 0.421 ± 0.19 | 0.326 ± 0.15 | 0.358 ± 0.16 | 0.294 ± 0.13 |
+| `krum` | 0.299 ± 0.12 | 0.257 ± 0.12 | 0.257 ± 0.12 | 0.257 ± 0.12 |
+| `foolsgold` | 1.391 ± 0.12 | 1.391 ± 0.12 | 8.747 ± 2.77 | 1.392 ± 0.12 |
+
+Majority-attacker regime, `adaptive_evasion`:
+
+| malicious | `fedavg` | `dss_fedavg` | `flanders_fedavg` | `krum` |
+|---|---|---|---|---|
+| 20% | 553.0 | **0.64** | 9.4 | 0.30 |
+| 60% | 1659.1 | **0.44** | 1901.7 | 2765.0 |
+| 80% | 2212.1 | **7.19** | 2765.0 | 2765.0 |
+
+Two things to read carefully here. `flanders_fedavg` is *worse than
+undefended FedAvg* on every Sybil row and at 60% malicious — a stable
+colluder is the most forecastable client in the batch, so a
+forecast-consistency filter keeps it. And `flanders_krum` holds
+throughout, because the paper's own `ϕ` is Krum and the filter is
+carried by its base. See §5.14.
+
+## Temporal non-IID fairness (Experiment 2.11)
+
+Minority ÷ majority leave-one-out influence, mean ± 95% CI over 20
+seeds, **zero attackers**, 20 rounds. Below 1 means the shifted honest
+minority is down-weighted. Source:
+`results/experiment_2_11_temporal_fairness.jsonl`.
+
+| aggregator | shift 1.0 | shift 2.0 | shift 3.0 |
+|---|---|---|---|
+| `fedavg` | 1.835 ± 0.145 | 2.458 ± 0.089 | 2.718 ± 0.055 |
+| `dss_fedavg` | 1.835 ± 0.145 | 2.458 ± 0.089 | 2.718 ± 0.055 |
+| `dsscoll_fedavg` | 1.680 ± 0.363 | 1.278 ± 0.262 | **1.030 ± 0.177** |
+| `krum` | 0.663 ± 0.533 | 0.636 ± 0.511 | 0.636 ± 0.511 |
+| `flanders_krum` | 0.752 ± 0.346 | 0.709 ± 0.253 | 0.746 ± 0.256 |
+| `foolsgold` | 1.451 ± 0.369 | 2.226 ± 0.482 | 3.180 ± 0.704 |
+
+The one number that decides `r2`: `dsscoll_fedavg` at 1.030 ± 0.177 has
+a confidence interval containing 1.0 — parity. Dropping DSS's stability
+conjunct does not reopen Claim 2, while `krum` and `flanders_krum`, both
+already shipped or published, do down-weight the minority. §5.15.
+
+## Real-model validation (Experiment 3.3, §5.16)
+
+Real MNIST, a 50,890-parameter PyTorch MLP, 3 clients, Dirichlet
+`α = 0.5`, 6 rounds. Centralized baseline **0.852**. Held-out accuracy,
+higher is better. Source:
+`results/experiment_3_3_flanders_real_data.jsonl`.
+
+**Single-seed** — the harness was fixed-seed until 2026-09-01 (task
+`r4`). Read the direction, not the third decimal.
+
+| aggregator | no attack | poisoned |
+|---|---|---|
+| `fedavg` | **0.839** | 0.181 |
+| `krum` | 0.669 | **0.655** |
+| `flanders` (FLANDERS + Krum) | 0.671 | **0.102** (best round 0.511) |
+| `foolsgold` | 0.460 | 0.186 |
+
+The row that matters: `flanders` **is** `krum` plus a pre-filter. With
+no attack they are indistinguishable (0.671 vs 0.669). Under attack the
+filter takes its base from 0.655 to 0.102 — below undefended FedAvg.
+§5.14 found the same direction synthetically but only for the FedAvg
+pairing; on a real model the paper's own Krum pairing is the harmful
+one.
+
+**DSS does not appear in this table**, and cannot: the real-data harness
+drives the production server binary, which builds aggregators from a
+catalog that deliberately excludes unvalidated research methods. See
+§5.16.
+
+## Real-model, three seeds (Experiment 3.4, §5.16.1)
+
+The one comparison from §5.16 that carries the finding, repeated across
+three data partitions. Same setup; final held-out accuracy under a
+persistent Byzantine client. Source:
+`results/experiment_3_4_flanders_multiseed.jsonl`.
+
+| aggregator | 42 | 1337 | 2024 | mean ± 95% CI |
+|---|---|---|---|---|
+| `krum` | 0.718 | 0.703 | 0.647 | **0.689 ± 0.042** |
+| `flanders` | 0.105 | 0.136 | 0.102 | **0.114 ± 0.021** |
+
+Intervals `[0.647, 0.732]` vs `[0.093, 0.136]` — a 0.575 gap, identical
+direction in every seed. `flanders` sits essentially at chance (0.100
+for ten-class MNIST).
+
+Two caveats that belong with the numbers: three seeds is not five, and
+`CONFLUX_DEMO_SEED` seeds the data partition but **not** the trainers.
+The residual run-to-run variance that leaves is measurable — the same
+nominal seed 42 gave `krum` 0.655 in §5.16 and 0.718 here, a spread of
+0.063 — and the finding's gap is 9.1× larger than it.

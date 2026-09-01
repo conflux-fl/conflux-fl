@@ -1474,17 +1474,304 @@ across six attacks and four malicious ratios rather than one.
 #### What this experiment does not license
 
 - **`dim = 3`.** §5.13 is the standing caution: a conclusion at three
-  parameters need not survive 50,890. FLANDERS's cost in particular
-  scales with `d` in a way DSS's does not, and nothing here measures
-  that.
-- **No parameter subsampling.** The paper samples 500 coordinates on
-  real models; this implementation forecasts all of them, which is exact
-  at `dim = 3` and is not what a large-model deployment would run.
+  parameters need not survive 50,890.
+
+  **This caveat was upgraded to a measurement on 2026-09-01, and not
+  gently.** The sentence originally here said FLANDERS's cost "scales
+  with `d` in a way DSS's does not, and nothing here measures that."
+  Attempting to measure it — running `flanders` on real MNIST for §5.16
+  — **OOM-killed the server process twice**, at 8.3 GB and 6.6 GB
+  resident, taking the desktop session down with it.
+
+  The cause was in this codebase, not the paper: the MAR coefficient
+  matrix is `d × d`, so at 50,890 parameters a single allocation is
+  **20.7 GB**. The paper avoids this by sampling 500 coordinates; the
+  implementation had deliberately omitted that step (see the next
+  bullet), and the omission made the method unable to run at the scale
+  it was designed for.
+
+  So the `d`-scaling difference between DSS and FLANDERS is not a
+  footnote about cost. **FLANDERS's forecast is quadratic in model
+  dimension and DSS's scalar traces are constant in it** — that is the
+  most consequential distinction between the two methods, and it took a
+  crashed machine to notice.
+- ~~**No parameter subsampling.**~~ **Now implemented (2026-09-01)**, at
+  the paper's own 500 coordinates, after the omission caused the failure
+  above. The original reasoning — that leaving it out was more honest
+  than approximating it — was wrong: the subsampling is not an
+  approximation *of* the paper, it *is* the paper, and omitting it meant
+  the implementation could not do the thing the paper exists to do.
+  Models below 500 coordinates are still fitted whole, so every number
+  in this section is unchanged and Experiment 2.10 re-runs
+  byte-identical.
 - **Finding 3 is about this attack family**, not about FLANDERS
   generally. Against the attacks its own paper evaluates, it is not
   tested here at all — `alie` is the only overlapping one, and there
   every method including undefended FedAvg scores ~0.17, so the row
   discriminates nothing.
+
+### 5.15 Experiment 2.11 — the fairness measurement `r2` was blocked on, and its answer
+
+**The question.** Three findings now say the AND-gate is DSS's limiting
+component: §5.6 (the gate is numerically identical to stability-only),
+§5.12 (collusion-only catches correlated Sybils stability-only misses
+entirely), §5.14 (collusion-only is best or tied-best on all six attacks
+tested). Every one of those is an **attack** measurement. None asks the
+question the stability conjunct exists to answer — Claim 2: *does a
+legitimately-different honest client get punished?* Flipping the gate on
+attack evidence alone would be optimizing against a metric the conjunct
+was never there to serve.
+
+**Why Experiment 2.3 could not answer it, which is the more interesting
+part.** Two reasons, both structural and both fixed 2026-09-01:
+
+1. `run_fairness_experiment.rs` called `build_aggregator` **directly**,
+   so it could not resolve a `dss_` or `dsscoll_` name at all. Experiment
+   2.3 has never measured DSS on the fairness axis. That was invisible
+   because the sweep list only ever contained catalog names.
+2. It was **single-round**, and `DssAggregator` returns a stability score
+   of `1.0` for any client with fewer than two trace entries (`if
+   trace.len() < 2`). In one round DSS's gate cannot fire, so it returns
+   its base method's numbers exactly. A `dss_fedavg` row would have
+   printed FedAvg's values and *looked like a measurement*.
+
+So `r2` was not blocked on a hard experiment. It was blocked on a
+harness that could neither name the thing being measured nor exercise
+it — for three sessions, while the task sat marked "blocked on the
+non-IID fairness test" as though the test were the obstacle.
+
+**Setup.** `run_fairness_experiment` gained `--rounds`; both arms of the
+leave-one-out comparison now run the full round sequence against **one**
+aggregator instance, so cross-round state accumulates. `--rounds 1`
+remains the default and reproduces 2.3 exactly. 6,720 rows, 20 seeds, 20
+rounds, zero attackers, six shift levels. Script:
+[`experiment_2_11_temporal_fairness.sh`](scripts/experiment_2_11_temporal_fairness.sh).
+
+The metric is minority influence ÷ majority influence. **Below 1 means
+the shifted honest minority is being down-weighted — Claim 2 reopened.**
+
+| aggregator | shift 0.0 | shift 1.0 | shift 2.0 | shift 3.0 |
+|---|---|---|---|---|
+| `fedavg` | 1.106 ± 0.126 | 1.835 ± 0.145 | 2.458 ± 0.089 | 2.718 ± 0.055 |
+| `dss_fedavg` | 1.106 ± 0.126 | 1.835 ± 0.145 | 2.458 ± 0.089 | 2.718 ± 0.055 |
+| **`dsscoll_fedavg`** | 0.951 ± 0.215 | 1.680 ± 0.363 | 1.278 ± 0.262 | **1.030 ± 0.177** |
+| `krum` | 0.892 ± 0.498 | 0.663 ± 0.533 | 0.636 ± 0.511 | 0.636 ± 0.511 |
+| `flanders_krum` | 1.107 ± 0.350 | 0.752 ± 0.346 | 0.709 ± 0.253 | 0.746 ± 0.256 |
+| `foolsgold` | 1.004 ± 0.370 | 1.451 ± 0.369 | 2.226 ± 0.482 | 3.180 ± 0.704 |
+
+#### The answer: dropping the stability conjunct does *not* reopen Claim 2
+
+At the widest divergence, `dsscoll_fedavg` sits at **1.030 ± 0.177 —
+a confidence interval containing 1.0**. The shifted honest minority has
+influence statistically indistinguishable from the majority's. It is
+neither punished nor privileged.
+
+Meanwhile `krum` (0.636) and `flanders_krum` (0.746) both *do*
+down-weight the minority — the exact failure Claim 2 names — and both
+are shipped or published defaults. **Collusion-only DSS is measurably
+fairer than the robust methods already in the catalog**, which is the
+opposite of what the blocker assumed.
+
+`dss_fedavg` and `dssstab_fedavg` return `fedavg`'s numbers to the
+digit, once again (§5.6, §5.14). With zero attackers and no instability
+to detect, the shipped gate does nothing at all — including nothing
+protective. **The conjunct is not paying for itself here**: it is not
+buying fairness that collusion-only lacks, because collusion-only is
+already at parity.
+
+#### What it does cost, stated honestly
+
+Collusion-only removes the minority's *leverage*: FedAvg gives a
+3.0-shifted minority 2.7× the influence of a majority client, and
+collusion-only brings that to 1.0×. Whether that is a cost depends on
+what "fair" means. Parity is the neutral reading; FedAvg's 2.7× is not
+fairness but arithmetic — an outlying group pulls a mean harder. The
+damping is also progressive rather than abrupt (1.68 at shift 1.0, 1.28
+at 2.0, 1.03 at 3.0), so nothing falls off a cliff.
+
+Collusion-only's confidence intervals are consistently wider than
+FedAvg's (±0.177 vs ±0.055 at shift 3.0). It is a noisier estimator
+across seeds, which is worth knowing before it becomes a default.
+
+#### An unplanned finding: FLANDERS is the least fair method tested
+
+`flanders_krum` at 0.746 ± 0.256 is *below* bare `krum` at some shifts
+and never above it meaningfully — the filter makes its base less fair,
+not more. The mechanism is the same one §5.14 identified from the other
+side: FLANDERS keeps clients that match a forecast fit over the whole
+cohort, and a systematically-shifted minority is *by construction*
+harder to forecast from a model the majority dominates. §5.14 showed
+this rewards stable attackers; §5.15 shows the same rule penalizes
+honest outliers. One mechanism, two failures.
+
+#### What this does not license
+
+- **It does not by itself decide `r2`.** It removes the objection that
+  blocked it. Whether DSS's shipped default should change is a research
+  judgment for the project owner, and this document does not make it —
+  `DssAggregator`'s thresholds are unchanged.
+- **Zero attackers, by design.** This measures the fairness cost in
+  isolation. The joint case — a shifted honest minority *and* attackers
+  present — is §5.9's transient-window question and is not re-run here.
+- **`dim = 3`, 8 clients, one non-IID model** (a shifted-mean minority).
+  §5.13 is the standing caution.
+
+### 5.16 Experiment 3.3 — §5.14's FLANDERS finding, on a real model
+
+**Why this had to be run.** §5.14 is entirely at `dim = 3`, and §5.13 is
+the standing evidence that a synthetic conclusion need not survive a
+real one — a Centered Clipping optimum found at three parameters
+vanished completely at 50,890. §5.14's headline claims are about
+FLANDERS, so they were the ones most exposed.
+
+**Getting there broke the machine, and that is the first finding.**
+Running `flanders` on real MNIST **OOM-killed the server process
+twice**, at 8.3 GB and 6.6 GB resident. The MAR coefficient matrix is
+`d × d`, so at 50,890 parameters a single allocation is **20.7 GB**. The
+implementation had deliberately omitted the paper's 500-coordinate
+subsampling on the reasoning that leaving it out was more honest than
+approximating it — and that reasoning was exactly backwards: the
+subsampling *is* the paper, and omitting it made the method unable to
+run at the scale it was designed for. Fixed (`max_forecast_dim`, the
+paper's own 500); peak RSS at `dim = 50,890` went from >8 GB to 258 MB.
+
+So §5.14's caveat that "FLANDERS's cost scales with `d` in a way DSS's
+does not" understated it. **FLANDERS's forecast is quadratic in model
+dimension; DSS's scalar traces are constant in it.** That is the most
+consequential difference between the two methods, and it took a crashed
+machine to see.
+
+#### Setup
+
+Real MNIST, a real 50,890-parameter PyTorch MLP, 3 clients, Dirichlet
+`α = 0.5` (non-IID), 6 rounds, centralized baseline 0.852. **DSS itself
+cannot appear here** — see "the structural limit" below.
+
+| aggregator | no attack (final) | poisoned (final / best) |
+|---|---|---|
+| `fedavg` | **0.839** | 0.181 |
+| `krum` | 0.669 | **0.655** |
+| `flanders` (= FLANDERS + Krum) | 0.671 | **0.102** / 0.511 |
+| `foolsgold` | 0.460 | 0.186 |
+
+#### Finding: FLANDERS makes the base it wraps dramatically worse
+
+`flanders` here *is* Krum with a FLANDERS pre-filter — the catalog
+pairing the paper itself specifies. Undefended, the two are
+indistinguishable (0.671 vs 0.669). Under attack, **Krum holds at 0.655
+and FLANDERS collapses to 0.102** — below undefended FedAvg's 0.181, and
+below its own best-round 0.511, so it is actively degrading as rounds
+accumulate.
+
+This is §5.14's Finding 3 reproduced on a real model, and worse than the
+synthetic version suggested. There, `flanders_krum` held (0.33) and only
+`flanders_fedavg` was harmful. Here the harmful case is the paper's own
+configuration.
+
+The mechanism is the one §5.14 pinned as a unit test and §5.15 saw from
+the other side: FLANDERS keeps the clients whose updates best match a
+forecast of their own past, so a *consistent* attacker is the easiest
+client in the batch to keep. With 3 clients and `byzantine_fraction =
+0.2` the filter drops exactly one — and if it drops an honest client,
+Krum then chooses between an attacker and one honest client.
+
+#### The structural limit this experiment ran into
+
+**DSS cannot be measured here at all.** The real-data harness drives the
+actual `conflux-server` binary, which builds aggregators from
+`build_aggregator`'s catalog — and `AGENT.md`'s own rule keeps
+`DssAggregator` out of that catalog, precisely because it is an
+unvalidated hypothesis.
+
+So the rule that protects users from an unvalidated method is also what
+prevents it from being validated. Every real-data result in this
+document (§5.13, §5.16) is therefore about the *catalog* methods, and
+DSS's real-model behavior is unmeasured — not because nobody tried, but
+because the harness structurally cannot reach it. That is a decision to
+make deliberately rather than a gap to leave implied.
+
+#### What this does not license
+
+- **Single seed.** The harness was fixed-seed (`partition_data.py`'s
+  default 42) until this session, which is why every real-data number in
+  this document has been `n = 1` and why task `r4` exists. A
+  `CONFLUX_DEMO_SEED` passthrough now exists; §5.16.1 uses it on the one
+  comparison that carries the finding.
+- **3 clients, 6 rounds.** Small enough that dropping one client is a
+  third of the cohort, which plausibly amplifies the effect. It does not
+  create it — the synthetic result at 10 clients points the same way —
+  but the magnitude here should not be quoted as though it were general.
+- **One attack.** The demo's own persistent Byzantine client. FLANDERS's
+  own paper evaluates Gaussian, LIE, OPT and AGR-MM, none of which is
+  tested here or in §5.14.
+- **The eval client samples rounds irregularly**, and this is worth
+  knowing before reading any per-round curve from this harness. In the
+  poisoned cells `krum` recorded rounds 1, 3, 5, 7 while `flanders`
+  recorded 2 through 7 — the evaluator polls on its own cadence rather
+  than once per FL round, so the *number* of recorded rounds varies
+  between runs of identical length. The headline comparison is
+  unaffected because both series end at round 7, but the intermediate
+  points are not aligned and should not be plotted against each other as
+  though they were.
+
+#### One number worth reading literally
+
+`flanders` under attack settles at **0.102**, and MNIST has ten classes.
+That is chance. The trajectory shows why: 0.369, 0.472, **0.511**, then
+0.102, 0.102, 0.102 — it learns for three rounds, then collapses and
+stays exactly there. That is the signature of a filter that has locked
+onto the attacker: once the forecast consistently ranks the persistent
+Byzantine client as the *least* anomalous of three, Krum receives it
+every round and the model is pinned. Not degradation — capture.
+
+
+### 5.16.1 Experiment 3.4 — the same comparison across three seeds
+
+§5.16 is single-seed, which under this document's own rules (`≥5 seeds,
+and report the confidence interval`) makes it suggestive rather than a
+finding. The comparison carrying the weight — `krum` against
+`flanders`, poisoned — is now repeated across three data partitions.
+
+Real MNIST, 50,890-parameter MLP, 3 clients, Dirichlet `α = 0.5`, 6
+rounds, persistent Byzantine client. Final held-out accuracy:
+
+| aggregator | seed 42 | seed 1337 | seed 2024 | mean ± 95% CI |
+|---|---|---|---|---|
+| `krum` | 0.718 | 0.703 | 0.647 | **0.689 ± 0.042** |
+| `flanders` (FLANDERS + Krum) | 0.105 | 0.136 | 0.102 | **0.114 ± 0.021** |
+
+**The intervals do not come close to overlapping** — `[0.647, 0.732]`
+against `[0.093, 0.136]`, a gap of 0.575. The direction is identical in
+every seed. §5.16's single-seed result holds.
+
+`flanders` sits at 0.114 against a chance rate of 0.100 for ten-class
+MNIST. Adding FLANDERS's filter in front of Krum takes a working defense
+to **approximately random**.
+
+#### Three seeds is still not five, and the seeding is partial
+
+Two honest limits, the second of which this experiment discovered about
+itself:
+
+- **Three seeds, not five.** Each run is ~4.5 minutes of real training,
+  so five seeds across the full aggregator × attack grid is hours. Three
+  was chosen to make the *headline* comparison multi-seed rather than to
+  satisfy the rule everywhere. The rest of §5.16's table remains `n = 1`.
+- **`CONFLUX_DEMO_SEED` seeds the data partition, not the training.**
+  Discovered by noticing that §5.16 reported `krum` at 0.655 and this
+  run reports 0.718 — *at the same nominal seed 42*. `partition_data.py`
+  seeds the split and its own torch state; the trainer clients have
+  their own uncontrolled randomness (weight init, batch order), which
+  nothing currently fixes.
+
+  That 0.063 discrepancy is not noise to explain away, it is a **free
+  measurement of the harness's residual run-to-run variance** — and it
+  is the right thing to compare the finding against. The `krum`–
+  `flanders` gap is 0.575, **9.1× larger** than that variance. The
+  finding survives the uncertainty its own harness introduces, which is
+  a stronger statement than the confidence intervals alone make.
+
+  Fully seeding the trainers is the remaining half of task `r4`.
 
 ## 6. Proposed Solution: Deviation Stability Scoring (DSS)
 

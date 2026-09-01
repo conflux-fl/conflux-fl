@@ -1,8 +1,9 @@
 # Phase 22 — the `optimization` family
 
-**Status: partially shipped (2026-09-01).** FedAdagrad, FedAdam and
-FedYogi are built and in the catalog. This brief covers what they are,
-and scopes the four methods that remain.
+**Status: partially shipped (2026-09-01).** FedAdagrad, FedAdam,
+FedYogi, **FedAvgM and q-FedAvg** are built and in the catalog — five of
+the seven methods this brief scopes. The two that remain (FedProx,
+SCAFFOLD) are both gated on ADR 0005, not on anything here.
 
 ## Why this family exists
 
@@ -58,28 +59,39 @@ task, so the builtin `1.0` is a placeholder in the same sense
 
 ---
 
-## Not shipped, in the order they make sense
+## The rest, in the order they make sense
 
-### 1. FedAvgM — server momentum. *Smallest remaining piece.*
+### 1. ~~FedAvgM~~ — **shipped 2026-09-01**
 
 **What it is.** FedAvg plus a momentum buffer on the server:
 `v_t = β v_{t-1} + Δ_t`, then `x_{t+1} = x_t + η v_t`. Hsu, Qi & Brown
 (2019), *Measuring the Effects of Non-Identical Data Distribution for
 Federated Visual Classification*.
 
-**Why it is nearly free here.** It is Algorithm 2 with the adaptive
-denominator removed — same pseudo-gradient, same state pattern, same
-`x_t` tracking. It is arguably a fourth `FedOptVariant` rather than a
-new type, except that its update rule has no `v` at all, so it needs a
-small branch rather than a new second-moment arm.
+**It is Algorithm 2 with the adaptive denominator removed** — same
+pseudo-gradient, same state pattern, same `x_t` tracking.
 
-**Scope:** one variant, ~50 lines plus tests. **No proto change, no
-config beyond reusing `server_learning_rate` and a new `β`.**
+Built as its own type rather than a fourth `FedOptVariant`: the three
+Reddi et al. variants differ in exactly one line of Algorithm 2, while
+FedAvgM has no second moment at all, so folding it in would have broken
+the framing that makes the enum honest.
 
-**Worth doing because** it is the standard baseline every FedOpt paper
-compares against — including Reddi et al., whose own results table has a
-FedAvgM column. Shipping FedOpt without it means Conflux cannot
-reproduce that table.
+**One thing the implementation surfaced that this brief did not
+anticipate: the two papers disagree about weighting.** FedAvgM's `Δw` is
+`Σ (n_k/n) Δw_k` — sample-count weighted. FedOpt's Algorithm 2 line 10
+is an *unweighted* mean. Both are implemented as written rather than
+harmonized, and a test
+(`fedavgm_weights_by_sample_count_unlike_fedopt`) pins the difference so
+nobody "fixes" one to match the other.
+
+A second, smaller discrepancy is inside the FedAvgM paper itself: §4.2's
+equation is classical momentum (`v ← βv + Δw`) while its experiments say
+Nesterov. The equation is implemented, and the disagreement documented
+rather than silently resolved.
+
+`β` is config-reachable as `server_momentum` (default 0.9, inside the
+paper's own sweep). `η` is fixed at 1.0 in the paper, so unlike the
+Reddi et al. three it has an honest default here.
 
 ### 2. FedProx — *a client-side method, and that is the whole story.*
 
@@ -103,7 +115,7 @@ already files it under Category 5 for exactly this reason.
 **Scope:** a config key (`proximal_mu`) plumbed to clients, plus SDK
 work. **Blocked on ADR 0005.**
 
-### 3. QFedAvg — fairness-weighted averaging
+### 3. ~~QFedAvg~~ — **shipped 2026-09-01**
 
 **What it is.** Li, Sanjabi, Beirami & Smith (2020), *Fair Resource
 Allocation in Federated Learning*. Re-weights client contributions by
@@ -123,12 +135,34 @@ count in `conflux-net`. `local_loss` is a scalar, so it follows
 `local_steps`'s convention exactly — repeated per chunk, read from the
 first to arrive.
 
-**Scope:** one proto field + one aggregator. **Unblocked, and a good
-first exercise of ADR 0012's recipe by someone who did not write it.**
+Built, along with the `optional float local_loss = 9` field it needed.
 
-**Worth doing because** it is the only fairness-oriented method in the
-tracked landscape, and this project has already measured a
-robustness–fairness tension it has no method to address (§5.3, §5.9).
+**ADR 0012's recipe worked, and adding the third field proved it.** The
+`..Default::default()` idiom introduced when the first two fields landed
+meant this one broke **exactly one literal** in the whole workspace —
+the compatibility test that deliberately names every field because
+noticing schema growth is its job. Byte-level backward compatibility
+still holds with three optional fields present.
+
+Only two of the recipe's three edits applied: `local_loss` is a fixed-
+size scalar, so unlike `control_variate` it does not count toward
+`max_update_bytes`. There is no flood to bound in four bytes.
+
+**Two test premises of mine were wrong here, and the implementation was
+right both times.** I assumed the step magnitude would rise
+monotonically with `q`, then that it would fall monotonically. It does
+neither: `h_k`'s `q·F^{q−1}·‖Δw_k‖²` term grows with `q` and shrinks the
+step, while the `F^q` weighting turns the direction further toward the
+worst-served client and lengthens it. Measured: 0.538 at `q=1`, 0.624 at
+`q=2`, 0.499 at `q=4`. **`q` is not a simple "more fairness" dial** — it
+trades mean accuracy, uniformity, *and* convergence speed at once, and
+the net effect on any one is not monotone. Both facts are now pinned as
+tests.
+
+**Unusable until a client reports `local_loss`.** The field is on the
+wire and reassembles; nothing populates it. With no loss reported the
+method falls back to FedAvg, which is honest but is not q-FedAvg. Like
+FedNova, its remaining blocker is the ADR 0005 SDK question.
 
 ### 4. FedNova and SCAFFOLD — plumbing done, clients missing
 
@@ -153,16 +187,23 @@ populates the field. The server-side halves are ready.
 
 ## Suggested order
 
-1. **FedAvgM** — smallest, and needed to reproduce Reddi et al.'s table.
-2. **QFedAvg** — unblocked, exercises ADR 0012's recipe, and addresses a
-   tension this project has measured and cannot currently act on.
+1. ~~**FedAvgM**~~ — **done**.
+2. **QFedAvg** — the one still buildable without a client change. It
+   needs a new `optional float local_loss` proto field, which exercises
+   ADR 0012's three-edit recipe, and it addresses a robustness–fairness
+   tension this project has now measured twice (§5.3, §5.15) and has no
+   method to act on.
 3. **FedNova** — small server-side, but gated on a client populating
    `local_steps`.
 4. **FedProx / SCAFFOLD** — genuinely gated on ADR 0005.
 
-Which means: **two are buildable now, two are waiting on the Python SDK
-decision.** That decision is worth making on its own merits, and this is
-one more thing that hangs on it.
+Which means: **everything buildable without a client change is now
+built, and the remaining three all wait on the same decision** — ADR
+0005's Python SDK. FedProx needs a client that adds a proximal term,
+SCAFFOLD needs one that maintains a control variate, FedNova and
+q-FedAvg need ones that report `local_steps` and `local_loss`. Four
+methods, one blocker. That decision is worth making on its own merits,
+and this is now the strongest single argument for making it.
 
 ## What this family does not change
 
