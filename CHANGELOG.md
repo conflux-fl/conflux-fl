@@ -19,6 +19,34 @@ promised before `1.0`.
 
 ### Added
 
+- **Registry metadata**: `StrategyEntry` now carries `citation`,
+  `family`, and `params` for every registered aggregator, selector, and
+  privacy mechanism, plus a `conflux_config::entries()` reader. A test
+  makes ADR 0008 a build-time fact — a method registered without a
+  citation naming authors and a year fails CI — and the metadata is the
+  no-drift source a generated catalog or a CLI `describe` would read.
+- **The three remaining PyTorch/numpy harnesses migrated onto the
+  `ClientApp` SDK** (numpy-logreg, CIFAR-10, Shakespeare). Each drops
+  its hand-rolled connect/register/poll/chunk/submit loop and its own
+  copy of the f32 codec, and — the functional payoff — now reports
+  `local_steps` and `local_loss`, so every harness can drive FedNova
+  and q-FedAvg instead of silently running FedAvg whatever the server
+  was configured for. The numpy `run_demo.sh` now forwards
+  `CONFLUX_FAIRNESS_Q` so that capability is reachable.
+- **`--trainer-seed`** on the three PyTorch trainers: reseeds torch's
+  RNG *after* the shared deterministic model init, so a multi-seed
+  sweep varies real SGD sampling instead of replaying one trajectory
+  per shard (r4's second half). `run_fairness_comparison.sh` derives a
+  per-client seed from `(sweep seed, client index)` and its
+  known-limitation note is retired.
+
+- **SCAFFOLD in the Rust client example** (`logreg.rs --scaffold`) —
+  the same client half the Python harness ships, field for field:
+  corrected local steps `g − c_i + c`, persistent `c_i`, `Δc_i` on the
+  wire, and the first-nonzero-`c` announcement. Proven on an all-Rust
+  federation (server + 4 nodes + 4 Rust clients, `aggregator =
+  scaffold`): `c` delivered, 0.68 local-only → 0.996 federated, one
+  round faster to 0.996 than plain FedAvg on the same problem.
 - SCAFFOLD's **reference client** in the MNIST harness
   (`trainer_client.py --scaffold`): local steps follow `g − c_i + c`,
   `c_i` persists across rounds, `Δc_i` goes out on the wire.
@@ -27,13 +55,83 @@ promised before `1.0`.
 - **Per-client fairness metrics** in the MNIST eval client
   (`--shards`): per-round accuracy on every client's own distribution —
   min, std, full list — the axis `qfedavg`'s claim lives on and the
-  pooled mean cannot see.
-- The trainer announces the first nonzero `c` it receives: a SCAFFOLD
-  run where `c` never arrives is indistinguishable from a correct one
-  by accuracy alone.
+  pooled mean cannot see. Both trainers announce the first nonzero `c`
+  they receive: a SCAFFOLD run where `c` never arrives is otherwise
+  indistinguishable from a correct one by accuracy alone.
+- CI job **`docs`**: `cargo doc --no-deps --workspace` with
+  `RUSTDOCFLAGS="-D warnings"`. Intra-doc links break silently — the
+  code compiles, the docs render, the link is just dead — and this is
+  the only gate that notices. Its first local run found five broken
+  links across four crates, all fixed.
+
+- `run_fairness_comparison.sh` in the MNIST harness — the multi-seed
+  SCAFFOLD / q-FedAvg / FedAvg sweep with per-client fairness metrics,
+  one CSV row per (arm, seed), and a mean ± std summary that says out
+  loud when a difference is inside the noise.
+- **Configuration validation** — `ResolvedConfig::validate()`, run at
+  server startup after the provenance log. Range checks (zero
+  timeouts/TTLs/quorums/byte ceilings, cosine bounds, non-finite
+  numerics, DP's `0 < δ < 1`) and cross-parameter combination checks
+  (a Byzantine-majority fraction with a batch-only robust method, a
+  negative `clip_radius` under `centered_clipping`, per-method
+  positivity for the optimizer knobs, `scaffold_num_clients < quorum`).
+  Errors refuse to start; warnings start out loud — including
+  "`noise_multiplier` has no effect because `clip_norm = 0`" and a
+  quorum below Krum's `n ≥ 2f + 3` / Bulyan's `n ≥ 4f + 3`, with the
+  arithmetic filled in. Every finding names the tier that supplied the
+  value, in the same phrasing as the startup log, so a bad number in a
+  profile file is attributed to that file. All findings are collected
+  in one pass. Bounds are deliberately conservative: mathematical facts
+  and paper-stated requirements only, never taste.
+
+- **Custom profiles with `inherits`** — topology and mode profiles
+  defined in TOML, extending a base and overriding only what differs
+  (the spec's last open config item). `CONFLUX_TOPOLOGY=hospital_silo`
+  loads `profiles/hospital_silo.toml`; chains may pass through other
+  profiles and must end at a builtin. Provenance credits the chain link
+  that actually set each value (`topology profile "hospital_silo →
+  cross_silo"` for an inherited one). The rules are enforced with
+  specific startup errors: wrong-axis keys are told which file they
+  belong in (the two axes own disjoint sets), misspelled keys get a
+  "did you mean", cycles are printed as the chain, builtin names cannot
+  be shadowed, and unknown profile names list what exists.
+  `conflux-config` gains `resolve_with_profiles`,
+  `load_topology_profile`, `load_mode_profile`, `TopologyProfile`,
+  `ModeProfile`, `ProfileError`; `resolve` is unchanged and now wraps
+  the new path.
+
+- **Zeno** (Xie, Koyejo & Gupta, 2019) — the twenty-second method, and
+  the second member of the `trusted` family. Ranks each candidate by a
+  suspicion score (the sidecar's held-out improvement minus
+  `ρ·‖update‖²`), drops the `b` lowest, averages the rest unweighted.
+  Consumes the sidecar's `ScoreUpdates` RPC, which had been shipped and
+  unused since ADR 0011; the server calls it after the buffer flushes,
+  because Zeno's scores — unlike FLTrust's reference — can only exist
+  once the batch does. Scores are consumed on use, so a round that was
+  never scored fails loudly instead of ranking this batch with the
+  previous batch's numbers. Startup now gates each sidecar capability by
+  what the configured method actually consumes. `CONFLUX_ZENO_RHO`
+  configures `ρ` (builtin `0.0005`, the paper's own value). Proven over
+  the real gRPC hop: a poisoned client is dropped and the honest mean
+  survives.
+- CI job **`deny`**: `cargo deny check` — RustSec advisories, yanked
+  crates, a license allow-list, and registry provenance — plus a
+  `deny.toml` documenting every allowance.
+- Dependabot for cargo, pip, and GitHub Actions; a CI badge in the
+  README.
 
 ### Fixed
 
+- A typo'd `CONFLUX_TOPOLOGY` (e.g. `cros_silo`) used to fall back to
+  `cross_device` **silently** — a correctly-logged, wrong deployment.
+  It is now a startup error listing the builtins and every profile the
+  profile directory actually contains. Same for `CONFLUX_MODE`.
+- **Four real vulnerabilities and a yanked crate**, found by `cargo
+  deny`'s first local run: `aws-sdk-s3`'s default `rustls` feature was
+  dragging the *legacy* rustls-0.21/h2-0.3 stack (RUSTSEC-2026-0098,
+  -0099, -0104, -0258) into the tree alongside the modern TLS stack the
+  SDK actually uses. Disabling that one default feature removes the
+  vulnerable stack entirely; `chacha20` was yanked and is bumped.
 - **`ScaffoldAggregator` discarded the seed round's control variates**,
   permanently breaking the `c = mean(c_i)` invariant the method's
   unbiasedness rests on — clients had already folded the matching
@@ -44,6 +142,27 @@ promised before `1.0`.
   decimals), fixed by folding the seed round's variates, pinned by a
   red-first test. On MNIST the same configuration went from diverging
   to the best result in its comparison.
+
+### Changed
+
+- **The `edge` topology has real defaults** instead of mirroring
+  `cross_device`: `auth = mtls` (an edge fleet is operator-provisioned,
+  so it can carry a client certificate from day one — and its devices
+  are the most physically exposed, so the stronger identity is the one
+  it most needs), `round_timeout_secs = 900` (MCU/SBC-class hardware,
+  not phone NPUs), `min_reputation_score = 0.0` (a closed,
+  operator-owned population — gating defaults track how open the
+  population is), `client_registry_ttl = 3600` (stable membership,
+  unstable links). Each field's justification is in the source.
+  **Behavior change** for `edge` deployments relying on the old
+  mirrored values; a profile with `inherits = "edge"` overriding them
+  restores any of the old numbers.
+- `docs/AGGREGATION_LANDSCAPE.md` records **Zeno++ as declined with a
+  reason**: it is fully *asynchronous* SGD — an execution model, not an
+  aggregation rule — and cannot be expressed through
+  `Aggregator::aggregate(batch)` without inventing a batched variant
+  the paper never defined (ADR 0008). It becomes the first candidate if
+  an async pipeline mode ever exists.
 
 ## [0.1.0]
 

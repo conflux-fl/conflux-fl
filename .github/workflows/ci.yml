@@ -219,6 +219,35 @@ jobs:
         run: ./ci_smoke.sh 2
         working-directory: python/conflux_client
 
+  docs:
+    name: rustdoc, warnings denied
+    runs-on: ubuntu-latest
+    # Intra-doc links break silently: the code still compiles, the docs
+    # still render, and the link is just dead. Denying rustdoc warnings
+    # is the only gate that notices. Its first local run found five
+    # broken links across four crates.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  deny:
+    name: advisories + licenses
+    runs-on: ubuntu-latest
+    # `cargo deny check` against deny.toml: RustSec advisories, yanked
+    # crates, license allow-list, and registry provenance. Its first
+    # local run found four real vulnerabilities riding in on a legacy
+    # TLS stack nothing used — this job exists so the fifth is found by
+    # a bot instead of a person.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   isolation:
     name: dependency isolation
     runs-on: ubuntu-latest

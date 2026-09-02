@@ -101,7 +101,13 @@ pub struct UniformRandomSelector {
 // `selector = "uniform_random"` against every submitted entry, without
 // `conflux-config` ever importing this crate.
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Selector, name: "uniform_random" }
+    StrategyEntry {
+        kind: StrategyKind::Selector,
+        name: "uniform_random",
+        citation: "McMahan, Moore, Ramage, Hampson & y Arcas (2017), Communication-Efficient Learning of Deep Networks from Decentralized Data",
+        family: "selector",
+        params: &[],
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

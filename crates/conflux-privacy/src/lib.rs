@@ -86,7 +86,13 @@ pub trait PrivacyMechanism: Send + Sync {
 // to name this type directly. See the `rust-compile-time-registries-inventory`
 // blog post for how the registry mechanism itself works.
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::PrivacyMechanism, name: "gaussian_clipping" }
+    StrategyEntry {
+        kind: StrategyKind::PrivacyMechanism,
+        name: "gaussian_clipping",
+        citation: "Abadi, Chu, Goodfellow, McMahan, Mironov, Talwar & Zhang (2016), Deep Learning with Differential Privacy",
+        family: "dp",
+        params: &["clip_norm", "noise_multiplier"],
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -259,7 +265,7 @@ impl RdpAccountant {
 
     /// Records one round of exposure for a single client — called once
     /// per client actually admitted into a round's aggregate, when
-    /// `accounting_scope = PerClient`. Independent of [`record_round`]
+    /// `accounting_scope = PerClient`. Independent of `record_round`
     /// (`PrivacyAccountant`'s experiment-wide counterpart, still called
     /// unconditionally by `conflux-server` — see this struct's doc
     /// comment on why both are always recorded).

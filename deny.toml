@@ -1,0 +1,38 @@
+# cargo-deny configuration — CI's `deny` job runs `cargo deny check`
+# against this. Two gates:
+#
+#   advisories — known vulnerabilities from the RustSec database. A hit
+#     fails the build; the fix is an upgrade, not an ignore, unless the
+#     advisory genuinely cannot apply here (document any ignore inline).
+#
+#   licenses — everything a release of this Apache-2.0 project links
+#     must be compatibly licensed. The allow-list below is deliberately
+#     short; extending it is a licensing decision, not a build fix.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CDLA-Permissive-2.0",
+  "OpenSSL",
+  # Boost Software License — permissive, Apache-compatible; pulled in by
+  # `xxhash-rust` (a redis dependency).
+  "BSL-1.0",
+]
+
+[bans]
+multiple-versions = "allow"   # a fact of life in this tree; not a gate
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -125,6 +125,14 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         fetch_and_inject_trusted_reference(state, round, &weights).await?;
     }
 
+    // Zeno's half of ADR 0011: unlike FLTrust's reference — one vector,
+    // computable before the batch exists — Zeno needs one score per
+    // candidate, so the sidecar can only be asked *after* the flush,
+    // with the surviving batch in hand.
+    if state.aggregator.requires_candidate_scores() {
+        fetch_and_inject_candidate_scores(state, round, &weights, &filtered).await?;
+    }
+
     let new_weights = state.aggregator.aggregate(&filtered)?;
     state.store.save_checkpoint(round, &new_weights).await?;
 
@@ -449,6 +457,63 @@ async fn fetch_and_inject_trusted_reference(
             reference_weights,
         });
 
+    Ok(())
+}
+
+/// Fetches this round's per-candidate scores from the sidecar and hands
+/// them to the aggregator (Zeno). The batch's own `weights` bytes go out
+/// verbatim — they are already the little-endian f32 buffer the sidecar
+/// expects, so nothing is re-encoded.
+async fn fetch_and_inject_candidate_scores(
+    state: &AppState,
+    round: u64,
+    global_weights: &[f32],
+    batch: &[ClientDelta],
+) -> Result<(), ServerError> {
+    let Some(transport) = &state.trusted_reference else {
+        return Err(ServerError::TrustedReferenceUnavailable {
+            round,
+            reason: format!(
+                "aggregator {:?} requires per-candidate scores, but no sidecar is \
+                 configured (set CONFLUX_TRUSTED_REFERENCE_ADDR)",
+                state.config.aggregator.value
+            ),
+        });
+    };
+
+    let candidates: Vec<(String, Vec<u8>)> = batch
+        .iter()
+        .map(|d| (d.client_id.clone(), d.weights.clone()))
+        .collect();
+
+    let scores = {
+        let mut client = transport.lock().await;
+        client
+            .score_updates(
+                round,
+                conflux_proto::encode_weights(global_weights),
+                candidates,
+            )
+            .await
+            .map_err(|e| ServerError::TrustedReferenceUnavailable {
+                round,
+                reason: e.to_string(),
+            })?
+    };
+
+    tracing::info!(
+        round,
+        scored = scores.len(),
+        submitted = batch.len(),
+        "fetched candidate scores from the sidecar"
+    );
+
+    state
+        .aggregator
+        .set_candidate_scores(conflux_core::CandidateScores {
+            global_weights: global_weights.to_vec(),
+            scores,
+        });
     Ok(())
 }
 

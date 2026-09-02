@@ -96,7 +96,7 @@ pub use robust::{
     SelectionResult, TrimmedMeanStatistic, UpdateFilter, VectorRobustAggregator,
 };
 pub use temporal::{CenteredClippingAggregator, FoolsGoldAggregator};
-pub use trusted::{FlTrustAggregator, TrustedReference};
+pub use trusted::{CandidateScores, FlTrustAggregator, TrustedReference, ZenoAggregator};
 
 use conflux_config::{StrategyEntry, StrategyKind};
 use conflux_proto::ClientDelta;
@@ -203,6 +203,29 @@ pub trait Aggregator: Send + Sync {
     fn control_variate(&self) -> Option<Vec<f32>> {
         None
     }
+
+    /// Whether this method needs the sidecar to score each candidate in
+    /// the batch before it can aggregate (Zeno).
+    ///
+    /// Distinct from [`Self::requires_trusted_reference`] on purpose:
+    /// FLTrust needs one vector computed *before* the batch is known,
+    /// Zeno needs one number per candidate and can only ask once the
+    /// batch exists. The round pipeline uses this to decide whether to
+    /// call the sidecar's `ScoreUpdates` after the buffer flushes —
+    /// `false` for every method except Zeno, so nothing changes for the
+    /// rest of the catalog (the additive-extension rule, again).
+    fn requires_candidate_scores(&self) -> bool {
+        false
+    }
+
+    /// Supplies this round's per-candidate scores, before
+    /// [`Self::aggregate`] is called.
+    ///
+    /// A default no-op, `&self`, interior mutability — the same shape as
+    /// [`Self::set_trusted_reference`], and split from `aggregate` for
+    /// the same reason: fetching scores is network I/O and `aggregate`
+    /// is synchronous.
+    fn set_candidate_scores(&self, _scores: CandidateScores) {}
 }
 
 // Registers every shipped, config-selectable family member into
@@ -217,67 +240,202 @@ pub trait Aggregator: Send + Sync {
 // research prototype, say) composes with this catalog without being
 // selectable from a config string.
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedavg" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fedavg",
+        citation: "McMahan, Moore, Ramage, Hampson & y Arcas (2017), Communication-Efficient Learning of Deep Networks from Decentralized Data",
+        family: "averaging",
+        params: &[],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fltrust" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fltrust",
+        citation: "Cao, Fang, Liu, Jia & Gong (2021), FLTrust: Byzantine-robust Federated Learning via Trust Bootstrapping",
+        family: "trusted",
+        params: &[],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "flanders" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "flanders",
+        citation: "Gabrielli, Belli, Matrullo, Miori & Tolomei (2024), Protecting Federated Learning from Extreme Model Poisoning Attacks (FLANDERS)",
+        family: "temporal",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedyogi" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fedyogi",
+        citation: "Reddi, Charles, Zaheer, Garrett, Rush, Konecny, Kumar & McMahan (2021), Adaptive Federated Optimization",
+        family: "optimization",
+        params: &["server_learning_rate", "server_tau"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadam" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fedadam",
+        citation: "Reddi, Charles, Zaheer, Garrett, Rush, Konecny, Kumar & McMahan (2021), Adaptive Federated Optimization",
+        family: "optimization",
+        params: &["server_learning_rate", "server_tau"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedavgm" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fedavgm",
+        citation: "Hsu, Qi & Brown (2019), Measuring the Effects of Non-Identical Data Distribution for Federated Visual Classification",
+        family: "optimization",
+        params: &["server_learning_rate", "server_momentum"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "qfedavg" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "qfedavg",
+        citation: "Li, Sanjabi, Beirami & Smith (2020), Fair Resource Allocation in Federated Learning",
+        family: "optimization",
+        params: &["fairness_q", "server_lipschitz"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fednova" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fednova",
+        citation: "Wang, Liu, Liang, Joshi & Poor (2020), Tackling the Objective Inconsistency Problem in Heterogeneous Federated Optimization",
+        family: "optimization",
+        params: &[],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "scaffold" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "scaffold",
+        citation: "Karimireddy, Kale, Mohri, Reddi, Stich & Suresh (2020), SCAFFOLD: Stochastic Controlled Averaging for Federated Learning",
+        family: "optimization",
+        params: &["server_learning_rate", "scaffold_num_clients"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "fedadagrad" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "zeno",
+        citation: "Xie, Koyejo & Gupta (2019), Zeno: Distributed Stochastic Gradient Descent with Suspicion-based Fault-tolerance",
+        family: "trusted",
+        params: &["robust_byzantine_fraction", "zeno_rho"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "krum" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "fedadagrad",
+        citation: "Reddi, Charles, Zaheer, Garrett, Rush, Konecny, Kumar & McMahan (2021), Adaptive Federated Optimization",
+        family: "optimization",
+        params: &["server_learning_rate", "server_tau"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "multi_krum" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "krum",
+        citation: "Blanchard, El Mhamdi, Guerraoui & Stainer (2017), Machine Learning with Adversaries: Byzantine Tolerant Gradient Descent",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "trimmed_mean" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "multi_krum",
+        citation: "Blanchard, El Mhamdi, Guerraoui & Stainer (2017), Machine Learning with Adversaries: Byzantine Tolerant Gradient Descent",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "median" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "trimmed_mean",
+        citation: "Yin, Chen, Ramchandran & Bartlett (2018), Byzantine-Robust Distributed Learning: Towards Optimal Statistical Rates",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "faba" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "median",
+        citation: "Yin, Chen, Ramchandran & Bartlett (2018), Byzantine-Robust Distributed Learning: Towards Optimal Statistical Rates",
+        family: "robust",
+        params: &[],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "bulyan" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "faba",
+        citation: "Xia, Zhang, Yang, Shao & Yin (2019), FABA: An Algorithm for Fast Aggregation against Byzantine Attacks",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "geometric_median" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "bulyan",
+        citation: "El Mhamdi, Guerraoui & Rouault (2018), The Hidden Vulnerability of Distributed Learning in Byzantine Settings",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "median_of_means" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "geometric_median",
+        citation: "Pillutla, Kakade & Harchaoui (2019/2022), Robust Aggregation for Federated Learning (RFA)",
+        family: "robust",
+        params: &[],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "divide_and_conquer" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "median_of_means",
+        citation: "Chen, Su & Xu (2017), Distributed Statistical Machine Learning in Adversarial Settings",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "foolsgold" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "divide_and_conquer",
+        citation: "Shejwalkar & Houmansadr (2021), Manipulating the Byzantine: Optimizing Model Poisoning Attacks and Defenses",
+        family: "robust",
+        params: &["robust_byzantine_fraction"],
+    }
 }
 inventory::submit! {
-    StrategyEntry { kind: StrategyKind::Aggregator, name: "centered_clipping" }
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "foolsgold",
+        citation: "Fung, Yoon & Beznosov (2018/2020), The Limitations of Federated Learning in Sybil Settings",
+        family: "temporal",
+        params: &[],
+    }
+}
+inventory::submit! {
+    StrategyEntry {
+        kind: StrategyKind::Aggregator,
+        name: "centered_clipping",
+        citation: "Karimireddy, He & Jaggi (2021), Learning from History for Byzantine Robust Optimization",
+        family: "temporal",
+        params: &["clip_radius"],
+    }
 }
 
 /// The registered aggregator names, formatted for an error message.
@@ -381,6 +539,9 @@ pub struct AggregatorParams {
     /// [`ScaffoldAggregator`] for why the distinction changes the method
     /// rather than merely scaling it.
     pub scaffold_num_clients: Option<u32>,
+    /// Zeno's regularization weight `ρ`. `None` uses `0.0005`, the value
+    /// the paper's own experiments use (Xie, Koyejo & Gupta, 2019, §5).
+    pub zeno_rho: Option<f32>,
 }
 
 /// Builds a variant's parameters, letting config override the paper's
@@ -407,6 +568,7 @@ impl Default for AggregatorParams {
             fairness_q: None,
             server_lipschitz: None,
             scaffold_num_clients: None,
+            zeno_rho: None,
         }
     }
 }
@@ -522,6 +684,10 @@ pub fn build_aggregator(
         "scaffold" => Ok(Box::new(optimization::ScaffoldAggregator::new(
             params.server_learning_rate.unwrap_or(1.0),
             params.scaffold_num_clients.unwrap_or(1),
+        ))),
+        "zeno" => Ok(Box::new(trusted::ZenoAggregator::new(
+            params.byzantine_fraction,
+            params.zeno_rho.unwrap_or(0.0005),
         ))),
         "fedavgm" => {
             let mut m = FedAvgMAggregator::new();
@@ -645,6 +811,41 @@ pub enum AggregatorError {
          replace the defense with the method it exists to replace (ADR 0011)"
     )]
     MissingTrustedReference,
+
+    #[error(
+        "zeno requires this round's candidate scores from the sidecar, and none were \
+         injected — the round pipeline calls ScoreUpdates before aggregate when \
+         requires_candidate_scores() is true"
+    )]
+    /// Zeno was asked to aggregate before `set_candidate_scores` ran
+    /// this round. Scores are consumed on use, so this also fires if a
+    /// previous round's scores were the last ones injected — stale
+    /// scores describing a different batch must never rank this one.
+    MissingCandidateScores,
+
+    #[error(
+        "the sidecar returned no score for client {client_id} — an unscored candidate \
+         cannot be ranked, and treating \"no score\" as any particular score would let \
+         a sidecar silently include or exclude a client by omission"
+    )]
+    /// A candidate in the batch has no entry in the injected scores.
+    UnscoredClient {
+        /// The client the sidecar did not score.
+        client_id: String,
+    },
+
+    #[error(
+        "the candidate scores were computed against a {got}-weight global model, but \
+         this batch has {expected} weights per update — these scores describe a \
+         different model"
+    )]
+    /// The injected scores' global model does not match the batch.
+    CandidateScoresDimension {
+        /// The batch's dimension.
+        expected: usize,
+        /// The dimension the scores were computed against.
+        got: usize,
+    },
     /// The supplied trusted reference does not match the batch's model
     /// dimension.
     #[error(
@@ -718,6 +919,50 @@ mod tests {
             }
             Err(other) => panic!("expected ClientSideOnly, got {other}"),
             Ok(_) => panic!("fedprox has no server-side aggregator to build"),
+        }
+    }
+
+    /// ADR 0008 as a registry fact: every real entry names the paper it
+    /// implements, its family, and the parameters it reads. A method
+    /// added without a citation fails here — the discipline stops being
+    /// a review-time convention.
+    #[test]
+    fn every_registered_aggregator_carries_its_citation_family_and_params() {
+        let known_families = ["averaging", "robust", "temporal", "trusted", "optimization"];
+        let known_params = [
+            "robust_byzantine_fraction",
+            "clip_radius",
+            "server_learning_rate",
+            "server_tau",
+            "server_momentum",
+            "fairness_q",
+            "server_lipschitz",
+            "scaffold_num_clients",
+            "zeno_rho",
+        ];
+        for entry in conflux_config::entries(conflux_config::StrategyKind::Aggregator) {
+            if entry.family == "test" {
+                continue; // the registry crate's own fixture
+            }
+            assert!(
+                entry.citation.len() > 20 && entry.citation.contains("(20"),
+                "{}: citation must name authors and a year, got {:?}",
+                entry.name,
+                entry.citation
+            );
+            assert!(
+                known_families.contains(&entry.family),
+                "{}: unknown family {:?}",
+                entry.name,
+                entry.family
+            );
+            for param in entry.params {
+                assert!(
+                    known_params.contains(param),
+                    "{}: {param} is not a config parameter build_aggregator reads",
+                    entry.name
+                );
+            }
         }
     }
 

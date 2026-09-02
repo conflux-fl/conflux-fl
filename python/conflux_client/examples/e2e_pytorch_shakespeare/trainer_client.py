@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""Real-training test-harness client for the Shakespeare harness.
+"""Real-training Shakespeare next-character client (docs/E2E_TESTING.md).
 
-Byte-identical in structure to the MNIST harness's trainer_client.py —
-which is the point: `model.py` is the only file that knows what the task
-is, so a new dataset costs a model and a partitioner, not a new client.
-The one addition here is the vocabulary handshake below, which a
-character-level model needs and an image model doesn't.
+Rewritten onto the `ClientApp` SDK — the hand-rolled loop and its own
+f32-codec copy are gone; what remains is the GRU-on-a-shard part, plus
+the one thing genuinely unique to this harness: pinning the vocabulary
+size before any model exists. It now reports `local_steps` and
+`local_loss`, so this harness can drive FedNova and q-FedAvg, which the
+pre-migration copy silently could not.
+
+`--trainer-seed` reseeds torch's global RNG *after* the deterministic
+model init (which every client must share) — see the CIFAR-10 trainer
+for the reasoning; it is the same flag with the same contract.
 """
 
 import argparse
-import struct
 import sys
-import time
 from pathlib import Path
 
-import grpc
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import fl_transport_pb2 as pb2
-import fl_transport_pb2_grpc as pb2_grpc
-from model import is_placeholder_init, new_model, set_vocab_size, train_steps, unflatten
+from app import ClientApp, TrainResult, is_placeholder_init, main  # noqa: E402
+from model import new_model, set_vocab_size, train_steps, unflatten  # noqa: E402
 
 
 def load_vocab_size(shard_path: str) -> int:
@@ -41,107 +42,74 @@ def load_vocab_size(shard_path: str) -> int:
     return len(vocab)
 
 
+class ShakespeareClient(ClientApp):
+    """A character-level GRU on one speaker-partitioned shard."""
 
-def decode_weights(data: bytes) -> list[float]:
-    count = len(data) // 4
-    return list(struct.unpack(f"<{count}f", data))
-
-
-def encode_weights(weights) -> bytes:
-    return struct.pack(f"<{len(weights)}f", *[float(w) for w in weights])
-
-
-def run(
-    address: str,
-    client_id: str,
-    shard_path: str,
-    rounds: int,
-    lr: float,
-    steps: int,
-    poison: bool = False,
-    poison_magnitude: float = 20.0,
-) -> None:
-    load_vocab_size(shard_path)
-    shard = torch.load(shard_path, weights_only=False)
-    X, y = shard["X"], shard["y"]
-    print(f"[{client_id}] loaded {shard_path}: {len(X)} samples")
-    if poison:
-        print(f"[{client_id}] POISONED — every round submits offset weights instead of training")
-
-    model = new_model()
-
-    channel = grpc.insecure_channel(address)
-    stub = pb2_grpc.FlTransportStub(channel)
-    stub.Register(pb2.RegisterRequest(client_id=client_id, auth_token="harness-token"))
-    print(f"[{client_id}] registered")
-
-    last_round = None
-    completed = 0
-    while completed < rounds:
-        while True:
-            task = stub.FetchTask(pb2.FetchTaskRequest(client_id=client_id))
-            if task.round != last_round:
-                break
-            time.sleep(0.2)
-
-        weights = decode_weights(task.model_weights)
-        if not is_placeholder_init(weights):
-            unflatten(model, weights)
-        # else: Conflux's generic zero placeholder — keep this client's
-        # own real init instead (every client agrees, since new_model()
-        # is deterministic). See model.py's is_placeholder_init.
+    def __init__(self, shard_path, lr, steps, poison=False, poison_magnitude=20.0):
+        vocab_size = load_vocab_size(shard_path)
+        shard = torch.load(shard_path)
+        self.X, self.y = shard["X"], shard["y"]
+        self.lr, self.steps = lr, steps
+        self.poison, self.poison_magnitude = poison, poison_magnitude
+        self.model = new_model()
+        print(
+            f"loaded {shard_path}: {len(self.X)} sequences, vocab {vocab_size}",
+            flush=True,
+        )
         if poison:
-            trained = [w + poison_magnitude for w in weights]
-        else:
-            trained = train_steps(model, X, y, lr, steps)
+            print("POISONED — every round submits offset weights instead of training", flush=True)
 
-        def chunks():
-            yield pb2.DeltaChunk(
-                client_id=client_id,
-                round=task.round,
-                chunk_index=0,
-                total_chunks=1,
-                data=encode_weights(trained),
-                num_samples=len(y),
+    def train(self, weights, round):
+        if not is_placeholder_init(weights):
+            unflatten(self.model, weights)
+
+        if self.poison:
+            return TrainResult(
+                weights=[w + self.poison_magnitude for w in weights],
+                num_samples=len(self.y),
             )
 
-        try:
-            ack = stub.SubmitDelta(chunks())
-        except grpc.RpcError as e:
-            print(f"[{client_id}] round {task.round} submission rejected ({e.code()}); retrying")
-            last_round = task.round
-            continue
+        with torch.no_grad():
+            loss_before = torch.nn.functional.cross_entropy(
+                self.model(self.X), self.y
+            ).item()
 
-        last_round = task.round
-        completed += 1
-        print(f"[{client_id}] round {task.round}: submitted, accepted={ack.accepted}")
-
-    print(f"[{client_id}] done — completed {completed} rounds")
+        trained = train_steps(self.model, self.X, self.y, self.lr, self.steps)
+        return TrainResult(
+            weights=trained,
+            num_samples=len(self.y),
+            local_steps=self.steps,  # FedNova
+            local_loss=loss_before,  # q-FedAvg
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--address", default="127.0.0.1:47100")
-    parser.add_argument("--client-id", required=True)
+    parser.add_argument("--client-id", default="trainer-1")
     parser.add_argument("--shard", required=True)
-    parser.add_argument("--rounds", type=int, default=20)
-    parser.add_argument("--lr", type=float, default=0.1)
-    parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument("--rounds", type=int, default=5)
+    parser.add_argument("--lr", type=float, default=0.5)
+    parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--poison", action="store_true")
     parser.add_argument("--poison-magnitude", type=float, default=20.0)
+    parser.add_argument(
+        "--trainer-seed",
+        type=int,
+        default=None,
+        help="Reseed torch's RNG after model init, so batch sampling varies "
+        "across sweep seeds. Unset keeps the legacy fully-deterministic run.",
+    )
     args = parser.parse_args()
 
-    try:
-        run(
-            args.address,
-            args.client_id,
-            args.shard,
-            args.rounds,
-            args.lr,
-            args.steps,
-            args.poison,
-            args.poison_magnitude,
-        )
-    except grpc.RpcError as e:
-        print(f"[{args.client_id}] RPC failed: {e}", file=sys.stderr)
-        sys.exit(1)
+    app = ShakespeareClient(args.shard, args.lr, args.steps, args.poison, args.poison_magnitude)
+    if args.trainer_seed is not None:
+        torch.manual_seed(args.trainer_seed)
+        print(f"trainer RNG reseeded: {args.trainer_seed}", flush=True)
+    sys.argv = [
+        sys.argv[0],
+        "--address", args.address,
+        "--client-id", args.client_id,
+        "--rounds", str(args.rounds),
+    ]
+    main(app)

@@ -56,7 +56,18 @@ readme = "README.md"
 async-trait = "0.1"
 aws-config = "1"
 aws-credential-types = "1"
-aws-sdk-s3 = "1"
+# `default-features = false` to shed the `rustls` feature, which drags
+# in the LEGACY rustls-0.21/h2-0.3 stack alongside the modern one the
+# `default-https-client` feature already provides — the old stack is
+# where RUSTSEC-2026-0098/0099/0104 (rustls-webpki 0.101) and
+# RUSTSEC-2026-0258 (h2 0.3) live, and nothing here uses it. The other
+# defaults are re-added explicitly.
+aws-sdk-s3 = { version = "1", default-features = false, features = [
+  "sigv4a",
+  "http-1x",
+  "default-https-client",
+  "rt-tokio",
+] }
 axum = "0.8"
 criterion = "0.8"
 http-body-util = "0.1"

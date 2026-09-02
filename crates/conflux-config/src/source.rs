@@ -51,7 +51,7 @@ impl ConfigSource {
 
     /// The phrase shown in the text format's `(source: ...)` parenthetical,
     /// e.g. `topology profile "cross_device"` or `built-in fallback`.
-    fn text_phrase(&self) -> String {
+    pub(crate) fn text_phrase(&self) -> String {
         match self {
             ConfigSource::Cli => "cli".to_string(),
             ConfigSource::EnvVar(name) => format!("env var {name}"),

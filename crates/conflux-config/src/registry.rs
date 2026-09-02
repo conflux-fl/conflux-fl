@@ -38,6 +38,19 @@ pub struct StrategyEntry {
     pub kind: StrategyKind,
     /// The name configuration selects it by, e.g. `"fedavg"`.
     pub name: &'static str,
+    /// The published work this implements — the ADR 0008 discipline as
+    /// a registry field rather than a review-time convention. A test
+    /// asserts it is never empty for a real entry, so "add a method
+    /// without saying what paper it is" no longer compiles past CI.
+    pub citation: &'static str,
+    /// The family the implementation belongs to (`averaging`, `robust`,
+    /// `temporal`, `trusted`, `optimization` for aggregators; the kind's
+    /// own name otherwise).
+    pub family: &'static str,
+    /// The config parameters this implementation actually reads —
+    /// mirrors `build_aggregator`'s arms, and is what lets a tool say
+    /// "krum reads robust_byzantine_fraction" without parsing Rust.
+    pub params: &'static [&'static str],
 }
 
 inventory::collect!(StrategyEntry);
@@ -48,6 +61,18 @@ pub fn lookup(kind: StrategyKind, name: &str) -> Option<&'static StrategyEntry> 
     inventory::iter::<StrategyEntry>()
         .into_iter()
         .find(|entry| entry.kind == kind && entry.name == name)
+}
+
+/// Every entry registered under `kind`, in registration order.
+///
+/// The metadata companion to [`registered_names`]: what a CLI's
+/// `describe`, a generated catalog page, or a startup log reads. Same
+/// no-drift property — the data comes from the same `submit!` sites
+/// that make a name buildable at all.
+pub fn entries(kind: StrategyKind) -> Vec<&'static StrategyEntry> {
+    inventory::iter::<StrategyEntry>()
+        .filter(|entry| entry.kind == kind)
+        .collect()
 }
 
 /// Every name registered under `kind`, sorted.
@@ -71,7 +96,13 @@ mod tests {
     use super::*;
 
     inventory::submit! {
-        StrategyEntry { kind: StrategyKind::Aggregator, name: "test_dummy_aggregator" }
+        StrategyEntry {
+            kind: StrategyKind::Aggregator,
+            name: "test_dummy_aggregator",
+            citation: "test fixture, not a published method",
+            family: "test",
+            params: &[],
+        }
     }
 
     #[test]

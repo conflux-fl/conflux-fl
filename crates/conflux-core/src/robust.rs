@@ -140,7 +140,7 @@ impl<F: UpdateFilter, C: Aggregator> Aggregator for FilteredAggregator<F, C> {
 /// active clients can't meaningfully assume "20% Byzantine," and every
 /// caller of this function degrades toward plain averaging rather than
 /// erroring when `n` is too small for the formula to mean much.
-fn byzantine_count(byzantine_fraction: f32, n: usize) -> usize {
+pub(crate) fn byzantine_count(byzantine_fraction: f32, n: usize) -> usize {
     ((byzantine_fraction * n as f32).floor() as usize).min(n.saturating_sub(1))
 }
 

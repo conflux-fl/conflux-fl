@@ -85,7 +85,18 @@ fn loss(weights: &[f32], xs: &[Vec<f32>], ys: &[f32]) -> f32 {
 
 /// Full-batch gradient descent. The caller's weights are never mutated —
 /// the same contract the NumPy version's `.copy()` provides.
-fn train_steps(weights: &[f32], xs: &[Vec<f32>], ys: &[f32], lr: f32, steps: usize) -> Vec<f32> {
+/// `correction`, when present, is SCAFFOLD's `c − c_i`, added to the
+/// gradient each step so the update follows `g − c_i + c` — the same
+/// contract the Python harness's `train_steps(..., correction=)`
+/// implements, field for field, flat layout and all.
+fn train_steps(
+    weights: &[f32],
+    xs: &[Vec<f32>],
+    ys: &[f32],
+    lr: f32,
+    steps: usize,
+    correction: Option<&[f32]>,
+) -> Vec<f32> {
     let dim = weights.len() - 1;
     let mut w: Vec<f64> = weights[..dim].iter().map(|v| *v as f64).collect();
     let mut b = weights[dim] as f64;
@@ -102,6 +113,16 @@ fn train_steps(weights: &[f32], xs: &[Vec<f32>], ys: &[f32], lr: f32, steps: usi
                 *g += error * *xi as f64 / n;
             }
             grad_b += error / n;
+        }
+
+        if let Some(corr) = correction {
+            // Applied to the *gradient*, not the loss — the correction
+            // is not the gradient of anything. Last entry corrects the
+            // bias, matching the flat `[w_1..w_d, bias]` layout.
+            for (g, c) in grad_w.iter_mut().zip(corr) {
+                *g += *c as f64;
+            }
+            grad_b += corr[dim] as f64;
         }
 
         for (wi, g) in w.iter_mut().zip(&grad_w) {
@@ -190,9 +211,31 @@ struct LogRegClient {
     test_ys: Vec<f32>,
     lr: f32,
     steps: usize,
+    /// SCAFFOLD's client half, mirroring the Python harness: `c_i` is
+    /// THIS client's control variate (persisted across rounds, zeros to
+    /// start — the paper's own initialization), `c` is the server's,
+    /// delivered before each round via `on_control_variate`.
+    scaffold: bool,
+    c_i: Option<Vec<f32>>,
+    c: Option<Vec<f32>>,
+    announced_c: bool,
 }
 
 impl ClientApp for LogRegClient {
+    fn on_control_variate(&mut self, c: &[f32]) {
+        // Say so, out loud — once. A SCAFFOLD run where `c` never
+        // arrives is indistinguishable from a correct one by accuracy
+        // alone: the correction silently becomes `-c_i`, which
+        // *increases* variance. Same announcement, same reason, as the
+        // Python harness.
+        if !self.announced_c && c.iter().any(|v| *v != 0.0) {
+            let norm = c.iter().map(|v| (*v as f64).powi(2)).sum::<f64>().sqrt();
+            println!("SCAFFOLD: first nonzero c received (l2 norm {norm:.4})");
+            self.announced_c = true;
+        }
+        self.c = Some(c.to_vec());
+    }
+
     fn train(&mut self, weights: &[f32], round: u64) -> TrainResult {
         // The accuracy of the *incoming global model* on the shared test
         // set. This is the number that says whether federation works: it
@@ -214,11 +257,53 @@ impl ClientApp for LogRegClient {
         // The loss *before* training — which is what q-FedAvg's
         // `F_k(w^t)` means, measured at the round's starting weights.
         let loss_before = loss(&start, &self.xs, &self.ys);
-        let trained = train_steps(&start, &self.xs, &self.ys, self.lr, self.steps);
+
+        if !self.scaffold {
+            let trained = train_steps(&start, &self.xs, &self.ys, self.lr, self.steps, None);
+            return TrainResult::new(trained, self.ys.len() as u64)
+                .with_local_steps(self.steps as u32)
+                .with_local_loss(loss_before);
+        }
+
+        // --- SCAFFOLD (Karimireddy et al. 2020, Algorithm 1, option
+        // II), exactly the Python harness's arithmetic ---------------
+        let dim = start.len();
+        let c_i = self.c_i.get_or_insert_with(|| vec![0.0; dim]);
+        let zeros = vec![0.0; dim];
+        let c = self.c.as_deref().unwrap_or(&zeros);
+
+        // Local steps follow g − c_i + c, so the per-parameter
+        // correction is (c − c_i). Both zero at initialization: round
+        // one is plain local training, by the paper's own design.
+        let correction: Vec<f32> = c.iter().zip(c_i.iter()).map(|(cv, ci)| cv - ci).collect();
+        let trained = train_steps(
+            &start,
+            &self.xs,
+            &self.ys,
+            self.lr,
+            self.steps,
+            Some(&correction),
+        );
+
+        // Option II: c_i+ = c_i − c + (x − y)/(K·lr), so the *delta*
+        // this client reports is Δc_i = (x − y)/(K·lr) − c. The server
+        // folds it in damped by 1/N; c_i advances locally so next
+        // round's correction uses this round's evidence.
+        let scale = 1.0 / (self.steps as f32 * self.lr);
+        let delta_c: Vec<f32> = start
+            .iter()
+            .zip(&trained)
+            .zip(c)
+            .map(|((x, y), cv)| (x - y) * scale - cv)
+            .collect();
+        for (ci, d) in c_i.iter_mut().zip(&delta_c) {
+            *ci += d;
+        }
 
         TrainResult::new(trained, self.ys.len() as u64)
             .with_local_steps(self.steps as u32)
             .with_local_loss(loss_before)
+            .with_control_variate(delta_c)
     }
 }
 
@@ -226,14 +311,19 @@ impl ClientApp for LogRegClient {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_target(false).init();
 
-    let mut args = std::env::args().skip(1);
-    let (mut client_id, mut rounds, mut address, mut index) = (
+    let mut args = std::env::args().skip(1).peekable();
+    let (mut client_id, mut rounds, mut address, mut index, mut scaffold) = (
         "rust-client-1".to_string(),
         8usize,
         "http://127.0.0.1:47100".to_string(),
         0u64,
+        false,
     );
     while let Some(flag) = args.next() {
+        if flag == "--scaffold" {
+            scaffold = true;
+            continue;
+        }
         let value = args.next().unwrap_or_default();
         match flag.as_str() {
             "--client-id" => client_id = value,
@@ -251,7 +341,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The comparison that makes the federated number mean something:
     // what this client reaches on its own data, scored on the *global*
     // problem. It should be poor — it only ever saw one feature vary.
-    let solo = train_steps(&vec![0.0; dim + 1], &xs, &ys, 0.5, 500);
+    let solo = train_steps(&vec![0.0; dim + 1], &xs, &ys, 0.5, 500, None);
     println!(
         "[{client_id}] shard sees feature {} only; local-only model scores {:.3} on the \
          shared test set",
@@ -259,6 +349,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         accuracy(&solo, &test_xs, &test_ys)
     );
 
+    if scaffold {
+        println!("[{client_id}] SCAFFOLD: client-side control variate active");
+    }
     let mut app = LogRegClient {
         xs,
         ys,
@@ -266,6 +359,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         test_ys,
         lr: 0.5,
         steps: 20,
+        scaffold,
+        c_i: None,
+        c: None,
+        announced_c: false,
     };
 
     let completed = run(

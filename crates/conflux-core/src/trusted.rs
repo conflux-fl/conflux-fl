@@ -275,6 +275,195 @@ impl Aggregator for FlTrustAggregator {
     }
 }
 
+/// One round's per-candidate scores from the sidecar, plus the global
+/// model they were computed against.
+///
+/// The global weights ride along for two reasons: Zeno's `ρ‖u_i‖²`
+/// regularizer needs the round's starting point to form `u_i = y_i − x`,
+/// and carrying it makes the scores self-describing — a dimension check
+/// can prove they belong to *this* batch rather than trusting the
+/// injection order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateScores {
+    /// The global model dispatched this round — what every candidate and
+    /// every score is relative to.
+    pub global_weights: Vec<f32>,
+    /// `(client_id, score)` as the sidecar returned them. Higher is
+    /// better; the sidecar's contract is "held-out improvement over the
+    /// global model".
+    pub scores: Vec<(String, f32)>,
+}
+
+/// **Zeno** — Xie, Koyejo & Gupta (2019), *Zeno: Distributed Stochastic
+/// Gradient Descent with Suspicion-based Fault-tolerance*, ICML.
+///
+/// # The method
+///
+/// Rank every candidate by a *suspicion score* and drop the `b` most
+/// suspicious before averaging:
+///
+/// ```text
+/// sds_i = score_i − ρ · ‖y_i − x‖²
+/// keep the n − b highest, unweighted mean of the kept
+/// ```
+///
+/// where `score_i` is the sidecar's held-out improvement for candidate
+/// `i` (the paper's stochastic descendant estimate, computed on data no
+/// client controls) and the `ρ‖·‖²` term penalizes magnitude, so an
+/// update cannot buy a high score by taking a huge step that happens to
+/// help the validation batch.
+///
+/// # Where it sits next to FLTrust
+///
+/// Both anchor to server-side data (ADR 0011), but they consume the
+/// sidecar differently, which is why the service has two RPCs. FLTrust
+/// needs **one vector before the batch is known** — its reference
+/// update. Zeno needs **one number per candidate**, so it can only ask
+/// once the batch exists; the round pipeline calls `ScoreUpdates` after
+/// the buffer flushes and injects the result here through
+/// [`Aggregator::set_candidate_scores`].
+///
+/// # A caution this catalog already measured
+///
+/// A filter that *ranks* clients can make a robust base worse — the
+/// FLANDERS measurement found exactly that against stable Sybils.
+/// Zeno's defense against the same failure is that its ranking signal
+/// comes from held-out data rather than from batch geometry: a
+/// colluding majority can dominate every pairwise-distance argument,
+/// but it cannot make a bad update score well on data it never saw.
+/// The cost is the same one FLTrust pays — the defense is only as good
+/// as the sidecar's dataset.
+///
+/// # Fidelity notes
+///
+/// - **Scores are consumed on use.** `aggregate` takes them rather than
+///   reading them, so a round that was never scored fails with
+///   [`AggregatorError::MissingCandidateScores`] instead of silently
+///   ranking this batch with the previous batch's numbers.
+/// - **An unscored candidate is an error, not a default.** The sidecar
+///   may omit candidates; treating omission as any particular score
+///   would let it include or exclude a client silently.
+/// - **A non-finite score ranks strictly last.** It cannot be compared,
+///   and "uncomparable" must never beat a real score — the same
+///   direction-of-failure reasoning the reputation filter documents.
+/// - `b` comes from `byzantine_fraction` exactly as the `robust` family
+///   sizes it: `floor(fraction · n)`, capped at `n − 1`.
+pub struct ZenoAggregator {
+    /// Assumed Byzantine fraction, sizing how many candidates are
+    /// dropped each round.
+    pub byzantine_fraction: f32,
+    /// The paper's `ρ`: how hard update magnitude is penalized. The
+    /// builtin `0.0005` is the value the paper's own experiments use
+    /// (§5); like every cited default it is a starting point, not a
+    /// tuned recommendation.
+    pub rho: f32,
+    /// This round's scores. `Mutex<Option<…>>` per ADR 0012's pattern;
+    /// `Option` because "not injected yet" is a state `aggregate` must
+    /// refuse, and `take()`n on use so it cannot go stale.
+    scores: Mutex<Option<CandidateScores>>,
+}
+
+impl ZenoAggregator {
+    /// `byzantine_fraction` sizes the drop count; `rho` is the paper's
+    /// magnitude penalty.
+    pub fn new(byzantine_fraction: f32, rho: f32) -> Self {
+        Self {
+            byzantine_fraction,
+            rho,
+            scores: Mutex::new(None),
+        }
+    }
+}
+
+impl Aggregator for ZenoAggregator {
+    fn requires_candidate_scores(&self) -> bool {
+        true
+    }
+
+    fn set_candidate_scores(&self, scores: CandidateScores) {
+        *self
+            .scores
+            .lock()
+            .expect("ZenoAggregator scores mutex poisoned") = Some(scores);
+    }
+
+    fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
+        if updates.is_empty() {
+            return Err(AggregatorError::EmptyBatch);
+        }
+        let decoded = decode_and_validate(updates)?;
+        let dim = decoded[0].len();
+
+        // `take`, not `clone`: scores describe exactly one batch, and
+        // the failure this prevents — ranking round N's clients with
+        // round N−1's numbers — would be invisible in any output.
+        let injected = self
+            .scores
+            .lock()
+            .expect("ZenoAggregator scores mutex poisoned")
+            .take()
+            .ok_or(AggregatorError::MissingCandidateScores)?;
+
+        if injected.global_weights.len() != dim {
+            return Err(AggregatorError::CandidateScoresDimension {
+                expected: dim,
+                got: injected.global_weights.len(),
+            });
+        }
+
+        let mut by_client: std::collections::HashMap<String, f32> =
+            injected.scores.into_iter().collect();
+
+        // Suspicion score per candidate. `f64` for the norm, as
+        // everywhere: two finite `f32` weights can be `2·f32::MAX`
+        // apart, and the whole point of the ρ term is to punish exactly
+        // the updates large enough to overflow it.
+        let mut ranked: Vec<(usize, f64)> = Vec::with_capacity(updates.len());
+        for (i, (update, weights)) in updates.iter().zip(&decoded).enumerate() {
+            let score = by_client.remove(&update.client_id).ok_or_else(|| {
+                AggregatorError::UnscoredClient {
+                    client_id: update.client_id.clone(),
+                }
+            })?;
+            let norm_sq: f64 = weights
+                .iter()
+                .zip(&injected.global_weights)
+                .map(|(y, x)| {
+                    let d = *y as f64 - *x as f64;
+                    d * d
+                })
+                .sum();
+            let sds = score as f64 - self.rho as f64 * norm_sq;
+            // Uncomparable must never outrank a real number.
+            ranked.push((
+                i,
+                if sds.is_finite() {
+                    sds
+                } else {
+                    f64::NEG_INFINITY
+                },
+            ));
+        }
+
+        let drop = crate::robust::byzantine_count(self.byzantine_fraction, updates.len());
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        ranked.truncate(updates.len() - drop);
+
+        // Unweighted mean of the kept candidates, `1/k` folded into each
+        // term — the paper averages the survivors and weights none of
+        // them, and the overflow discipline is the catalog's standing
+        // one.
+        let share = 1.0 / ranked.len() as f32;
+        let mut out = vec![0.0f32; dim];
+        for (i, _) in &ranked {
+            for (acc, w) in out.iter_mut().zip(&decoded[*i]) {
+                *acc += w * share;
+            }
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +621,165 @@ mod tests {
             .unwrap();
 
         assert!(out.iter().all(|w| w.is_finite()), "got {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod zeno_tests {
+    use super::*;
+    use conflux_proto::encode_weights;
+
+    fn delta(id: &str, weights: &[f32]) -> ClientDelta {
+        ClientDelta {
+            client_id: id.to_string(),
+            round: 1,
+            weights: encode_weights(weights),
+            num_samples: 10,
+            ..Default::default()
+        }
+    }
+
+    fn scores(global: &[f32], pairs: &[(&str, f32)]) -> CandidateScores {
+        CandidateScores {
+            global_weights: global.to_vec(),
+            scores: pairs.iter().map(|(c, s)| (c.to_string(), *s)).collect(),
+        }
+    }
+
+    /// n = 4, fraction 0.25 → b = 1: the single lowest-scored candidate
+    /// is dropped and the rest are averaged unweighted. Hand-derived:
+    /// mean of a, b, c = ([1] + [2] + [3]) / 3 = [2].
+    #[test]
+    fn zeno_drops_the_b_lowest_scored_and_averages_the_rest() {
+        let agg = ZenoAggregator::new(0.25, 0.0);
+        agg.set_candidate_scores(scores(
+            &[0.0],
+            &[("a", 1.0), ("b", 0.9), ("c", 0.8), ("d", -5.0)],
+        ));
+        let out = agg
+            .aggregate(&[
+                delta("a", &[1.0]),
+                delta("b", &[2.0]),
+                delta("c", &[3.0]),
+                delta("d", &[100.0]),
+            ])
+            .unwrap();
+        assert!((out[0] - 2.0).abs() < 1e-6, "got {out:?}");
+    }
+
+    /// The ρ term is what stops a huge step from buying a good rank.
+    /// Both candidates score 1.0 on held-out data; rho = 0.02 makes
+    /// sds_a = 1 − 0.02·1 = 0.98 and sds_b = 1 − 0.02·100 = −1.0, so b
+    /// is the one dropped despite the identical sidecar score.
+    #[test]
+    fn the_rho_penalty_drops_the_large_update_at_equal_sidecar_score() {
+        let agg = ZenoAggregator::new(0.5, 0.02);
+        agg.set_candidate_scores(scores(&[0.0, 0.0], &[("a", 1.0), ("b", 1.0)]));
+        let out = agg
+            .aggregate(&[delta("a", &[1.0, 0.0]), delta("b", &[10.0, 0.0])])
+            .unwrap();
+        assert_eq!(out, vec![1.0, 0.0]);
+    }
+
+    /// Aggregating without this round's scores must refuse, not rank.
+    #[test]
+    fn missing_scores_error_rather_than_silently_averaging() {
+        let agg = ZenoAggregator::new(0.25, 0.0005);
+        let err = agg.aggregate(&[delta("a", &[1.0])]).unwrap_err();
+        assert!(matches!(err, AggregatorError::MissingCandidateScores));
+    }
+
+    /// Scores are consumed on use: a second round without a fresh
+    /// injection must fail, never reuse round N−1's numbers on round N's
+    /// batch — a failure that would be invisible in any output.
+    #[test]
+    fn scores_are_consumed_once_and_never_reused_across_rounds() {
+        let agg = ZenoAggregator::new(0.0, 0.0);
+        agg.set_candidate_scores(scores(&[0.0], &[("a", 1.0)]));
+        agg.aggregate(&[delta("a", &[1.0])]).unwrap();
+
+        let err = agg.aggregate(&[delta("a", &[1.0])]).unwrap_err();
+        assert!(matches!(err, AggregatorError::MissingCandidateScores));
+    }
+
+    /// The sidecar may omit a candidate; omission is an error, not a
+    /// default score in either direction.
+    #[test]
+    fn an_unscored_client_is_an_error_not_a_default() {
+        let agg = ZenoAggregator::new(0.0, 0.0);
+        agg.set_candidate_scores(scores(&[0.0], &[("a", 1.0)]));
+        let err = agg
+            .aggregate(&[delta("a", &[1.0]), delta("b", &[2.0])])
+            .unwrap_err();
+        match err {
+            AggregatorError::UnscoredClient { client_id } => assert_eq!(client_id, "b"),
+            other => panic!("expected UnscoredClient, got {other}"),
+        }
+    }
+
+    /// Scores computed against a different model must not rank this
+    /// batch.
+    #[test]
+    fn a_dimension_mismatch_between_scores_and_batch_errors() {
+        let agg = ZenoAggregator::new(0.0, 0.0);
+        agg.set_candidate_scores(scores(&[0.0, 0.0, 0.0], &[("a", 1.0)]));
+        let err = agg.aggregate(&[delta("a", &[1.0])]).unwrap_err();
+        assert!(matches!(
+            err,
+            AggregatorError::CandidateScoresDimension {
+                expected: 1,
+                got: 3
+            }
+        ));
+    }
+
+    /// A NaN score is uncomparable, and uncomparable must rank strictly
+    /// last — the same direction-of-failure rule the reputation filter
+    /// documents, applied here.
+    #[test]
+    fn a_non_finite_score_ranks_last_and_is_dropped_first() {
+        let agg = ZenoAggregator::new(0.34, 0.0);
+        agg.set_candidate_scores(scores(&[0.0], &[("a", f32::NAN), ("b", 0.1), ("c", 0.2)]));
+        let out = agg
+            .aggregate(&[delta("a", &[100.0]), delta("b", &[1.0]), delta("c", &[3.0])])
+            .unwrap();
+        // b = floor(0.34 * 3) = 1 → NaN-scored `a` is the drop.
+        assert!((out[0] - 2.0).abs() < 1e-6, "got {out:?}");
+    }
+
+    /// fraction 0 keeps everyone: Zeno degenerates to the unweighted
+    /// mean, exactly as the paper's b = 0 does.
+    #[test]
+    fn zero_byzantine_fraction_is_the_plain_unweighted_mean() {
+        let agg = ZenoAggregator::new(0.0, 0.0);
+        agg.set_candidate_scores(scores(&[0.0], &[("a", -1.0), ("b", 1.0)]));
+        let out = agg
+            .aggregate(&[delta("a", &[0.0]), delta("b", &[4.0])])
+            .unwrap();
+        assert!((out[0] - 2.0).abs() < 1e-6, "got {out:?}");
+    }
+
+    #[test]
+    fn empty_batch_errors() {
+        let agg = ZenoAggregator::new(0.25, 0.0005);
+        assert!(matches!(
+            agg.aggregate(&[]),
+            Err(AggregatorError::EmptyBatch)
+        ));
+    }
+
+    /// The two trusted-family methods consume the sidecar differently,
+    /// and each must only ask for what it uses.
+    #[test]
+    fn capability_flags_are_disjoint_across_the_trusted_family() {
+        let zeno = ZenoAggregator::new(0.25, 0.0005);
+        assert!(zeno.requires_candidate_scores());
+        assert!(!zeno.requires_trusted_reference());
+
+        let fltrust = FlTrustAggregator::new();
+        assert!(fltrust.requires_trusted_reference());
+        assert!(!fltrust.requires_candidate_scores());
+
+        assert!(!crate::FedAvg::default().requires_candidate_scores());
     }
 }

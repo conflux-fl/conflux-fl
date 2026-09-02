@@ -25,7 +25,7 @@
 //! parameter, before doing anything else.
 //!
 //! This crate also hosts the compile-time strategy registry (see
-//! [`registry`]) that lets an aggregator/selector/privacy-mechanism
+//! [`lookup`]/[`StrategyEntry`]) that lets an aggregator/selector/privacy-mechanism
 //! implementation in another crate become selectable by name from
 //! config, without this crate ever importing that other crate.
 
@@ -92,17 +92,23 @@
 #![warn(missing_docs)]
 
 mod file;
+mod profile;
 mod registry;
 mod source;
 mod types;
+mod validate;
 
 pub use file::{ConfigFileError, load_experiment_file};
-pub use registry::{StrategyEntry, StrategyKind, lookup, registered_names};
+pub use profile::{
+    ModeProfile, ProfileError, TopologyProfile, load_mode_profile, load_topology_profile,
+};
+pub use registry::{StrategyEntry, StrategyKind, entries, lookup, registered_names};
 pub use source::ConfigSource;
 pub use types::{
     AccountingScope, AuthMode, BudgetExhaustedAction, ConnectionMode, LogFormat, Mode,
     ModeDefaults, SeedMode, Topology, TopologyDefaults,
 };
+pub use validate::{Finding, Severity, Validation};
 
 use source::{LoggedValue, log_line};
 
@@ -274,6 +280,13 @@ pub struct Overrides {
     /// substituting `|S|` would quietly turn the damping off and change
     /// the method. Read only by `scaffold`.
     pub scaffold_num_clients: Option<u32>,
+    /// Zeno's regularization weight `ρ` (Xie, Koyejo & Gupta, 2019).
+    ///
+    /// Builtin fallback `0.0005`, the value the paper's own experiments
+    /// use (§5). Penalizes a candidate's update magnitude in its
+    /// suspicion score, so a huge step cannot buy a good rank by
+    /// happening to help the validation batch. Read only by `zeno`.
+    pub zeno_rho: Option<f32>,
     /// q-FedAvg's Lipschitz estimate `L`.
     ///
     /// Builtin fallback `1.0`, and a placeholder in the same sense
@@ -429,6 +442,10 @@ pub struct ResolvedConfig {
     ///
     /// See the same field on [`Overrides`] for the full description.
     pub scaffold_num_clients: Resolved<u32>,
+    /// Zeno's regularization weight `ρ`.
+    ///
+    /// See the same field on [`Overrides`] for the full description.
+    pub zeno_rho: Resolved<f32>,
     /// q-FedAvg's Lipschitz estimate `L`.
     ///
     /// See the same field on [`Overrides`] for the full description.
@@ -575,11 +592,54 @@ pub fn resolve(
     env: &Overrides,
     cli: &Overrides,
 ) -> Result<ResolvedConfig, ConfigError> {
-    let topology_defaults = topology.defaults();
-    let mode_defaults = mode.defaults();
+    resolve_with_profiles(
+        &TopologyProfile::builtin(topology),
+        &ModeProfile::builtin(mode),
+        file,
+        env,
+        cli,
+    )
+}
 
-    let topology_source = ConfigSource::TopologyProfile(topology.label().to_string());
-    let mode_source = ConfigSource::ModeProfile(mode.label().to_string());
+/// [`resolve`], but the topology and mode arrive as *profiles* — either
+/// [`TopologyProfile::builtin`]/[`ModeProfile::builtin`] (which is all
+/// `resolve` does) or something [`load_topology_profile`] read from a
+/// TOML file and merged down its `inherits` chain (spec §4.1).
+///
+/// The only observable difference from a builtin run is provenance:
+/// each profile-owned parameter's startup line names the link in the
+/// chain that actually set it — `topology profile "hospital_silo"` for
+/// an override the file made, `topology profile "hospital_silo →
+/// cross_silo"` for a value inherited untouched. The chain is said out
+/// loud (ADR 0007), because "which file decided this" is exactly the
+/// question a person debugging a profile is asking.
+pub fn resolve_with_profiles(
+    topology: &TopologyProfile,
+    mode: &ModeProfile,
+    file: Option<(&str, &Overrides)>,
+    env: &Overrides,
+    cli: &Overrides,
+) -> Result<ResolvedConfig, ConfigError> {
+    let topology_defaults = topology.defaults;
+    let mode_defaults = mode.defaults;
+
+    // Fallback sources for the parameters this axis does not own — a
+    // layer() call whose axis slot is `None` never reads these.
+    let topology_source = ConfigSource::TopologyProfile(topology.name.clone());
+    let mode_source = ConfigSource::ModeProfile(mode.name.clone());
+
+    // Per-key sources for the parameters each axis *does* own, so an
+    // inherited value can credit the chain link that set it.
+    macro_rules! topo_src {
+        ($key:literal) => {
+            ConfigSource::TopologyProfile(topology.source_label($key))
+        };
+    }
+    macro_rules! mode_src {
+        ($key:literal) => {
+            ConfigSource::ModeProfile(mode.source_label($key))
+        };
+    }
     let file_overrides = file.map(|(_, overrides)| overrides);
     let file_source = match file {
         Some((path, _)) => ConfigSource::ExperimentFile(path.to_string()),
@@ -602,7 +662,7 @@ pub fn resolve(
         file_overrides.and_then(|o| o.connection_mode),
         env.connection_mode,
         cli.connection_mode,
-        &topology_source,
+        &topo_src!("connection_mode"),
         &mode_source,
         &file_source,
         &env_var!("CONNECTION_MODE"),
@@ -614,7 +674,7 @@ pub fn resolve(
         file_overrides.and_then(|o| o.auth),
         env.auth,
         cli.auth,
-        &topology_source,
+        &topo_src!("auth"),
         &mode_source,
         &file_source,
         &env_var!("AUTH"),
@@ -626,7 +686,7 @@ pub fn resolve(
         file_overrides.and_then(|o| o.round_timeout_secs),
         env.round_timeout_secs,
         cli.round_timeout_secs,
-        &topology_source,
+        &topo_src!("round_timeout_secs"),
         &mode_source,
         &file_source,
         &env_var!("ROUND_TIMEOUT_SECS"),
@@ -638,7 +698,7 @@ pub fn resolve(
         file_overrides.and_then(|o| o.min_reputation_score),
         env.min_reputation_score,
         cli.min_reputation_score,
-        &topology_source,
+        &topo_src!("min_reputation_score"),
         &mode_source,
         &file_source,
         &env_var!("MIN_REPUTATION_SCORE"),
@@ -650,7 +710,7 @@ pub fn resolve(
         file_overrides.and_then(|o| o.client_registry_ttl),
         env.client_registry_ttl,
         cli.client_registry_ttl,
-        &topology_source,
+        &topo_src!("client_registry_ttl"),
         &mode_source,
         &file_source,
         &env_var!("CLIENT_REGISTRY_TTL"),
@@ -717,7 +777,7 @@ pub fn resolve(
         env.seed_mode,
         cli.seed_mode,
         &topology_source,
-        &mode_source,
+        &mode_src!("seed_mode"),
         &file_source,
         &env_var!("SEED_MODE"),
     );
@@ -729,7 +789,7 @@ pub fn resolve(
         env.seed_value.map(Some),
         cli.seed_value.map(Some),
         &topology_source,
-        &mode_source,
+        &mode_src!("seed_value"),
         &file_source,
         &env_var!("SEED_VALUE"),
     );
@@ -833,6 +893,18 @@ pub fn resolve(
         &mode_source,
         &file_source,
         &env_var!("SCAFFOLD_NUM_CLIENTS"),
+    );
+    let zeno_rho = layer(
+        0.0005_f32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.zeno_rho),
+        env.zeno_rho,
+        cli.zeno_rho,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("ZENO_RHO"),
     );
     let server_lipschitz = layer(
         1.0_f32,
@@ -938,7 +1010,7 @@ pub fn resolve(
         env.budget_exhausted_action,
         cli.budget_exhausted_action,
         &topology_source,
-        &mode_source,
+        &mode_src!("budget_exhausted_action"),
         &file_source,
         &env_var!("BUDGET_EXHAUSTED_ACTION"),
     );
@@ -950,7 +1022,7 @@ pub fn resolve(
         env.accounting_scope,
         cli.accounting_scope,
         &topology_source,
-        &mode_source,
+        &mode_src!("accounting_scope"),
         &file_source,
         &env_var!("ACCOUNTING_SCOPE"),
     );
@@ -962,7 +1034,7 @@ pub fn resolve(
         env.allow_stub_client,
         cli.allow_stub_client,
         &topology_source,
-        &mode_source,
+        &mode_src!("allow_stub_client"),
         &file_source,
         &env_var!("ALLOW_STUB_CLIENT"),
     );
@@ -974,7 +1046,7 @@ pub fn resolve(
         env.require_node_auth,
         cli.require_node_auth,
         &topology_source,
-        &mode_source,
+        &mode_src!("require_node_auth"),
         &file_source,
         &env_var!("REQUIRE_NODE_AUTH"),
     );
@@ -986,14 +1058,14 @@ pub fn resolve(
         env.config_log_format,
         cli.config_log_format,
         &topology_source,
-        &mode_source,
+        &mode_src!("config_log_format"),
         &file_source,
         &env_var!("CONFIG_LOG_FORMAT"),
     );
 
     Ok(ResolvedConfig {
-        topology,
-        mode,
+        topology: topology.base,
+        mode: mode.base,
         connection_mode,
         auth,
         round_timeout_secs,
@@ -1012,6 +1084,7 @@ pub fn resolve(
         server_momentum,
         fairness_q,
         scaffold_num_clients,
+        zeno_rho,
         server_lipschitz,
         reputation_filter_enabled,
         client_side_privacy_transform,
@@ -1155,6 +1228,12 @@ impl ResolvedConfig {
             "scaffold_num_clients",
             LoggedValue::Number(self.scaffold_num_clients.value.to_string()),
             &self.scaffold_num_clients.source,
+        ));
+        lines.push(log_line(
+            format,
+            "zeno_rho",
+            LoggedValue::Number(self.zeno_rho.value.to_string()),
+            &self.zeno_rho.source,
         ));
         lines.push(log_line(
             format,

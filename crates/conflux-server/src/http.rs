@@ -17,7 +17,7 @@ use crate::admin_auth::{AdminToken, require_admin_token};
 /// Builds the admin router.
 ///
 /// `admin_token` gates every route except `/health` — see
-/// [`crate::admin_auth`] for the policy and why `/health` is exempt.
+/// `admin_auth` (private module) for the policy and why `/health` is exempt.
 /// `None` leaves the surface open, which is only reachable for a
 /// loopback-bound listener because `validate_admin_binding` refuses to
 /// start otherwise.

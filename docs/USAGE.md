@@ -184,7 +184,7 @@ its phase brief).
 | `CONFLUX_POSTGRES_URL` | Postgres connection (store and/or accounting persistence) | `postgres://user:pass@host:port/db` |
 | `CONFLUX_S3_ENDPOINT`, `CONFLUX_S3_BUCKET`, `CONFLUX_S3_ACCESS_KEY`, `CONFLUX_S3_SECRET_KEY` | S3/MinIO checkpoint store | required together when `CONFLUX_STORE_BACKEND=s3` |
 | `CONFLUX_ACCOUNTING_PERSISTENCE` | Persist the privacy accountant's round history | `true` (reuses `CONFLUX_POSTGRES_URL`) |
-| `CONFLUX_TLS_CERT_PATH`, `CONFLUX_TLS_KEY_PATH`, `CONFLUX_TLS_CLIENT_CA_PATH` | mTLS material for the gRPC server, required in production when the resolved `auth` value is `mtls` (`cross_silo`'s topology default) | PEM file paths |
+| `CONFLUX_TLS_CERT_PATH`, `CONFLUX_TLS_KEY_PATH`, `CONFLUX_TLS_CLIENT_CA_PATH` | mTLS material for the gRPC server, required in production when the resolved `auth` value is `mtls` (the `cross_silo` and `edge` topology default) | PEM file paths |
 
 `require_node_auth` and the node allow-list are regular
 `conflux-config` parameters, not separate env vars here — see the next
@@ -202,11 +202,12 @@ half is profile files, not experiment files.
 
 | Variable | Overrides field |
 |---|---|
-| `CONFLUX_AGGREGATOR` | `aggregator`. Twenty-one methods across five families: **averaging** — `fedavg`; **robust** — `krum`, `multi_krum`, `trimmed_mean`, `median`, `faba`, `bulyan`, `geometric_median`, `median_of_means`, `divide_and_conquer`; **temporal** — `foolsgold`, `centered_clipping`, `flanders`; **trusted** — `fltrust`; **optimization** — `fedavgm`, `fedadagrad`, `fedadam`, `fedyogi`, `qfedavg`, `fednova`, `scaffold`. (FedProx is supported too, but client-side — naming it here returns an error explaining exactly that.) Two need more than a name: **`fltrust` requires a running sidecar** (see [Trusted-reference sidecar](#trusted-reference-sidecar-adr-0011); the server refuses to start without one), and `flanders` is a pre-aggregation *filter* paired with Krum per its own paper |
+| `CONFLUX_AGGREGATOR` | `aggregator`. Twenty-two methods across five families: **averaging** — `fedavg`; **robust** — `krum`, `multi_krum`, `trimmed_mean`, `median`, `faba`, `bulyan`, `geometric_median`, `median_of_means`, `divide_and_conquer`; **temporal** — `foolsgold`, `centered_clipping`, `flanders`; **trusted** — `fltrust`, `zeno`; **optimization** — `fedavgm`, `fedadagrad`, `fedadam`, `fedyogi`, `qfedavg`, `fednova`, `scaffold`. (FedProx is supported too, but client-side — naming it here returns an error explaining exactly that.) Two need more than a name: **`fltrust` and `zeno` require a running sidecar** (see [Trusted-reference sidecar](#trusted-reference-sidecar-adr-0011); the server refuses to start without one, and checks at startup that the sidecar implements what the method consumes — reference updates for `fltrust`, candidate scoring for `zeno`), and `flanders` is a pre-aggregation *filter* paired with Krum per its own paper |
 | `CONFLUX_SERVER_LEARNING_RATE` | `server_learning_rate` — the `optimization` family's `η`. Builtin `1.0`, and that is a **placeholder, not a recommendation**: Reddi et al. deliberately publish no universal value because it is the parameter their whole experimental section sweeps per task. Same posture as `clip_radius`. Ignored outside that family |
 | `CONFLUX_SERVER_TAU` | `server_tau` — the `optimization` family's adaptivity floor `τ`. Builtin `1e-3`, which unlike `η` *is* the paper's own value, reported as working "almost as well as all other values" across their tasks. Smaller means more adaptive |
 | `CONFLUX_FAIRNESS_Q` | `fairness_q` — q-FedAvg's fairness exponent. Builtin `0.0`, which **is exactly FedAvg**: selecting `qfedavg` without choosing a `q` should behave like the method it generalizes rather than silently applying a trade. Larger `q` weights high-loss clients up. Requires clients that report `local_loss`; without it the method falls back to FedAvg |
 | `CONFLUX_SERVER_LIPSCHITZ` | `server_lipschitz` — q-FedAvg's `L`. A placeholder like `clip_radius`: the paper estimates it by grid search at `q = 0`, which the server cannot do because it never sees a loss surface |
+| `CONFLUX_ZENO_RHO` | `zeno_rho` — Zeno's magnitude penalty `ρ` (Xie, Koyejo & Gupta, 2019). Builtin `0.0005`, the paper's own experimental value. Each candidate's suspicion score is its sidecar-measured held-out improvement minus `ρ·‖update‖²`, so a huge step cannot buy a good rank by happening to help the validation batch |
 | `CONFLUX_SCAFFOLD_NUM_CLIENTS` | `scaffold_num_clients` — SCAFFOLD's `N`, the **total** client population, not the round's sample. SCAFFOLD damps its control-variate update by `1/N` because only the sampled clients contributed evidence this round; substituting the batch size would change the method, and no batch reveals `N`, so it must be set. The client half is opt-in: the MNIST harness implements it (`--scaffold`, applied automatically by its `run_demo.sh` when the aggregator is `scaffold`) |
 | `CONFLUX_SERVER_MOMENTUM` | `server_momentum` — FedAvgM's `β`. Builtin `0.9`, a real default rather than a placeholder (it sits inside the paper's own `{0, 0.7, 0.9, 0.97, 0.99, 0.997}` sweep). Worth tuning on genuinely non-IID data, which is where the paper finds momentum matters most. `0.0` recovers plain FedAvg. Read only by `fedavgm` |
 | `CONFLUX_SELECTOR` | `selector` |
@@ -338,6 +339,89 @@ Two things about `scan` worth knowing before trusting its output:
  is gitignored, so it does not exist in a fresh checkout, and scanning
  the root is what catches a credential pasted into a tracked file that
  is not an env file at all.
+
+## Configuration validation
+
+After resolution — and therefore covering **every** tier equally:
+profile files, experiment files, env vars, CLI — the server validates
+ranges and cross-parameter combinations before starting anything.
+Because every resolved value carries its provenance, a finding names
+the tier that supplied it:
+
+```
+[config:error] round_timeout_secs = 0 (from topology profile "broken_silo"): a round with a zero timeout can never wait for a submission — must be ≥ 1
+configuration invalid: 1 error(s) above — nothing was started
+```
+
+Two severities:
+
+- **Errors refuse to start** — values that are meaningless or guarantee
+  a broken run: zero timeouts/TTLs/byte ceilings, a reputation
+  threshold outside cosine's `[-1, 1]`, non-finite numerics, a negative
+  `clip_radius` under `centered_clipping`, `scaffold_num_clients`
+  smaller than `quorum`, or a `robust_byzantine_fraction ≥ 0.5` with a
+  batch-only robust method (no cited guarantee survives a Byzantine
+  majority — that regime is what the `trusted` family exists for).
+- **Warnings start, out loud** — legal but self-contradictory:
+  `noise_multiplier > 0` with `clip_norm = 0` is a DP no-op (the noise
+  std is their product), and a `quorum` below a robust method's
+  paper-stated batch requirement (Krum: `n ≥ 2f + 3`, Bulyan:
+  `n ≥ 4f + 3`) warns with the arithmetic filled in.
+
+All findings are collected in one pass, so a broken config is fixed
+from one list rather than one restart per mistake. Embedders get the
+same check as `ResolvedConfig::validate()` — separate from `resolve()`
+on purpose, so a test that *wants* a hostile configuration can still
+build one.
+
+## Custom profiles (`inherits`)
+
+The four topologies and two modes are compiled in, and most deployments
+never need more. When yours is "one of those, but different", write a
+profile file instead of repeating env-var overrides everywhere:
+
+```toml
+# profiles/hospital_silo.toml — a cross_silo deployment with longer rounds
+inherits = "cross_silo"
+round_timeout_secs = 1800
+min_reputation_score = 0.5
+```
+
+```bash
+CONFLUX_TOPOLOGY=hospital_silo cargo run -p conflux-server
+```
+
+Any `CONFLUX_TOPOLOGY`/`CONFLUX_MODE` value that is not a builtin name
+is loaded as `<name>.toml` from `CONFLUX_PROFILE_DIR` (default
+`./profiles`). Profiles can extend other profiles; the chain must end
+at a builtin. Everything not overridden falls through to the base, and
+the startup log credits the link that actually decided each value:
+
+```
+[config] round_timeout_secs  = 1800  (source: topology profile "hospital_silo")
+[config] auth                = mtls  (source: topology profile "hospital_silo → cross_silo")
+```
+
+The rules, each enforced with a specific error at startup:
+
+- **`inherits` is required** — every profile extends a base and
+  overrides only what differs.
+- **A profile may only set its own axis's parameters.** Topology
+  profiles own `connection_mode`, `auth`, `round_timeout_secs`,
+  `min_reputation_score`, `client_registry_ttl`; mode profiles own
+  `seed_mode`, `seed_value`, `budget_exhausted_action`,
+  `accounting_scope`, `allow_stub_client`, `require_node_auth`,
+  `config_log_format`. Putting a key in the wrong file tells you which
+  file it belongs in; a misspelled key gets a "did you mean" and the
+  valid set.
+- **A profile cannot shadow a builtin name**, and inheritance cycles
+  are reported as the chain (`a → b → a`).
+- A name that matches neither a builtin nor a file is an error listing
+  both — it is no longer silently treated as `cross_device`.
+
+A custom profile behaves as its base everywhere behavior branches on
+the enum: a profile inheriting `production` still gets production's
+startup strictness.
 
 ## Durable backends (Redis, Postgres, S3)
 

@@ -13,7 +13,7 @@
 //! consequence worth stating plainly: **`conflux-server` does not depend
 //! on this crate, at any depth, and must not be made to.** The client
 //! the server uses lives in `conflux-net`
-//! ([`conflux_net::TrustedReferenceTransport`]), so the server can call a
+//! (`conflux_net::TrustedReferenceTransport`), so the server can call a
 //! sidecar without ever linking one — the same separation ADR 0010 keeps
 //! between `conflux-server` and `conflux-attacks`.
 //!

@@ -192,6 +192,15 @@ pub struct TopologyDefaults {
 }
 
 impl Topology {
+    /// Every builtin topology, for iteration — profile loading checks
+    /// names against this so the list can never drift from the enum.
+    pub const ALL: [Topology; 4] = [
+        Topology::CrossSilo,
+        Topology::CrossDevice,
+        Topology::Crowdsource,
+        Topology::Edge,
+    ];
+
     /// This topology's config-file and log spelling.
     pub fn label(&self) -> &'static str {
         match self {
@@ -244,16 +253,49 @@ impl Topology {
                 min_reputation_score: 0.6,
                 client_registry_ttl: 900,
             },
+            // Edge stopped mirroring cross_device on 2026-09-02.
+            // The distinction that drives every field below: an edge
+            // fleet is **operator-provisioned** — someone installs each
+            // device and can install identity material while doing it —
+            // where cross_device/crowdsource participants are machines
+            // nobody provisions. (The topology taxonomy follows Kairouz
+            // et al. 2021, *Advances and Open Problems in Federated
+            // Learning*, §1: population size, membership stability, and
+            // provisioning are what actually separate deployment
+            // shapes.)
             Topology::Edge => TopologyDefaults {
+                // Gateways and NAT'd installations can't accept inbound
+                // connections any more than phones can — polling, same
+                // as cross_device, for the same reason.
                 connection_mode: ConnectionMode::Pull,
-                auth: AuthMode::Jwt,
-                round_timeout_secs: 300,
-                // Mirrors cross_device: resource-aware selection tuned
-                // specifically for edge/IoT constraints isn't implemented
-                // yet, so edge uses the same starting posture as the
-                // closest existing topology rather than an untested guess.
-                min_reputation_score: 0.3,
-                client_registry_ttl: 900,
+                // The provisioning argument, applied: a fleet someone
+                // installs can carry a client certificate from day one,
+                // which is exactly the trust model mTLS encodes. JWT
+                // exists for the topologies where pre-provisioning is
+                // impossible — that constraint does not hold here, and
+                // edge devices are the ones most physically exposed to
+                // tampering, so the stronger identity is also the one
+                // this topology most needs.
+                auth: AuthMode::Mtls,
+                // Edge hardware is compute-constrained relative to the
+                // phones cross_device assumes — MCU/SBC-class devices,
+                // not NPUs — so the same local step count takes several
+                // times longer. A 5-minute budget that fits a phone
+                // starves a Pi-class trainer into missing every round.
+                round_timeout_secs: 900,
+                // Reputation gating defaults track how *open* the
+                // population is: cross_silo 0.0 (closed, trusted),
+                // cross_device 0.3 (open), crowdsource 0.6 (anonymous).
+                // An operator-owned fleet is a closed population — the
+                // realistic threat is a compromised device, not a Sybil
+                // influx — so gating is opt-in here as it is for silos.
+                min_reputation_score: 0.0,
+                // Membership is stable (installed devices don't churn
+                // like phones) but *links* are not (sleep cycles, lossy
+                // radio). A short TTL evicts a device mid-sleep and
+                // buys nothing from a fleet whose membership barely
+                // changes; silo-grade patience fits.
+                client_registry_ttl: 3600,
             },
         }
     }
@@ -303,6 +345,9 @@ pub struct ModeDefaults {
 }
 
 impl Mode {
+    /// Every builtin mode, for iteration.
+    pub const ALL: [Mode; 2] = [Mode::Research, Mode::Production];
+
     /// This mode's config-file and log spelling.
     pub fn label(&self) -> &'static str {
         match self {

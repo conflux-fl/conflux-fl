@@ -1,0 +1,20 @@
+# Weekly dependency PRs. Three ecosystems, because the wire contract
+# spans them: Rust crates, the Python client's packages, and the CI
+# actions themselves.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: pip
+    directory: /python/conflux_client
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

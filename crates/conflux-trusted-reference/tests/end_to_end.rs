@@ -14,7 +14,9 @@
 
 use std::sync::Arc;
 
-use conflux_core::{Aggregator, FlTrustAggregator, TrustedReference};
+use conflux_core::{
+    Aggregator, CandidateScores, FlTrustAggregator, TrustedReference, ZenoAggregator,
+};
 use conflux_net::TrustedReferenceTransport;
 use conflux_proto::trusted_reference_server::TrustedReferenceServer;
 use conflux_proto::{ClientDelta, decode_weights, encode_weights};
@@ -154,6 +156,50 @@ async fn zeno_style_scoring_ranks_candidates_over_the_hop() {
     assert!(
         lookup("harmful") < 0.0,
         "a candidate worse than the global model must score negative"
+    );
+}
+
+#[tokio::test]
+async fn a_full_zeno_round_over_the_real_hop_drops_the_poisoned_client() {
+    // The whole Zeno path as conflux-server runs it: real sidecar, real
+    // ScoreUpdates RPC, real ZenoAggregator consuming what comes back —
+    // one honest majority plus one client submitting weights that are
+    // catastrophic on data it has never seen.
+    let addr = spawn_sidecar(LinearLeastSquares::new(root_dataset(), 0.05, 100)).await;
+    let mut client = TrustedReferenceTransport::connect(addr).await.unwrap();
+
+    let global = [0.0_f32, 0.0];
+    let batch = vec![
+        delta("honest-1", &[1.9, 3.1]),
+        delta("honest-2", &[2.1, 2.9]),
+        delta("honest-3", &[2.0, 3.0]),
+        delta("poisoner", &[-20.0, 40.0]),
+    ];
+
+    // Exactly what round.rs does: candidates are the batch's own weight
+    // bytes, verbatim.
+    let candidates = batch
+        .iter()
+        .map(|d| (d.client_id.clone(), d.weights.clone()))
+        .collect();
+    let scores = client
+        .score_updates(1, encode_weights(&global), candidates)
+        .await
+        .unwrap();
+
+    let zeno = ZenoAggregator::new(0.25, 0.0005);
+    zeno.set_candidate_scores(CandidateScores {
+        global_weights: global.to_vec(),
+        scores,
+    });
+    let out = zeno.aggregate(&batch).unwrap();
+
+    // b = floor(0.25 * 4) = 1: the poisoner is the drop, and the result
+    // is the unweighted mean of the three honest submissions —
+    // (1.9 + 2.1 + 2.0)/3 = 2.0 and (3.1 + 2.9 + 3.0)/3 = 3.0.
+    assert!(
+        (out[0] - 2.0).abs() < 1e-5 && (out[1] - 3.0).abs() < 1e-5,
+        "the poisoner's [-20, 40] must not survive into {out:?}"
     );
 }
 

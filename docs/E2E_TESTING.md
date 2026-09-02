@@ -415,3 +415,29 @@ difference is inside noise (its fairness claim remains undemonstrated at
 this scale, now measurably so). This is the third defect found by
 running a method end to end that every unit test on both sides had
 passed over.
+
+## All four harnesses now run on the ClientApp SDK (2026-09-02)
+
+MNIST migrated first (phase 23); the other three followed. Every
+trainer is now a `ClientApp` subclass whose only real content is
+`train()` — the loop, the codec, the retry/round-skip handling all live
+in `conflux_client.app`, fixed once. The concrete payoff beyond less
+duplication: each harness reports `local_steps` and `local_loss`, so
+FedNova and q-FedAvg work on CIFAR-10 and Shakespeare instead of
+silently degrading to FedAvg.
+
+The three PyTorch trainers gained `--trainer-seed`, which reseeds
+torch's RNG after the shared model init. Without it a multi-seed sweep
+varies only the data partition and replays one SGD trajectory per
+shard; with it the seed reaches batch sampling too, which is what makes
+a mean ± std over seeds measure real run-to-run variance. The numpy
+harness deliberately has no such flag — full-batch gradient descent has
+no sampling to seed, and the file says so.
+
+One thing worth stating plainly, found while verifying the numpy
+migration: q-FedAvg through it reports `local_loss` correctly (checked
+at the unit level) but does **not** move pooled accuracy on the demo's
+near-identical shards — because q-weighting only reallocates when
+client losses differ, exactly as it needed non-IID data to diverge on
+MNIST. The mechanism is live; the demo data simply does not exercise
+it. That is a property of the fixture, not a migration defect.

@@ -158,6 +158,13 @@ if __name__ == "__main__":
         "CONFLUX_SCAFFOLD_NUM_CLIENTS on the server.",
     )
     parser.add_argument(
+        "--trainer-seed",
+        type=int,
+        default=None,
+        help="Reseed torch's RNG after model init, so batch sampling varies "
+        "across sweep seeds. Unset keeps the legacy fully-deterministic run.",
+    )
+    parser.add_argument(
         "--mu",
         type=float,
         default=0.0,
@@ -176,6 +183,14 @@ if __name__ == "__main__":
         args.mu,
         scaffold=args.scaffold,
     )
+    if args.trainer_seed is not None:
+        # After new_model()'s manual_seed(0): the shared init every
+        # client needs survives; the sampling trajectory becomes this
+        # run's own. This is r4's second half — without it, a
+        # multi-seed sweep varies only the partition and replays one
+        # SGD trajectory per shard.
+        torch.manual_seed(args.trainer_seed)
+        print(f"trainer RNG reseeded: {args.trainer_seed}", flush=True)
     sys.argv = [
         sys.argv[0],
         "--address", args.address,

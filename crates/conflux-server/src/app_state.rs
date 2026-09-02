@@ -317,6 +317,7 @@ impl AppState {
                 fairness_q: Some(config.fairness_q.value),
                 server_lipschitz: Some(config.server_lipschitz.value),
                 scaffold_num_clients: Some(config.scaffold_num_clients.value),
+                zeno_rho: Some(config.zeno_rho.value),
             },
         )
         .expect("unknown aggregator in resolved config");

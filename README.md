@@ -1,5 +1,7 @@
 # Conflux Federated Learning Framework (Conflux-FL)
 
+[![CI](https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml/badge.svg)](https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml)
+
 **A configurable, extensible, Rust-native federated learning framework.**
 
 Python (PyTorch) stays entirely client-side for model training; Rust
@@ -231,7 +233,7 @@ a non-finite aggregate". `cargo fmt --check` and
 `cargo clippy --workspace --all-targets` are clean, the latter under
 `-D warnings`.
 
-Twenty-one server-side aggregation methods across five families, plus
+Twenty-two server-side aggregation methods across five families, plus
 FedProx client-side. Both client SDKs (Python and Rust) ship. Durable
 Redis / Postgres / S3 backends, mTLS and JWT node authentication, and
 differential privacy with epsilon accounting that survives a restart.

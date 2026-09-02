@@ -183,7 +183,7 @@ impl<M: TrustedModel + 'static> TrustedReference for TrustedReferenceService<M> 
 /// Plaintext, matching `conflux-node`'s own local hop (ADR 0004): a
 /// sidecar is normally colocated with the server it serves. A deployment
 /// that separates them should put the sidecar behind TLS —
-/// [`conflux_net::TrustedReferenceTransport::connect_with_tls`] is the
+/// `conflux_net::TrustedReferenceTransport::connect_with_tls` is the
 /// other half — because the trusted root dataset is the one input whose
 /// integrity the entire FLTrust defense depends on.
 pub async fn serve<M: TrustedModel + 'static>(

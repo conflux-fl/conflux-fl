@@ -66,16 +66,56 @@ async fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let topology = match std::env::var("CONFLUX_TOPOLOGY").as_deref() {
-        Ok("cross_silo") => Topology::CrossSilo,
-        Ok("crowdsource") => Topology::Crowdsource,
-        Ok("edge") => Topology::Edge,
-        _ => Topology::CrossDevice,
+    // Topology and mode select either a builtin or a profile file from
+    // CONFLUX_PROFILE_DIR (`<name>.toml`, extending a base via
+    // `inherits` — spec §4.1). Unset falls back to the builtins the
+    // defaults have always been; a name that matches *nothing* is now a
+    // startup error naming what exists, where it used to silently
+    // become `cross_device` — a typo like `cros_silo` produced a
+    // correctly-logged, wrong deployment.
+    let profile_dir =
+        std::env::var("CONFLUX_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
+    let profile_dir = std::path::Path::new(&profile_dir);
+
+    let topology_profile = match std::env::var("CONFLUX_TOPOLOGY").ok() {
+        None => conflux_config::TopologyProfile::builtin(Topology::CrossDevice),
+        Some(name) => match Topology::ALL.iter().find(|t| t.label() == name) {
+            Some(t) => conflux_config::TopologyProfile::builtin(*t),
+            None => conflux_config::load_topology_profile(profile_dir, &name)
+                .unwrap_or_else(|e| panic!("{e}")),
+        },
     };
-    let mode = match std::env::var("CONFLUX_MODE").as_deref() {
-        Ok("production") => Mode::Production,
-        _ => Mode::Research,
+    let mode_profile = match std::env::var("CONFLUX_MODE").ok() {
+        None => conflux_config::ModeProfile::builtin(Mode::Research),
+        Some(name) => match Mode::ALL.iter().find(|m| m.label() == name) {
+            Some(m) => conflux_config::ModeProfile::builtin(*m),
+            None => conflux_config::load_mode_profile(profile_dir, &name)
+                .unwrap_or_else(|e| panic!("{e}")),
+        },
     };
+    // Say the chains out loud once, before the per-parameter lines do.
+    if topology_profile.chain.len() > 1 {
+        tracing::info!(
+            profile = %topology_profile.name,
+            chain = %topology_profile.chain.join(" → "),
+            dir = %profile_dir.display(),
+            "custom topology profile loaded"
+        );
+    }
+    if mode_profile.chain.len() > 1 {
+        tracing::info!(
+            profile = %mode_profile.name,
+            chain = %mode_profile.chain.join(" → "),
+            dir = %profile_dir.display(),
+            "custom mode profile loaded"
+        );
+    }
+
+    // Downstream startup checks (TLS posture, JWT validation, backend
+    // validation) branch on the behavioral mode, which for a custom
+    // profile is its `inherits` base — a "production, but…" profile is
+    // still production everywhere strictness is decided.
+    let mode = mode_profile.base;
 
     // an optional experiment-level config file. Unset behaves
     // exactly as before — `None` into the tier that has always been
@@ -93,9 +133,9 @@ async fn main() {
         _ => None,
     };
 
-    let config = conflux_config::resolve(
-        topology,
-        mode,
+    let config = conflux_config::resolve_with_profiles(
+        &topology_profile,
+        &mode_profile,
         file_tier,
         &overrides_from_env(),
         &Overrides::default(),
@@ -106,6 +146,26 @@ async fn main() {
     // "ready".
     for line in config.to_log_lines(config.config_log_format.value) {
         println!("{line}");
+    }
+
+    // Range and combination validation, after the provenance lines so
+    // the two read together: the log says where every value came from,
+    // and a finding says which of them cannot work. Warnings are legal
+    // but self-contradictory configurations, said out loud; errors are
+    // values that guarantee a broken run, and refusing now beats
+    // discovering them as behavior in round one.
+    let validation = config.validate();
+    for finding in &validation.warnings {
+        tracing::warn!(parameter = finding.parameter, "[config] {finding}");
+    }
+    if !validation.errors.is_empty() {
+        for finding in &validation.errors {
+            eprintln!("[config:error] {finding}");
+        }
+        panic!(
+            "configuration invalid: {} error(s) above — nothing was started",
+            validation.errors.len()
+        );
     }
 
     // makes the just-logged `auth` value real — `mode =
@@ -199,7 +259,8 @@ async fn main() {
     // rather than checking whether the env var is set keeps the two
     // failure directions symmetric — a sidecar configured for `fedavg` is
     // ignored, and `fltrust` without a sidecar refuses to start.
-    if state.aggregator.requires_trusted_reference() {
+    if state.aggregator.requires_trusted_reference() || state.aggregator.requires_candidate_scores()
+    {
         state = connect_trusted_reference(state, initial_weights_dim).await;
     } else if std::env::var("CONFLUX_TRUSTED_REFERENCE_ADDR").is_ok() {
         tracing::warn!(
@@ -440,6 +501,7 @@ fn overrides_from_env() -> Overrides {
         server_momentum: var("CONFLUX_SERVER_MOMENTUM"),
         fairness_q: var("CONFLUX_FAIRNESS_Q"),
         scaffold_num_clients: var("CONFLUX_SCAFFOLD_NUM_CLIENTS"),
+        zeno_rho: var("CONFLUX_ZENO_RHO"),
         server_lipschitz: var("CONFLUX_SERVER_LIPSCHITZ"),
         min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
         reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),
@@ -575,9 +637,20 @@ async fn connect_trusted_reference(state: AppState, initial_weights_dim: usize) 
         .await
         .unwrap_or_else(|e| panic!("the sidecar at {addr} did not answer Describe: {e}"));
 
-    if !capabilities.supports_reference_update {
+    // Gate each capability by what the configured method actually
+    // consumes: FLTrust needs reference updates, Zeno needs scoring, and
+    // a sidecar that implements only the other one should fail here —
+    // at startup, by name — rather than in round one.
+    if state.aggregator.requires_trusted_reference() && !capabilities.supports_reference_update {
         panic!(
             "the sidecar at {addr} ({}) does not implement reference updates, so it cannot \
+             serve aggregator {:?}",
+            capabilities.description, state.config.aggregator.value
+        );
+    }
+    if state.aggregator.requires_candidate_scores() && !capabilities.supports_scoring {
+        panic!(
+            "the sidecar at {addr} ({}) does not implement candidate scoring, so it cannot \
              serve aggregator {:?}",
             capabilities.description, state.config.aggregator.value
         );
