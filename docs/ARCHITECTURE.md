@@ -20,7 +20,7 @@ stronger global model (ADR 0009).
 
 ## Workspace layout
 
-Fourteen crates, dependency graph is acyclic:
+Fifteen crates, dependency graph is acyclic:
 
 ```mermaid
 graph TD
@@ -33,10 +33,12 @@ graph TD
  buffer["conflux-buffer<br/><small>quorum/timeout staging</small>"]
  privacy["conflux-privacy<br/><small>DP clip+noise, epsilon accounting</small>"]
  reputation["conflux-reputation<br/><small>contribution scoring</small>"]
- core["conflux-core<br/><small>aggregation (12 methods)</small>"]
+ core["conflux-core<br/><small>aggregation (21 methods)</small>"]
  attacks["conflux-attacks<br/><small>test/dev-only: known FL attacks</small>"]
  server["conflux-server (bin)<br/><small>integrates everything</small>"]
  node["conflux-node (bin)<br/><small>client-side bridge</small>"]
+ client["conflux-client<br/><small>Rust ClientApp SDK</small>"]
+ trusted["conflux-trusted-reference<br/><small>optional sidecar (never a server dep)</small>"]
 
  net --> proto
  buffer --> proto
@@ -48,6 +50,10 @@ graph TD
  attacks -. dev-dependency only .-> core
  node --> net
  node --> proto
+ node --> privacy
+ client --> net
+ client --> proto
+ trusted --> proto
 
  server --> proto
  server --> config

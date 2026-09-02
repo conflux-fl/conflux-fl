@@ -202,11 +202,12 @@ half is profile files, not experiment files.
 
 | Variable | Overrides field |
 |---|---|
-| `CONFLUX_AGGREGATOR` | `aggregator`. Seventeen methods across five families: **averaging** — `fedavg`; **robust** — `krum`, `multi_krum`, `trimmed_mean`, `median`, `faba`, `bulyan`, `geometric_median`, `median_of_means`, `divide_and_conquer`; **temporal** — `foolsgold`, `centered_clipping`, `flanders`; **trusted** — `fltrust`; **optimization** — `fedavgm`, `fedadagrad`, `fedadam`, `fedyogi`, `qfedavg`. Two need more than a name: **`fltrust` requires a running sidecar** (see [Trusted-reference sidecar](#trusted-reference-sidecar-adr-0011); the server refuses to start without one), and `flanders` is a pre-aggregation *filter* paired with Krum per its own paper |
+| `CONFLUX_AGGREGATOR` | `aggregator`. Twenty-one methods across five families: **averaging** — `fedavg`; **robust** — `krum`, `multi_krum`, `trimmed_mean`, `median`, `faba`, `bulyan`, `geometric_median`, `median_of_means`, `divide_and_conquer`; **temporal** — `foolsgold`, `centered_clipping`, `flanders`; **trusted** — `fltrust`; **optimization** — `fedavgm`, `fedadagrad`, `fedadam`, `fedyogi`, `qfedavg`, `fednova`, `scaffold`. (FedProx is supported too, but client-side — naming it here returns an error explaining exactly that.) Two need more than a name: **`fltrust` requires a running sidecar** (see [Trusted-reference sidecar](#trusted-reference-sidecar-adr-0011); the server refuses to start without one), and `flanders` is a pre-aggregation *filter* paired with Krum per its own paper |
 | `CONFLUX_SERVER_LEARNING_RATE` | `server_learning_rate` — the `optimization` family's `η`. Builtin `1.0`, and that is a **placeholder, not a recommendation**: Reddi et al. deliberately publish no universal value because it is the parameter their whole experimental section sweeps per task. Same posture as `clip_radius`. Ignored outside that family |
 | `CONFLUX_SERVER_TAU` | `server_tau` — the `optimization` family's adaptivity floor `τ`. Builtin `1e-3`, which unlike `η` *is* the paper's own value, reported as working "almost as well as all other values" across their tasks. Smaller means more adaptive |
 | `CONFLUX_FAIRNESS_Q` | `fairness_q` — q-FedAvg's fairness exponent. Builtin `0.0`, which **is exactly FedAvg**: selecting `qfedavg` without choosing a `q` should behave like the method it generalizes rather than silently applying a trade. Larger `q` weights high-loss clients up. Requires clients that report `local_loss`; without it the method falls back to FedAvg |
 | `CONFLUX_SERVER_LIPSCHITZ` | `server_lipschitz` — q-FedAvg's `L`. A placeholder like `clip_radius`: the paper estimates it by grid search at `q = 0`, which the server cannot do because it never sees a loss surface |
+| `CONFLUX_SCAFFOLD_NUM_CLIENTS` | `scaffold_num_clients` — SCAFFOLD's `N`, the **total** client population, not the round's sample. SCAFFOLD damps its control-variate update by `1/N` because only the sampled clients contributed evidence this round; substituting the batch size would change the method, and no batch reveals `N`, so it must be set. The client half is opt-in: the MNIST harness implements it (`--scaffold`, applied automatically by its `run_demo.sh` when the aggregator is `scaffold`) |
 | `CONFLUX_SERVER_MOMENTUM` | `server_momentum` — FedAvgM's `β`. Builtin `0.9`, a real default rather than a placeholder (it sits inside the paper's own `{0, 0.7, 0.9, 0.97, 0.99, 0.997}` sweep). Worth tuning on genuinely non-IID data, which is where the paper finds momentum matters most. `0.0` recovers plain FedAvg. Read only by `fedavgm` |
 | `CONFLUX_SELECTOR` | `selector` |
 | `CONFLUX_PRIVACY_MECHANISM` | `privacy_mechanism` |
@@ -341,12 +342,13 @@ Two things about `scan` worth knowing before trusting its output:
 ## Durable backends (Redis, Postgres, S3)
 
 `conflux-registry::RedisRegistry`, `conflux-store::PostgresStore`, and
-`conflux-store::S3Store` are real, tested, working implementations — but
-**as of this writing, neither binary's `main.rs` selects them via an env
-var yet**. Today
-they're usable programmatically (construct one directly instead of
-`InMemoryRegistry`/`InMemoryStore` if you're embedding `conflux-server`'s
-crates in your own code) and are exercised by each crate's own test suite
+`conflux-store::S3Store` are real, tested, working implementations, and
+`conflux-server` selects them at startup from
+`CONFLUX_REGISTRY_BACKEND` / `CONFLUX_STORE_BACKEND` (plus the matching
+connection URL). In production mode, naming a backend without its
+connection details is a refusal to start, not a silent fallback. They
+are also usable programmatically if you embed `conflux-server`'s crates
+in your own code, and each is exercised by its crate's own test suite
 against real local infrastructure.
 
 To run those test suites, start the backing services first. The

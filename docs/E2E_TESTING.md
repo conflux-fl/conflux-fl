@@ -371,3 +371,47 @@ with `partition_data.py`, `model.py` (Option B only), `trainer_client.py`,
 `eval_client.py`, `centralized_baseline.py`, `run_demo.sh`, and its own
 `README.md` with prerequisites, usage, and troubleshooting for someone
 running this Rust framework for the first time.
+
+## Per-client fairness metrics, and the SCAFFOLD client (2026-09-02)
+
+Two additions to the MNIST harness, one lesson.
+
+**`eval_client.py --shards`** reports, each round, the global model's
+accuracy on every client's own data distribution — min, std, and the
+full list — alongside the pooled held-out number. A pooled mean cannot
+see who it is failing, and `qfedavg`'s entire claim is about that
+per-client distribution; before this flag the claim was unmeasurable.
+`run_demo.sh` passes it automatically.
+
+**`trainer_client.py --scaffold`** implements SCAFFOLD's client half:
+local steps follow the corrected gradient `g − c_i + c`, and the client
+maintains `c_i` across rounds and reports `Δc_i` on the wire.
+`run_demo.sh` turns it on automatically when the aggregator is
+`scaffold` — the only method whose client half is opt-in.
+
+**The lesson: the first end-to-end run found a real server defect.**
+With the client half finally able to send control variates, SCAFFOLD's
+held-out loss *climbed monotonically* while accuracy plateaued. A
+deterministic quadratic — where SCAFFOLD is provably exact — reproduced
+it as a constant `0.1277` bias, to four decimals the value of
+`mean(c_i)` after round one. The server's seed round was discarding the
+batch's `Δc_i` while every client had already folded the matching
+`c_i⁺` into its own state, permanently breaking the `c = mean(c_i)`
+invariant the method's unbiasedness rests on. Fixed (the seed round now
+folds variates), pinned by a red-first test, and the same MNIST run went
+from diverging to the best result in the comparison:
+
+| arm (α = 0.2 non-IID, 5 clients, 12 rounds, 1 seed) | held-out acc | loss | worst client | client std |
+|---|---|---|---|---|
+| `fedavg` | 0.874 | 0.339 | 0.866 | 0.038 |
+| `qfedavg` (q = 1) | 0.842 | 0.443 | 0.823 | 0.034 |
+| `scaffold`, seed round discarding Δc | 0.827 | **1.397, rising** | 0.835 | 0.046 |
+| `scaffold`, fixed | **0.902** | **0.273, falling** | **0.940** | **0.020** |
+
+Single-seed numbers, and the known run-to-run spread on this harness is
+about ±0.06 — `scaffold`'s margins on the worst client (+0.074) and the
+falling-vs-rising loss are the robust signals, `qfedavg`'s std
+difference is inside noise (its fairness claim remains undemonstrated at
+this scale, now measurably so). This is the third defect found by
+running a method end to end that every unit test on both sides had
+passed over.

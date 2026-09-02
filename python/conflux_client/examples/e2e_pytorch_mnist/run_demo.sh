@@ -100,6 +100,7 @@ CONFLUX_ROBUST_BYZANTINE_FRACTION=0.3 \
 CONFLUX_CLIP_RADIUS="${CONFLUX_CLIP_RADIUS:-1.0}" \
 CONFLUX_MIN_REPUTATION_SCORE="$MIN_REPUTATION_SCORE" \
 CONFLUX_QUORUM="$N_CLIENTS" \
+CONFLUX_SCAFFOLD_NUM_CLIENTS="$N_CLIENTS" \
 CONFLUX_ROUND_TIMEOUT_SECS=60 \
 CONFLUX_CLIP_NORM=1000 \
 CONFLUX_NOISE_MULTIPLIER=0 \
@@ -167,6 +168,12 @@ for i in $(seq 0 "$LAST"); do
     echo "client-$i is a persistent Byzantine attacker (--poison)"
     POISON_FLAGS=(--poison --poison-magnitude 20.0)
   fi
+  # SCAFFOLD is the one method whose client half is opt-in: the server
+  # aggregates control variates only clients maintaining one can send,
+  # so selecting the aggregator turns the client side on too.
+  if [ "$AGGREGATOR" = "scaffold" ]; then
+    POISON_FLAGS+=(--scaffold)
+  fi
   python3 "$SCRIPT_DIR/trainer_client.py" \
     --address "127.0.0.1:$PORT" --client-id "client-$i" \
     --shard "$WORK_DIR/shard_$i.pt" --rounds "$ROUNDS" --lr "$LR" --steps "$STEPS" \
@@ -184,8 +191,13 @@ RUST_LOG=warn \
 PIDS+=($!)
 sleep 1
 
+# Per-client accuracies alongside the global number: a mean cannot see
+# who it is failing, and the fairness-oriented methods (qfedavg) are
+# making a claim about exactly that distribution.
+SHARD_LIST=$(ls "$WORK_DIR"/shard_*.pt | sort | paste -sd,)
 python3 "$SCRIPT_DIR/eval_client.py" \
   --address "127.0.0.1:$EVAL_PORT" --held-out "$WORK_DIR/held_out.pt" \
+  --shards "$SHARD_LIST" \
   --rounds "$ROUNDS" --timeout 240 | tee "$WORK_DIR/eval.log"
 
 echo ""

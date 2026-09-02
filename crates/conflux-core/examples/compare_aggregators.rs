@@ -176,6 +176,6 @@ fn main() {
     println!(
         "\n  Rejection is a `Result` the caller handles. No aggregator\n\
          panics on client input — `tests/adversarial_input.rs` enforces\n\
-         that against all twelve."
+         that against every method in the catalog."
     );
 }

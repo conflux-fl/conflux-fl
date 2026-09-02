@@ -1,6 +1,6 @@
 # Crate Reference
 
-A one-stop reference for what each of Conflux's fourteen crates does,
+A one-stop reference for what each of Conflux's fifteen crates does,
 why it exists as its own crate rather than living inside another one,
 what it depends on, and the fastest way to extend it. For the *build
 history* and the *round pipeline* these crates implement together, see
@@ -111,6 +111,8 @@ Three things worth knowing before the table below:
 |---|---|---|---|
 | **`conflux-server`** *(binary)* | Integrates every library crate above into the actual round pipeline — `AppState`, the round loop, the HTTP admin surface (`/health`, `/round/status`, `/clients/register`, allow-list admin). | The one place allowed to depend on everything — deliberately, so no other crate needs a "does this also need to know about X" question; `conflux-server` is where those questions get answered. | Round-pipeline changes (new pipeline stages, new admin endpoints) happen here; algorithm changes almost never should (that's the point of the registry pattern above). |
 | **`conflux-node`** *(binary)* | The client-side bridge — registers with the real server, runs a local gRPC server the Python `ClientApp` connects to, forwards every RPC with retry/backoff. Depends on `conflux-proto` and `conflux-net` only. | Deliberately thin — no aggregation, no config resolution, no algorithm logic of any kind lives here, so it can never accidentally duplicate `conflux-server`'s own logic. | Push-mode client support (see the `conflux-net` row above) is the current real gap; otherwise this crate should stay thin by design, not grow. |
+| **`conflux-trusted-reference`** *(optional sidecar, never a `conflux-server` dependency)* | Server-side trusted-dataset training/scoring for `fltrust` — a separate process the server calls over gRPC, so the server itself stays opaque to model architecture (ADR 0011). | The methods that need server-side training are the exception, not the rule; a boundary drawn as a process keeps the exception from reshaping the server. | Implement `TrustedModel` against whatever runtime can run your model. |
+| **`conflux-client`** | The Rust-native `ClientApp` SDK — train in Rust with no Python process in the loop. Same contract as the Python SDK, field for field. | `crowdsource`/`edge` participants are machines nobody provisions; one static binary is a categorically smaller ask than a Python environment. | Implement `ClientApp` (one required method) and call `run()`. |
 
 ## Worked example: adding a new aggregation method
 

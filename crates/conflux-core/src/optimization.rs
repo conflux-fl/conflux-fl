@@ -1520,6 +1520,39 @@ impl ScaffoldAggregator {
     }
 }
 
+impl ScaffoldAggregator {
+    /// `(1/N)·Σ Δc_i` over whoever sent a usable variate this round.
+    ///
+    /// Shared by the seed round and every later one, deliberately: the
+    /// defect this refactor closed was the seed branch *not* running it
+    /// — see the seed-round test for what that silently cost.
+    fn variate_step(&self, updates: &[ClientDelta], dim: usize) -> Vec<f64> {
+        let damping = 1.0 / self.num_clients as f64;
+        let mut step = vec![0.0f64; dim];
+        for update in updates {
+            let Some(raw) = update.control_variate.as_ref() else {
+                continue;
+            };
+            let Ok(dc) = conflux_proto::decode_weights(raw) else {
+                // Undecodable is a malformed submission, not a zero
+                // correction. Skipped rather than guessed at.
+                continue;
+            };
+            // The length check ADR 0012 says a reader of this field must
+            // perform: a short or long variate is not interpretable
+            // against this model, and zero-padding it would manufacture
+            // a correction the client never sent.
+            if dc.len() != dim || dc.iter().any(|v| !v.is_finite()) {
+                continue;
+            }
+            for (acc, v) in step.iter_mut().zip(&dc) {
+                *acc += damping * *v as f64;
+            }
+        }
+        step
+    }
+}
+
 impl Aggregator for ScaffoldAggregator {
     fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError> {
         if updates.is_empty() {
@@ -1539,12 +1572,24 @@ impl Aggregator for ScaffoldAggregator {
         };
         if reseed {
             // Round one: no `x_t` to difference against, so there is no
-            // `Δy_i` and no correction to apply. The plain mean is the
-            // answer, and `c` starts at zero — the paper's own
-            // initialization, and the value that makes the correction a
-            // no-op until evidence arrives.
+            // `Δy_i` and no optimizer step — the plain mean is the
+            // answer. The batch's `Δc_i` are NOT skipped along with it:
+            // by the time this runs, every client has already folded its
+            // matching `c_i⁺` into its own state, and SCAFFOLD's
+            // correction is unbiased only while `c = mean(c_i)`.
+            // Discarding them here broke that invariant permanently —
+            // measured as a constant 0.1277 bias on a quadratic where
+            // the method is provably exact, and as monotonically
+            // climbing held-out loss on MNIST.
             let seed = crate::FedAvg::default().aggregate(updates)?;
-            *guard = Some((seed.clone(), vec![0.0; dim]));
+            let step = self.variate_step(updates, dim);
+            let c: Vec<f32> = step.iter().map(|d| *d as f32).collect();
+            let c = if c.iter().all(|v| v.is_finite()) {
+                c
+            } else {
+                vec![0.0; dim]
+            };
+            *guard = Some((seed.clone(), c));
             return Ok(seed);
         }
 
@@ -1565,30 +1610,8 @@ impl Aggregator for ScaffoldAggregator {
         }
 
         // c ← c + (1/N) · Σ Δc_i, over whoever actually sent one.
-        let damping = 1.0 / self.num_clients as f64;
-        let mut variate_step = vec![0.0f64; dim];
-        let mut contributors = 0usize;
-        for update in updates {
-            let Some(raw) = update.control_variate.as_ref() else {
-                continue;
-            };
-            let Ok(dc) = conflux_proto::decode_weights(raw) else {
-                // Undecodable is a malformed submission, not a zero
-                // correction. Skipped rather than guessed at.
-                continue;
-            };
-            // The length check ADR 0012 says an aggregator reading this
-            // field must perform: a short or long variate is not
-            // interpretable against this model, and zero-padding it
-            // would manufacture a correction the client never sent.
-            if dc.len() != dim || dc.iter().any(|v| !v.is_finite()) {
-                continue;
-            }
-            contributors += 1;
-            for (acc, v) in variate_step.iter_mut().zip(&dc) {
-                *acc += damping * *v as f64;
-            }
-        }
+        let variate_step = self.variate_step(updates, dim);
+        let contributors = variate_step.iter().any(|d| *d != 0.0) as usize;
 
         let next: Vec<f32> = global
             .iter()
@@ -1861,6 +1884,37 @@ mod scaffold_tests {
             .unwrap();
         assert_eq!(out, vec![1.0, 3.0]);
         assert_eq!(agg.control_variate(), Some(vec![0.0, 0.0]));
+    }
+
+    /// The seed round must fold the batch's control variates into `c`
+    /// rather than discard them, because the clients have already folded
+    /// the matching `c_i⁺` into their own state by the time this runs.
+    ///
+    /// SCAFFOLD's correction is unbiased only while `c = mean(c_i)` —
+    /// an invariant the paired updates preserve exactly under full
+    /// participation. A server that drops round one's deltas breaks it
+    /// *permanently*: every later round's correction carries the
+    /// constant `mean(c_i) − c` bias. Measured, not hypothesized — on a
+    /// deterministic quadratic (where SCAFFOLD is provably exact) the
+    /// discard left the model converged 0.1277 from the optimum, the
+    /// bias to four decimals; on MNIST it showed up as held-out loss
+    /// climbing monotonically while accuracy plateaued.
+    #[test]
+    fn the_seed_round_folds_control_variates_instead_of_discarding_them() {
+        let agg = ScaffoldAggregator::new(1.0, 2);
+        agg.aggregate(&[
+            delta_cv("a", &[0.0], Some(&[4.0])),
+            delta_cv("b", &[0.0], Some(&[2.0])),
+        ])
+        .unwrap();
+
+        // c = 0 + (1/2)(4.0 + 2.0) = 3.0. The discard behavior returns
+        // Some([0.0]) here — a c the clients' own state contradicts.
+        assert_eq!(
+            agg.control_variate(),
+            Some(vec![3.0]),
+            "round one's deltas are evidence the clients already acted on"
+        );
     }
 
     /// The half that did not exist before: the server has to be able to

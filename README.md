@@ -99,7 +99,7 @@ doing exactly what Blanchard et al. (2017) says it should.
 
 ## The crates
 
-Fourteen crates, dependency graph is acyclic. Full reference — purpose,
+Fifteen crates, dependency graph is acyclic. Full reference — purpose,
 why each is its own crate, and how to extend it — in
 **[docs/CRATES.md](docs/CRATES.md)**; architecture and build history in
 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
@@ -129,15 +129,21 @@ graph LR
  subgraph "Dev/test-only"
  attacks[conflux-attacks]
  end
+ subgraph "Optional sidecar"
+ trusted[conflux-trusted-reference]
+ end
+ client[conflux-client]
  proto & config --> registry & store & selector & net & buffer & privacy & reputation & core
  registry & store & selector & net & buffer & privacy & reputation & core --> server
- net & proto --> node
+ net & proto & privacy --> node
+ net & proto --> client
+ proto --> trusted
  core -.dev-only.-> attacks
 ```
 
 | Crate | In one line |
 |---|---|
-| [`conflux-proto`](crates/conflux-proto) | Wire schema shared by the network hop *and* the local Python-client hop |
+| [`conflux-proto`](crates/conflux-proto) | Wire schema shared by the network hop *and* the local client hop |
 | [`conflux-config`](crates/conflux-config) | Layered config resolution + the strategy registry every algorithm registers into |
 | [`conflux-registry`](crates/conflux-registry) | Client lifecycle — register, heartbeat, evict |
 | [`conflux-store`](crates/conflux-store) | Model checkpoints + experiment metadata persistence |
@@ -149,7 +155,9 @@ graph LR
 | [`conflux-core`](crates/conflux-core) | **The aggregation catalog** — where a new published method gets added |
 | [`conflux-attacks`](crates/conflux-attacks) | *(dev/test-only)* Known FL attacks + attack-vs-defense tests, never shippable in production |
 | [`conflux-server`](crates/conflux-server) | *(binary)* Integrates everything into the round pipeline |
-| [`conflux-node`](crates/conflux-node) | *(binary)* Thin client-side bridge to the Python `ClientApp` |
+| [`conflux-trusted-reference`](crates/conflux-trusted-reference) | *(optional sidecar)* Server-side trusted-dataset training for `fltrust` — a separate process, never a server dependency |
+| [`conflux-node`](crates/conflux-node) | *(binary)* Thin client-side bridge to the local `ClientApp` (Python or Rust) |
+| [`conflux-client`](crates/conflux-client) | Rust-native `ClientApp` SDK — train in Rust, no Python in the loop |
 
 ## Extending Conflux
 
@@ -205,7 +213,8 @@ Doc comments throughout the code cite decisions as `ADR 0004`,
 because a reasonable-looking alternative was considered and rejected.
 
 The citation is deliberately terse so it does not crowd the comment that
-carries it. The decision records themselves are published as a reference
+carries it. (`spec §N` is the same convention pointing into the original
+v1 design specification.) The decision records themselves are published as a reference
 on the documentation site rather than kept in this repository, which is
 scoped to the framework and its use.
 

@@ -66,6 +66,20 @@ def unflatten(model: nn.Module, flat: list[float]) -> None:
         offset += n
 
 
+def unflatten_like(model: nn.Module, flat: list[float]) -> list[torch.Tensor]:
+    """Splits a flat vector into tensors shaped like `model`'s parameters,
+    without touching the model. SCAFFOLD needs this: its correction and
+    control variates travel flat (the wire format is architecture-free,
+    ADR 0004) but apply per-parameter during local steps."""
+    flat_t = torch.tensor(flat, dtype=torch.float32)
+    out, offset = [], 0
+    for prm in model.parameters():
+        n = prm.numel()
+        out.append(flat_t[offset : offset + n].view_as(prm).clone())
+        offset += n
+    return out
+
+
 def train_steps(
     model: nn.Module,
     X: torch.Tensor,
@@ -74,6 +88,7 @@ def train_steps(
     steps: int,
     batch_size: int = 32,
     mu: float = 0.0,
+    correction: list[torch.Tensor] | None = None,
 ) -> list[float]:
     """Mutates `model` in place via `steps` mini-batch SGD updates, then
     returns its flattened weights — the value a trainer client submits.
@@ -93,6 +108,12 @@ def train_steps(
     vector and cannot tell it was used (ADR 0004). That is why there is
     no `aggregator = "fedprox"`: its server half *is* FedAvg, and
     `build_aggregator` says so explicitly if you try.
+
+    `correction` (per-parameter tensors from `unflatten_like`) turns this
+    into **SCAFFOLD's** client half (Karimireddy et al., 2020, Algorithm
+    1): each step becomes `y <- y - lr * (g - c_i + c)`, so pass
+    `correction = c - c_i`. It is added to the *gradient*, not the loss —
+    the correction is not the gradient of anything.
     """
     model.train()
     opt = torch.optim.SGD(model.parameters(), lr=lr)
@@ -113,6 +134,10 @@ def train_steps(
             )
             loss = loss + (mu / 2.0) * proximal
         loss.backward()
+        if correction is not None:
+            with torch.no_grad():
+                for prm, corr in zip(model.parameters(), correction):
+                    prm.grad += corr
         opt.step()
     return flatten(model)
 

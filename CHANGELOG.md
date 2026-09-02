@@ -17,7 +17,33 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- SCAFFOLD's **reference client** in the MNIST harness
+  (`trainer_client.py --scaffold`): local steps follow `g − c_i + c`,
+  `c_i` persists across rounds, `Δc_i` goes out on the wire.
+  `run_demo.sh` enables it automatically when the aggregator is
+  `scaffold`.
+- **Per-client fairness metrics** in the MNIST eval client
+  (`--shards`): per-round accuracy on every client's own distribution —
+  min, std, full list — the axis `qfedavg`'s claim lives on and the
+  pooled mean cannot see.
+- The trainer announces the first nonzero `c` it receives: a SCAFFOLD
+  run where `c` never arrives is indistinguishable from a correct one
+  by accuracy alone.
+
+### Fixed
+
+- **`ScaffoldAggregator` discarded the seed round's control variates**,
+  permanently breaking the `c = mean(c_i)` invariant the method's
+  unbiasedness rests on — clients had already folded the matching
+  `c_i⁺` into their own state. Found by the first end-to-end run the
+  reference client made possible (held-out loss climbed monotonically),
+  isolated on a deterministic quadratic where SCAFFOLD is provably
+  exact (a constant bias equal to `mean(c_i)` after round one, to four
+  decimals), fixed by folding the seed round's variates, pinned by a
+  red-first test. On MNIST the same configuration went from diverging
+  to the best result in its comparison.
 
 ## [0.1.0]
 

@@ -55,7 +55,7 @@ pub const MAX_PLAUSIBLE_SAMPLE_COUNT: u64 = 1 << 40;
 /// member needs (factored out here so `averaging.rs` and
 /// `robust.rs`'s coordinate-wise members don't each reimplement it).
 /// Being the single chokepoint is what makes it the right place for the
-/// finiteness check — all eleven aggregator entry points call it, so no
+/// finiteness check — every aggregator entry point calls it, so no
 /// method can forget.
 ///
 /// Empty `updates` isn't checked here — callers decide whether an empty
