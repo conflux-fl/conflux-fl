@@ -18,3 +18,4 @@ CLAUDE.md
 .env
 .env.*
 !.env.example
+conflux-fl-workspace.code-workspace

@@ -19,6 +19,15 @@ promised before `1.0`.
 
 ### Added
 
+- **Registry-driven catalog generation** — a `catalog` example
+  (`cargo run -p conflux-core --example catalog`, Markdown or `--format
+  json`) emits the aggregation catalog's facts (method, family,
+  citation, parameters) straight from the strategy registry, and a
+  golden-file test fails CI if the committed
+  `docs/AGGREGATION_CATALOG.generated.md` drifts from it. This is what
+  #4's `StrategyEntry` metadata was for: the count and citations that
+  went stale in the docs repeatedly can no longer do so silently.
+
 - **Registry metadata**: `StrategyEntry` now carries `citation`,
   `family`, and `params` for every registered aggregator, selector, and
   privacy mechanism, plus a `conflux_config::entries()` reader. A test
