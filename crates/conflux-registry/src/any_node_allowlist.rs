@@ -74,7 +74,13 @@ mod tests {
             "conflux:node_allowlist:test:any_node_allowlist_redis:{}",
             std::process::id()
         );
-        let backend = RedisNodeAllowlist::connect_with_key("redis://127.0.0.1:16379", key)
+        // Read the Redis URL from env like the sibling redis tests do —
+        // CI points it at its service container (`:6379`); the fallback is
+        // the local dev container's port (`:16379`). Hardcoding `:16379`
+        // is why this one test failed in CI while the others passed.
+        let url = std::env::var("CONFLUX_TEST_REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:16379".to_string());
+        let backend = RedisNodeAllowlist::connect_with_key(&url, key)
             .await
             .expect("connect to the dev Redis container — is it running?");
         let allowlist = AnyNodeAllowlist::Redis(backend);

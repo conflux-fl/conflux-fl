@@ -315,15 +315,26 @@ jobs:
           evnx --version
       # Scans the whole checkout, which is the point: it catches a `.env`
       # committed by accident, or a credential pasted into any tracked
-      # file. Locally this reports false positives from
-      # `python/conflux_client/.venv` (base64 font data inside PIL matches
-      # the AWS key pattern), but that directory is gitignored and so
-      # never exists here. Verified against a simulated checkout: 0
-      # high-confidence findings.
+      # file.
       #
-      # Exits non-zero on any high-confidence secret.
+      # `evnx scan` has no confidence threshold and exits non-zero on ANY
+      # finding — including low-confidence *entropy heuristics* that fire on
+      # ordinary code (a long `client.foo(...).await.unwrap()` chain reads
+      # as "high-entropy string"). The intent is to catch *real* secrets, so
+      # key off the JSON confidence counts: fail on high or medium, treat
+      # low as noise. `jq` is preinstalled on the runner.
       - name: scan the checkout for secrets
-        run: evnx scan .
+        run: |
+          evnx scan . --exit-zero --format json > /tmp/evnx-scan.json
+          high=$(jq '.high_confidence' /tmp/evnx-scan.json)
+          med=$(jq '.medium_confidence' /tmp/evnx-scan.json)
+          low=$(jq '.low_confidence' /tmp/evnx-scan.json)
+          if [ "$high" -gt 0 ] || [ "$med" -gt 0 ]; then
+            echo "::error::evnx found $high high- and $med medium-confidence secret(s)"
+            evnx scan . --exit-zero   # print the human-readable report
+            exit 1
+          fi
+          echo "no high/medium-confidence secrets ($low low-confidence heuristic hits ignored)"
       # A belt-and-braces check on top of the scan. `.env` holds real
       # values by construction, so it must never be tracked — and
       # `git ls-files` answers that directly rather than inferring it
