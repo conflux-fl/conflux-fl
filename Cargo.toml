@@ -16,6 +16,7 @@ members = [
     "crates/conflux-attacks",
     "crates/conflux-trusted-reference",
     "crates/conflux-client",
+    "crates/conflux-baselines",
 ]
 
 # Shared metadata. Every crate inherits these with `field.workspace =

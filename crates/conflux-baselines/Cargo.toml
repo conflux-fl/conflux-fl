@@ -1,0 +1,20 @@
+[package]
+name = "conflux-baselines"
+description = "Runner for Conflux FL's published-paper reproductions — parses baseline manifests, validates the method against the strategy registry, drives the paired training harness, and asserts the result against the paper's expected number. A tool; conflux-server never depends on it."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# `conflux-config` owns the strategy registry we validate method names
+# against. The three family crates are linked ONLY to populate that
+# registry (their `inventory::submit!` entries) — see the force-link in
+# main.rs. None of this is `conflux-attacks`; the CI isolation edge holds.
+conflux-config = { path = "../conflux-config" }
+conflux-core = { path = "../conflux-core" }
+conflux-selector = { path = "../conflux-selector" }
+conflux-privacy = { path = "../conflux-privacy" }
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true

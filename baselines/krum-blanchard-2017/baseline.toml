@@ -1,0 +1,36 @@
+# Krum (Blanchard et al. 2017) — Byzantine-robust aggregation.
+# Schema: ../../../conflux-fl-internal/docs/BASELINES.md (design doc).
+
+[paper]
+title   = "Machine Learning with Adversaries: Byzantine Tolerant Gradient Descent"
+authors = "Blanchard, El Mhamdi, Guerraoui, Stainer"
+venue   = "NeurIPS 2017"
+url     = "https://papers.nips.cc/paper/2017/hash/f4b9ec30ad9f68f89b29639786cb62ef-Abstract.html"
+
+[method]
+aggregator = "krum"
+selector   = "uniform_random"
+
+[experiment]
+dataset   = "mnist"
+model     = "mlp"
+partition = "iid"
+
+# The reproduction is a *defense*: with a Byzantine client present, Krum
+# holds where FedAvg collapses. `no_reputation` isolates Krum's own
+# defense from Conflux's separate reputation filter.
+[scenario]
+attackers      = 1
+no_reputation  = true
+
+[clients.python]
+harness   = "e2e_pytorch_mnist"
+expected  = 0.88 # docs/E2E_TESTING.md: krum --poison --no-reputation ≈ 0.884
+tolerance = 0.06
+smoke     = { clients = 5, rounds = 15 }
+
+[clients.rust]
+harness   = "burn_mlp"
+expected  = 0.71 # Burn synthetic non-IID + 1 poisoned client, deterministic (seed 0)
+tolerance = 0.08
+smoke     = { clients = 5, rounds = 8 }
