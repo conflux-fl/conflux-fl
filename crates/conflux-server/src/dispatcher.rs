@@ -1,6 +1,5 @@
 //! `AppState` answering `conflux-net`'s `RoundDispatcher` seam for real —
-//! the piece explicitly left for whichever crate does the real
-//! integration (a deliberate seam).
+//! `conflux-net` moves bytes and leaves every decision to this impl.
 
 use std::sync::atomic::Ordering;
 
@@ -55,9 +54,9 @@ impl RoundDispatcher for AppState {
         let client_id = first.client_id.clone();
         let round = first.round;
         let num_samples = first.num_samples;
-        // ADR 0012's scalar field follows `num_samples`'s convention
-        // exactly: a client repeats it on every chunk, so it is read from
-        // whichever chunk arrived first rather than requiring chunk 0.
+        // `local_steps` follows `num_samples`'s convention exactly: a
+        // client repeats it on every chunk, so it is read from whichever
+        // chunk arrived first rather than requiring chunk 0.
         let local_steps = first.local_steps;
         // Same scalar convention as `local_steps` and `num_samples`.
         let local_loss = first.local_loss;
@@ -65,8 +64,8 @@ impl RoundDispatcher for AppState {
         let mut sorted = chunks;
         sorted.sort_by_key(|c| c.chunk_index);
         let mut data = Vec::new();
-        // ADR 0012's vector field is chunked exactly like `data` — chunk
-        // i carries slice i — so it reassembles the same way, in the same
+        // `control_variate` is chunked exactly like `data` — chunk i
+        // carries slice i — so it reassembles the same way, in the same
         // pass, under the same ordering.
         let mut control_variate: Option<Vec<u8>> = None;
         for chunk in &sorted {
@@ -82,7 +81,7 @@ impl RoundDispatcher for AppState {
         // variate decodes to as many weights as `weights` does. That
         // check is real and necessary, but it belongs to whichever
         // aggregator reads the field: this server is opaque to model
-        // architecture by design (ADR 0004), so it has no basis for
+        // architecture by design, so it has no basis for
         // deciding what length is correct. A client that populated the
         // field on only some of its chunks therefore produces a short
         // vector here, and the aggregator rejects it — see
@@ -124,7 +123,7 @@ impl RoundDispatcher for AppState {
         auth_token: &str,
         peer_cert_fingerprint: Option<&str>,
     ) -> Result<RegisterResponse, DispatchError> {
-        //. Two independent gates, in this order:
+        // Two independent gates, in this order:
         //
         //   1. Is this token genuine, and is it *yours*? (`auth = jwt`)
         //   2. Is this client on the allow-list? (`require_node_auth`)
@@ -150,7 +149,7 @@ impl RoundDispatcher for AppState {
             // actually carries: an mTLS peer cert fingerprint if present,
             // else the request's shared token. Checked *before* touching
             // `conflux-registry` at all, so a rejected node never shows up
-            // as a lifecycle registration attempt (spec: brief).
+            // as a lifecycle registration attempt.
             let presented = match peer_cert_fingerprint {
                 Some(fingerprint) => NodeIdentity::CertFingerprint(fingerprint.to_string()),
                 None => NodeIdentity::SharedToken(auth_token.to_string()),

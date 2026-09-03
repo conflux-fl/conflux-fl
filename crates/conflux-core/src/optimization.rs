@@ -8,18 +8,18 @@
 //! aggregation step is still whatever you configured, and the optimizer
 //! wraps the result.
 //!
-//! This was the largest gap in Conflux's catalog. The robust families
-//! ship twelve methods; the optimization family shipped none, while every
-//! comparable framework carries several. That mattered because adaptive
-//! server optimization is what makes federated training converge on
-//! heterogeneous (non-IID) client data, which is the setting federated
-//! learning exists for.
+//! Adaptive server optimization is what makes federated training
+//! converge on heterogeneous (non-IID) client data, which is the setting
+//! federated learning exists for — so this family sits beside the robust
+//! ones rather than competing with them.
 //!
 //! # Cross-round state
 //!
 //! These methods are stateful by definition — the moment estimates *are*
-//! the method. They follow ADR 0012's standing pattern (`Mutex` fields,
-//! `&self`), the same as `temporal.rs`'s members.
+//! the method. They follow the crate's standing pattern (`Mutex` fields,
+//! `&self`), the same as `temporal.rs`'s members. Every piece of state
+//! is committed only after the round's output has been validated finite,
+//! so a rejected round cannot leave a half-updated moment behind.
 
 use std::sync::Mutex;
 
@@ -33,8 +33,8 @@ use crate::{Aggregator, AggregatorError};
 /// The three variants differ in exactly one line of Reddi et al.'s
 /// Algorithm 2 (lines 12–14) and nothing else, which is why they are one
 /// type with a discriminant rather than three near-identical structs —
-/// the family pattern (ADR 0002) applied to the smallest thing that
-/// actually varies.
+/// the family pattern applied to the smallest thing that actually
+/// varies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FedOptVariant {
     /// `v_t = v_{t-1} + Δ_t²` — accumulates without decay, so the
@@ -153,7 +153,7 @@ impl FedOptParams {
 /// non-IID client data — where different clients push different
 /// coordinates hard — that is exactly the correction FedAvg lacks.
 ///
-/// # Fidelity notes (ADR 0008)
+/// # Fidelity notes
 ///
 /// - **`Δ_t` is the unweighted mean of client deltas**, matching
 ///   Algorithm 2 line 10 literally. It is *not* `num_samples`-weighted,
@@ -169,8 +169,8 @@ impl FedOptParams {
 ///   — Krum, say, giving a Byzantine-robust pseudo-gradient with adaptive
 ///   server optimization on top. That composition is not in Reddi et al.
 ///   and is not what the catalog names build; it is available because
-///   ADR 0012 recommended the wrapping shape, and it is labelled as a
-///   deviation wherever it is used.
+///   the wrapping shape is the natural composition, and it is labelled
+///   as a deviation wherever it is used.
 /// - **`x_t` is tracked internally, not supplied.** The server
 ///   checkpoints exactly what `aggregate` returns and dispatches it next
 ///   round, so this aggregator's own previous output *is* `x_t`. The
@@ -200,10 +200,14 @@ pub struct FedOptAggregator {
 struct OptimizerState {
     /// `x_t` — the global model this aggregator last produced.
     global: Vec<f32>,
-    /// First moment.
-    m: Vec<f32>,
+    /// First moment. `f64`, like the arithmetic that produces it: a
+    /// moment narrowed to `f32` for storage can saturate to infinity on
+    /// one extreme-but-finite round, and an infinite `v` makes every
+    /// later step exactly zero — the optimizer would silently stop
+    /// learning, permanently.
+    m: Vec<f64>,
     /// Second moment.
-    v: Vec<f32>,
+    v: Vec<f64>,
 }
 
 impl FedOptAggregator {
@@ -248,7 +252,12 @@ impl FedOptAggregator {
             .lock()
             .expect("FedOptAggregator state mutex poisoned")
             .as_ref()
-            .map(|s| (s.m.clone(), s.v.clone()))
+            .map(|s| {
+                (
+                    s.m.iter().map(|x| *x as f32).collect(),
+                    s.v.iter().map(|x| *x as f32).collect(),
+                )
+            })
     }
 }
 
@@ -293,7 +302,7 @@ impl Aggregator for FedOptAggregator {
                 m: vec![0.0; dim],
                 // `v_{-1} = τ²`, the smallest Algorithm 2's
                 // initialization condition (`v_{-1} ≥ τ²`) allows.
-                v: vec![self.params.tau * self.params.tau; dim],
+                v: vec![(self.params.tau * self.params.tau) as f64; dim],
             });
             return Ok(aggregate);
         };
@@ -307,7 +316,7 @@ impl Aggregator for FedOptAggregator {
             *guard = Some(OptimizerState {
                 global: aggregate.clone(),
                 m: vec![0.0; dim],
-                v: vec![self.params.tau * self.params.tau; dim],
+                v: vec![(self.params.tau * self.params.tau) as f64; dim],
             });
             return Ok(aggregate);
         }
@@ -326,13 +335,15 @@ impl Aggregator for FedOptAggregator {
         // subsequent step exactly zero — the optimizer would silently
         // stop learning rather than fail.
         let mut next = Vec::with_capacity(dim);
+        let mut next_m = Vec::with_capacity(dim);
+        let mut next_v = Vec::with_capacity(dim);
         for (i, (target, previous)) in aggregate.iter().zip(state.global.iter()).enumerate() {
             let delta = *target as f64 - *previous as f64;
 
-            let m = beta1 as f64 * state.m[i] as f64 + (1.0 - beta1 as f64) * delta;
+            let m = beta1 as f64 * state.m[i] + (1.0 - beta1 as f64) * delta;
 
             let d2 = delta * delta;
-            let v_prev = state.v[i] as f64;
+            let v_prev = state.v[i];
             let v = match self.variant {
                 FedOptVariant::Adagrad => v_prev + d2,
                 FedOptVariant::Adam => beta2 as f64 * v_prev + (1.0 - beta2 as f64) * d2,
@@ -358,8 +369,8 @@ impl Aggregator for FedOptAggregator {
             // v_{-1} ≥ τ").
             let v = v.max((tau * tau) as f64);
 
-            state.m[i] = m as f32;
-            state.v[i] = v as f32;
+            next_m.push(m);
+            next_v.push(v);
 
             let step = eta as f64 * m / (v.sqrt() + tau as f64);
             next.push((*previous as f64 + step) as f32);
@@ -367,7 +378,9 @@ impl Aggregator for FedOptAggregator {
 
         // A non-finite iterate would be checkpointed and become every
         // later round's starting point. Refuse instead — the same rule
-        // every other aggregator here follows.
+        // every other aggregator here follows — and refuse *before* the
+        // moments are committed, so a rejected round leaves the state
+        // exactly as it found it.
         if let Some(index) = next.iter().position(|w| !w.is_finite()) {
             return Err(AggregatorError::NonFiniteWeights {
                 client_id: format!("<{} server optimizer>", self.variant.name()),
@@ -375,6 +388,8 @@ impl Aggregator for FedOptAggregator {
             });
         }
 
+        state.m = next_m;
+        state.v = next_v;
         state.global.copy_from_slice(&next);
         Ok(next)
     }
@@ -395,7 +410,7 @@ impl Aggregator for FedOptAggregator {
 /// a FedAvgM column, so a framework with FedOpt and without this cannot
 /// reproduce it.
 ///
-/// # Fidelity notes (ADR 0008)
+/// # Fidelity notes
 ///
 /// - **`Δw` is `num_samples`-weighted**, per the paper's
 ///   `Δw = Σ (n_k/n) Δw_k`. This is the *opposite* choice from
@@ -428,8 +443,10 @@ pub struct FedAvgMAggregator {
     /// specifies — i.e. plain FedAvg. `Some` swaps in another base,
     /// which is a documented extension rather than the paper.
     base: Option<Box<dyn Aggregator>>,
-    /// `(x_t, v)` — ADR 0012's pattern, as everywhere else here.
-    state: Mutex<Option<(Vec<f32>, Vec<f32>)>>,
+    /// `(x_t, v)` behind the usual `Mutex`. The velocity is `f64`, like
+    /// the arithmetic that produces it, for the reason `FedOptAggregator`
+    /// gives for its moments.
+    state: Mutex<Option<(Vec<f32>, Vec<f64>)>>,
 }
 
 impl Default for FedAvgMAggregator {
@@ -464,7 +481,7 @@ impl FedAvgMAggregator {
             .lock()
             .expect("FedAvgMAggregator state mutex poisoned")
             .as_ref()
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| v.iter().map(|x| *x as f32).collect())
     }
 }
 
@@ -503,17 +520,20 @@ impl Aggregator for FedAvgMAggregator {
         let eta = self.server_learning_rate as f64;
 
         let mut next = Vec::with_capacity(dim);
-        for ((target, previous), v) in aggregate.iter().zip(global.iter()).zip(velocity.iter_mut())
-        {
+        let mut next_velocity = Vec::with_capacity(dim);
+        for ((target, previous), v) in aggregate.iter().zip(global.iter()).zip(velocity.iter()) {
             // `f64` for the same reason as everywhere else in this crate:
             // a momentum buffer accumulates, so an `f32` overflow here
             // would be permanent rather than momentary.
             let delta = *target as f64 - *previous as f64;
-            let updated = beta * *v as f64 + delta;
-            *v = updated as f32;
+            let updated = beta * *v + delta;
+            next_velocity.push(updated);
             next.push((*previous as f64 + eta * updated) as f32);
         }
 
+        // Validate before committing either half of the state: a
+        // velocity written before this check would carry a rejected
+        // round's overflow into every later one.
         if let Some(index) = next.iter().position(|w| !w.is_finite()) {
             return Err(AggregatorError::NonFiniteWeights {
                 client_id: "<fedavgm server optimizer>".to_string(),
@@ -521,6 +541,7 @@ impl Aggregator for FedAvgMAggregator {
             });
         }
 
+        velocity.copy_from_slice(&next_velocity);
         global.copy_from_slice(&next);
         Ok(next)
     }
@@ -549,13 +570,13 @@ impl Aggregator for FedAvgMAggregator {
 ///
 /// `F_k(w_t)` is **the client's own local loss at the round's starting
 /// model**, which is not derivable from the update. It arrives as
-/// `ClientDelta::local_loss`, the third optional field ADR 0012's
-/// mechanism carries. A client that does not report one is treated as
+/// `ClientDelta::local_loss`, one of the schema's optional per-method
+/// fields. A client that does not report one is treated as
 /// having no opinion and falls back to `num_samples` weighting for that
 /// round — an unreported loss must not be read as a loss of zero, which
 /// `q > 0` would turn into zero weight.
 ///
-/// # Fidelity notes (ADR 0008)
+/// # Fidelity notes
 ///
 /// - **Sign convention.** The paper's `Δw_k = L(w_t − w̄_k)` is a descent
 ///   direction, and it subtracts. Conflux's clients return trained
@@ -1164,7 +1185,7 @@ mod tests {
 
     #[test]
     fn extreme_but_finite_updates_do_not_produce_a_non_finite_model() {
-        // The Tier 6 rule applied to the newest family: reject, or return
+        // The standing rule applied to this family: reject, or return
         // something finite. Never `NaN` into the checkpoint.
         for variant in [
             FedOptVariant::Adagrad,
@@ -1182,6 +1203,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_accepted_extreme_round_does_not_freeze_the_optimizer() {
+        // A finite f32::MAX update is accepted by validation. Its squared
+        // pseudo-gradient is ~1e76, which would saturate an f32 second
+        // moment to infinity — and an infinite `v` makes every later
+        // step exactly zero: the optimizer would be frozen, silently,
+        // forever. The moments are kept in f64 so later rounds still
+        // move the model.
+        let agg = FedOptAggregator::new(FedOptVariant::Adam);
+        agg.aggregate(&batch(&[0.0])).unwrap();
+        let _ = agg.aggregate(&batch(&[f32::MAX]));
+
+        let before = agg.aggregate(&batch(&[0.0])).unwrap()[0];
+        let after = agg.aggregate(&batch(&[0.0])).unwrap()[0];
+        assert!(
+            (after - before).abs() > 1e-6,
+            "the optimizer is frozen: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn a_rejected_round_leaves_fedavgm_momentum_untouched() {
+        // Both halves of the state are committed together, after the
+        // output is known finite. A velocity written before that check
+        // would carry a rejected round's overflow into every later one.
+        let agg = FedAvgMAggregator::new();
+        agg.aggregate(&batch(&[0.0])).unwrap();
+        agg.aggregate(&batch(&[f32::MAX])).unwrap(); // finite: accepted
+        let before = agg.momentum().unwrap();
+
+        // Momentum on top of f32::MAX overflows the f32 output: refused.
+        assert!(agg.aggregate(&batch(&[f32::MAX])).is_err());
+        assert_eq!(
+            agg.momentum().unwrap(),
+            before,
+            "a rejected round must not commit a velocity"
+        );
     }
 
     #[test]
@@ -1250,12 +1310,12 @@ pub const MAX_PLAUSIBLE_LOCAL_STEPS: u32 = 1 << 20;
 ///     τ_eff = Σ_k p_k τ_k           (weighted mean step count)
 /// ```
 ///
-/// # Why this is stateful, contradicting two of this project's own docs
+/// # Why this is stateful
 ///
-/// `AGGREGATION_LANDSCAPE.md` and ADR 0012 both record FedNova as
-/// "fits `AveragingWeighting` cleanly" — a per-client reweighting needing
-/// only the new `local_steps` field. **That is wrong**, and it is worth
-/// writing down why, because the error is not obvious.
+/// FedNova looks at first sight like a per-client reweighting that
+/// "fits `AveragingWeighting` cleanly", needing only the `local_steps`
+/// field. **That is wrong**, and it is worth writing down why, because
+/// the error is not obvious.
 ///
 /// Expanding the update above and collecting the `x_t` terms gives
 ///
@@ -1272,7 +1332,7 @@ pub const MAX_PLAUSIBLE_LOCAL_STEPS: u32 = 1 << 20;
 /// the regime where the method has no effect; everywhere it matters, the
 /// `x_t` term is real and must be carried across rounds.
 ///
-/// It therefore follows ADR 0012's `Mutex` pattern like the rest of this
+/// It therefore follows the `Mutex` pattern like the rest of this
 /// module.
 ///
 /// # Fidelity notes
@@ -1291,7 +1351,7 @@ pub const MAX_PLAUSIBLE_LOCAL_STEPS: u32 = 1 << 20;
 ///   has no normalized direction to contribute, and one dishonestly
 ///   reporting it would otherwise produce an infinity.
 pub struct FedNovaAggregator {
-    /// `x_t`. ADR 0012's pattern.
+    /// `x_t`, behind the usual `Mutex`.
     state: Mutex<Option<Vec<f32>>>,
 }
 
@@ -1366,8 +1426,8 @@ impl Aggregator for FedNovaAggregator {
         let default_tau = (reported_sum / reported_count).max(1.0);
 
         // `p_k` normalized here rather than after accumulating: summing
-        // raw `num_samples * weight` products first is the overflow that
-        // Tier 6 found in four separate places.
+        // raw `num_samples * weight` products first is the overflow the
+        // rest of this crate guards against everywhere.
         let total_samples: f64 = updates.iter().map(|u| u.num_samples as f64).sum();
         let equal_share = 1.0 / updates.len() as f64;
 
@@ -1451,12 +1511,12 @@ impl Aggregator for FedNovaAggregator {
 /// # The half that did not exist before this method
 ///
 /// SCAFFOLD is the first method in Conflux whose algorithm requires the
-/// server to send *state* down to clients, not just weights. ADR 0012
-/// added `ClientDelta.control_variate`, carrying each client's `Δc_i`
-/// **up**; there was no corresponding field going down, so `c` could be
-/// maintained and never delivered — and a client that never learns `c`
-/// cannot compute `(c − c_i)`. `TaskResponse.control_variate` and the
-/// [`Aggregator::control_variate`] hook are that missing half.
+/// server to send *state* down to clients, not just weights.
+/// `ClientDelta.control_variate` carries each client's `Δc_i` **up**;
+/// without a corresponding field going down, `c` could be maintained
+/// and never delivered — and a client that never learns `c` cannot
+/// compute `(c − c_i)`. `TaskResponse.control_variate` and the
+/// [`Aggregator::control_variate`] hook are that other half.
 ///
 /// # The update (Algorithm 1, option II)
 ///
@@ -1475,14 +1535,14 @@ impl Aggregator for FedNovaAggregator {
 /// # Fidelity notes
 ///
 /// - **`Δy_i` is derived, not received.** Conflux transmits full weight
-///   vectors rather than deltas (ADR 0004), so `Δy_i = y_i − x_t` is
+///   vectors rather than deltas, so `Δy_i = y_i − x_t` is
 ///   computed here against this aggregator's own previous output — the
 ///   same approach [`FedOptAggregator`], [`QFedAvgAggregator`] and
 ///   [`FedNovaAggregator`] take.
 /// - **`Δc_i` is received**, in `ClientDelta.control_variate`, and is
 ///   length-checked against the model. The transport cannot check it
-///   (ADR 0004: it is opaque to model architecture), so this is the
-///   first place that can.
+///   (it is opaque to model architecture), so this is the first place
+///   that can.
 /// - **`num_clients` is the `N` above.** It cannot be inferred from a
 ///   batch, which only ever shows `|S|`. Defaulting it to the batch size
 ///   would silently turn the `1/N` damping into `1/|S|` and change the
@@ -1496,7 +1556,8 @@ pub struct ScaffoldAggregator {
     pub server_learning_rate: f32,
     /// `N` — the total client population, not this round's sample.
     pub num_clients: u32,
-    /// `(x_t, c)`. ADR 0012's pattern, as everywhere else in this module.
+    /// `(x_t, c)`, behind the usual `Mutex`, as everywhere else in this
+    /// module.
     state: Mutex<Option<(Vec<f32>, Vec<f32>)>>,
 }
 
@@ -1538,8 +1599,8 @@ impl ScaffoldAggregator {
                 // correction. Skipped rather than guessed at.
                 continue;
             };
-            // The length check ADR 0012 says a reader of this field must
-            // perform: a short or long variate is not interpretable
+            // The length check every reader of this field must perform:
+            // a short or long variate is not interpretable
             // against this model, and zero-padding it would manufacture
             // a correction the client never sent.
             if dc.len() != dim || dc.iter().any(|v| !v.is_finite()) {
@@ -1597,7 +1658,7 @@ impl Aggregator for ScaffoldAggregator {
 
         // x ← x + η_g · mean_i(Δy_i), with 1/|S| folded into each term
         // rather than applied to a total that has already overflowed —
-        // the Tier 6 lesson, applied here rather than rediscovered.
+        // the crate's standing overflow discipline.
         let share = 1.0 / decoded.len() as f64;
         let lr = self.server_learning_rate as f64;
         let mut model_step = vec![0.0f64; dim];
@@ -1786,7 +1847,7 @@ mod fednova_tests {
     /// `tau = 0` is a missing step count, not a zero one. The formula
     /// divides by tau; treating a reported zero literally produces an
     /// infinity from a finite, validation-passing submission — the exact
-    /// failure shape Tier 6 found four times elsewhere.
+    /// failure shape this crate guards against elsewhere.
     #[test]
     fn a_zero_step_count_does_not_divide_by_zero() {
         let seed = vec![
@@ -1948,8 +2009,8 @@ mod scaffold_tests {
         assert_eq!(FedAvgMAggregator::new().control_variate(), None);
     }
 
-    /// The length check ADR 0012 says a reader of this field must do.
-    /// The transport cannot: it is opaque to model architecture.
+    /// The length check every reader of this field must do. The
+    /// transport cannot: it is opaque to model architecture.
     #[test]
     fn a_wrong_length_control_variate_is_ignored_rather_than_padded() {
         let agg = ScaffoldAggregator::new(1.0, 2);

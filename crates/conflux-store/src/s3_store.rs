@@ -66,14 +66,12 @@ impl S3Store {
 
         // Ensure the bucket exists, but check before creating.
         //
-        // `create_bucket` is idempotent in the sense that a second call
-        // errors harmlessly, and this used to rely on that — every
-        // `connect` issued one, discarding the result. Two reasons not
-        // to: it is a write request on a path where a read suffices, so
-        // a deployment whose credentials are scoped to read/write
-        // *objects* (the common least-privilege setup) fails a
-        // permission it never needed; and it makes reconnects
-        // needlessly chattier against a real S3 endpoint.
+        // Not an unconditional `create_bucket` (a second call errors
+        // harmlessly, so that would work): it is a write request on a
+        // path where a read suffices, so a deployment whose credentials
+        // are scoped to read/write *objects* (the common least-privilege
+        // setup) would fail a permission it never needed, and it makes
+        // reconnects needlessly chattier against a real S3 endpoint.
         //
         // `head_bucket` is the cheap existence check. Only its failure
         // leads to a create, and the create's own result is still
@@ -102,24 +100,30 @@ impl S3Store {
 impl Store for S3Store {
     async fn load_latest_weights(&self) -> Result<Vec<f32>, StoreError> {
         let list_prefix = self.key_prefix();
-        let response = self
+        // Paginated: one `ListObjectsV2` page holds at most 1000 keys, and
+        // keys sort lexicographically (`checkpoint-1000.bin` before
+        // `checkpoint-999.bin`), so reading a single page of a longer
+        // experiment would silently pick a stale round as the latest.
+        let mut pages = self
             .client
             .list_objects_v2()
             .bucket(&self.bucket)
             .prefix(&list_prefix)
-            .send()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .into_paginator()
+            .send();
 
         let mut latest_round: Option<u64> = None;
-        for object in response.contents() {
-            if let Some(round) = object
-                .key()
-                .and_then(|key| key.strip_prefix(&list_prefix))
-                .and_then(|s| s.strip_suffix(".bin"))
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                latest_round = Some(latest_round.map_or(round, |current| current.max(round)));
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|e| StoreError::Backend(e.to_string()))?;
+            for object in page.contents() {
+                if let Some(round) = object
+                    .key()
+                    .and_then(|key| key.strip_prefix(&list_prefix))
+                    .and_then(|s| s.strip_suffix(".bin"))
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    latest_round = Some(latest_round.map_or(round, |current| current.max(round)));
+                }
             }
         }
 
@@ -180,12 +184,13 @@ impl Store for S3Store {
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     /// This test module's backend URL, overridable from the environment so
     /// CI can point at its own service containers. See `.env.example`.
     fn test_backend_url(var: &str, default: &str) -> String {
         std::env::var(var).unwrap_or_else(|_| default.to_string())
     }
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-minio -p 19000:9000 -p 19001:9001
     /// -e MINIO_ROOT_USER=confluxadmin -e MINIO_ROOT_PASSWORD=confluxsecret

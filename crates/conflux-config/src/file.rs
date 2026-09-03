@@ -1,17 +1,16 @@
 //! Reading an experiment's config file into an [`Overrides`].
 //!
-//! This is the *narrow* half of spec §11 Open Item 2: one flat TOML file
-//! of experiment-level overrides, feeding the `file` tier
-//! [`crate::resolve`] has accepted but which nothing ever
-//! supplied a real value for. Making topology/mode **profiles**
-//! themselves TOML-defined, with `inherits`-based extension between
-//! them, is the other half — materially larger, and deliberately not
-//! here (see its phase brief).
+//! This is the *narrow* half of file-based configuration: one flat TOML
+//! file of experiment-level overrides, feeding the `file` tier of
+//! [`crate::resolve`]. Making topology/mode **profiles** themselves
+//! TOML-defined, with `inherits`-based extension between them, is the
+//! other half, and lives in `profile.rs` — see
+//! [`crate::load_topology_profile`].
 //!
-//! Nothing about resolution changes. The layering chain, the precedence
-//! order, and the [`crate::ConfigSource::ExperimentFile`] provenance
-//! label all already existed and are already tested; this module only
-//! produces a value to put into them.
+//! Nothing about resolution happens here. The layering chain, the
+//! precedence order, and the [`crate::ConfigSource::ExperimentFile`]
+//! provenance label all belong to `resolve`; this module only produces
+//! a value to put into them.
 
 use std::path::Path;
 
@@ -22,9 +21,9 @@ use crate::Overrides;
 /// Four variants rather than one, because "your config is broken" is not
 /// an actionable message and these four failures need four different
 /// responses from whoever hit them: fix the path, fix the syntax, fix a
-/// value's type, or fix a key's spelling. ADR 0007 requires a resolved
-/// value to explain where it came from; the same standard applied to
-/// failure means saying which of these happened, and where.
+/// value's type, or fix a key's spelling. A resolved value always says
+/// where it came from; the same standard applied to failure means
+/// saying which of these happened, and where.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigFileError {
     #[error("experiment config file not found: {path}")]
@@ -129,11 +128,9 @@ mod tests {
     /// Writes `contents` to a uniquely-named file under the OS temp dir
     /// and hands back the path.
     ///
-    /// The name mixes the process id with a per-call counter for the
-    /// same reason `redis_registry.rs`'s test keys do: a
-    /// counter alone still collides across two separate `cargo test`
-    /// invocations running at once, which is exactly the flake that was
-    /// found and fixed there rather than re-discovered here.
+    /// The name mixes the process id with a per-call counter: a counter
+    /// alone still collides across two separate `cargo test` invocations
+    /// running at once.
     fn temp_toml(contents: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -269,8 +266,8 @@ mod tests {
 
         // Exactly the value `file_wins_over_topology_and_mode` builds by
         // hand in lib.rs's own tests. If parsing and hand-construction
-        // ever diverge, this catches it — the point of the phase was to
-        // feed the existing layering, not to add a second one.
+        // ever diverge, this catches it — the point is to feed the
+        // existing layering, not to add a second one.
         let path = temp_toml("round_timeout_secs = 120");
         let parsed = load_experiment_file(&path).unwrap();
         let hand_built = Overrides {
@@ -302,7 +299,7 @@ mod tests {
             from_hand.round_timeout_secs.value
         );
         // And the provenance names the real path, not a placeholder —
-        // "which file said this?" is the question ADR 0007 exists to
+        // "which file said this?" is the question provenance exists to
         // answer, and it is only useful if the label is the actual path.
         assert_eq!(
             from_file.round_timeout_secs.source,

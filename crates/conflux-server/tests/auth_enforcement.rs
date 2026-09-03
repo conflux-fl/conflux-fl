@@ -1,7 +1,6 @@
-//! Real end-to-end tests for `resolve_server_tls`'s
-//! `Some(ServerTlsConfig)` actually binds a working mTLS server, and
-//! `None` binds a working plaintext one — not just that the decision
-//! function type-checks. See
+//! Real end-to-end tests: `resolve_server_tls`'s `Some(ServerTlsConfig)`
+//! actually binds a working mTLS server, and `None` binds a working
+//! plaintext one — not just that the decision function type-checks.
 
 use std::sync::Arc;
 
@@ -46,8 +45,8 @@ fn issue_leaf(
 
 #[tokio::test]
 async fn mtls_with_real_material_binds_a_server_that_requires_a_trusted_client_cert() {
-    let (server_ca_pem, server_ca_issuer) = make_ca("conflux-9a-server-ca");
-    let (client_ca_pem, client_ca_issuer) = make_ca("conflux-9a-client-ca");
+    let (server_ca_pem, server_ca_issuer) = make_ca("conflux-test-server-ca");
+    let (client_ca_pem, client_ca_issuer) = make_ca("conflux-test-client-ca");
     let (server_cert, server_key) = issue_leaf(&server_ca_issuer, "conflux-server", "localhost");
     let (client_cert, client_key) =
         issue_leaf(&client_ca_issuer, "conflux-client", "conflux-client");
@@ -120,7 +119,7 @@ async fn mtls_with_real_material_binds_a_server_that_requires_a_trusted_client_c
 }
 
 #[tokio::test]
-async fn jwt_auth_binds_a_plaintext_server_unaffected_by_this_phase() {
+async fn jwt_auth_binds_a_plaintext_server() {
     let tls_config = resolve_server_tls(Mode::Research, AuthMode::Jwt, None).unwrap();
     assert!(tls_config.is_none());
 

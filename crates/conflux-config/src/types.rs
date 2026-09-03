@@ -6,7 +6,7 @@
 /// `rename_all = "snake_case"` is not an arbitrary style choice: it
 /// produces exactly the strings each enum's own `as_str()` returns, so
 /// the spelling accepted in an experiment TOML file and the spelling
-/// printed in the resolved-config log (ADR 0007) are the same by
+/// printed in the resolved-config log are the same by
 /// construction rather than by two lists someone has to keep in sync.
 /// `every_enums_toml_spelling_matches_its_as_str` asserts that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -170,8 +170,9 @@ pub enum Topology {
     /// Like `CrossDevice`, but participants are anonymous or public
     /// rather than known devices — hence stricter reputation gating.
     Crowdsource,
-    /// Edge and IoT deployments. Currently mirrors `CrossDevice`'s
-    /// posture; resource-aware selection tuned for it isn't built yet.
+    /// Operator-provisioned fleets of compute-constrained devices —
+    /// gateways, SBCs, IoT. Pulls like `CrossDevice`, but authenticates
+    /// with mTLS and gets silo-grade patience; `defaults` says why.
     Edge,
 }
 
@@ -253,8 +254,8 @@ impl Topology {
                 min_reputation_score: 0.6,
                 client_registry_ttl: 900,
             },
-            // Edge stopped mirroring cross_device on 2026-09-02.
-            // The distinction that drives every field below: an edge
+            // Edge is deliberately not a copy of cross_device. The
+            // distinction that drives every field below: an edge
             // fleet is **operator-provisioned** — someone installs each
             // device and can install identity material while doing it —
             // where cross_device/crowdsource participants are machines
@@ -395,7 +396,7 @@ mod tests {
     /// The coupling `rename_all = "snake_case"` relies on: every enum's
     /// TOML spelling must be exactly the string its own `as_str()`
     /// returns. If someone renames a variant, adds one, or reaches for a
-    /// different `rename_all` style, the file schema and the ADR 0007
+    /// different `rename_all` style, the file schema and the
     /// resolved-config log would silently disagree — this fails first.
     #[test]
     fn every_enums_toml_spelling_matches_its_as_str() {

@@ -1,5 +1,7 @@
-//! Scores a handful of clients' updates against a reference direction, then
-//! filters them by a similarity threshold -- the two operations
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-reputation`](https://confluxfl.dev/crate-deep-dives/conflux-reputation/):
+//! scores a handful of clients' updates against a reference direction,
+//! then filters them by a similarity threshold -- the two operations
 //! `conflux-reputation` provides. Run with:
 //!
 //! ```bash

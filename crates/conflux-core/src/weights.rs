@@ -118,11 +118,11 @@ pub fn decode_and_validate(updates: &[ClientDelta]) -> Result<Vec<Vec<f32>>, Agg
 // element-wise shapes. They live here, once, rather than as eight
 // near-identical inline loops across `averaging.rs`, `robust.rs`, and
 // `temporal.rs` — the same "common accumulation logic written once"
-// principle ADR 0002's family pattern is built on.
+// principle the family pattern is built on.
 //
-// **These are deliberately scalar, and that is the measured result of
-// this phase, not an omission.** set out to vectorize this loop
-// with the `wide` crate. It was built, and then benchmarked against the
+// **These are deliberately scalar, and that is a measured result, not an
+// omission.** An attempt was made to vectorize this loop with the
+// `wide` crate. It was built, and then benchmarked against the
 // scalar loop it replaced (`benches/accumulate.rs`, still present so the
 // question stays answerable). Explicit `f32x8` SIMD was **slower** at
 // every realistic model dimension:

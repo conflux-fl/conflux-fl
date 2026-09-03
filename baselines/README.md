@@ -13,8 +13,8 @@ Design + manifest schema: the [Baselines guide](https://confluxfl.dev/guides/bas
 
 ## Reproduced papers
 
-<!-- Phase 5 will generate this table from the manifests, with a
-     golden-file test forbidding drift (as docs/AGGREGATION_CATALOG is). -->
+<!-- TODO: generate this table from the manifests, with a golden-file
+     test forbidding drift (as docs/AGGREGATION_CATALOG.generated.md has). -->
 
 | Baseline | Paper | Method | Edges | Scenario | Rust result |
 |---|---|---|---|---|---|
@@ -56,7 +56,8 @@ reproductions green.
 
 1. Its method must already be in the catalog (`cargo run -p conflux-core
    --example catalog`). If not, add the method first — a baseline only
-   reproduces a *shipped, cited* method (ADR 0008).
+   reproduces a *shipped, cited* method — the catalog is where a method
+   is justified against its paper, so a baseline never re-implements one.
 2. Copy an existing `<author-year-method>/`, edit `baseline.toml`
    (`[paper]`, `[method]`, `[experiment]`, optional `[scenario]`, and one
    or both `[clients.python]` / `[clients.rust]` edges).
@@ -67,5 +68,5 @@ reproductions green.
 
 - `<baseline>/baseline.toml` — the manifest (source of truth).
 - `<baseline>/README.md` — paper, expected results, how to run.
-- `_harness/` — shared Python training library (Phase 4; today the Python
+- `_harness/` — shared Python training library (planned; today the Python
   edge points at an existing `e2e_*` example).

@@ -1,6 +1,7 @@
-//! One round of spec §8's Step 0–5 pipeline, wiring every crate from
-//! Phases 1–4 together. Does not loop — the caller (`main.rs`, or a test)
-//! decides whether/when to run another round.
+//! One round of the pipeline: load the checkpoint, select clients,
+//! dispatch, wait for quorum or timeout, filter, aggregate, checkpoint.
+//! Does not loop — the caller (`main.rs`, or a test) decides
+//! whether/when to run another round.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -52,7 +53,7 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         .map(|id| id.0)
         .collect();
 
-    // `quorum` has no universal default (spec §9); absent an override,
+    // `quorum` has no universal default; absent an override, the round
     // requires every selected client to respond — the
     // `cross_silo`/"all_available" ethos, not a formally-derived choice.
     let target_n = quorum_override(state).unwrap_or(active.len());
@@ -87,9 +88,9 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     let decoded = filter_by_per_client_budget(state, decoded, round)?;
     let decoded = apply_server_side_privacy(state, decoded);
 
-    // reputation filtering is opt-in, off by default — every
+    // Reputation filtering is opt-in, off by default — every
     // aggregator's default behavior should match its cited paper with
-    // zero framework-imposed interference (ADR 0008). When off, every update
+    // zero framework-imposed interference. When off, every update
     // that survived `decode_flushed_deltas` above (decodable and finite)
     // goes straight to the configured aggregator, unmodified.
     let passed_ids: HashSet<String> = if state.config.reputation_filter_enabled.value {
@@ -111,11 +112,11 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     let num_submitted = flush.deltas.len();
     let num_passed = filtered.len();
 
-    // ADR 0011: a `trusted`-family aggregator is scored against a signal
-    // the server computes for itself rather than one derived from the
+    // A `trusted`-family aggregator is scored against a signal the
+    // server computes for itself rather than one derived from the
     // batch. Fetching it is network I/O and `aggregate` is synchronous,
-    // so it happens here and is handed across via ADR 0012's
-    // interior-mutability pattern.
+    // so it happens here and is handed across via the aggregator's
+    // interior-mutability hook.
     //
     // Guarded by the aggregator's own answer, not by whether a sidecar
     // happens to be configured: a deployment running `fedavg` opens no
@@ -125,10 +126,10 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         fetch_and_inject_trusted_reference(state, round, &weights).await?;
     }
 
-    // Zeno's half of ADR 0011: unlike FLTrust's reference — one vector,
-    // computable before the batch exists — Zeno needs one score per
-    // candidate, so the sidecar can only be asked *after* the flush,
-    // with the surviving batch in hand.
+    // Zeno's half of the sidecar contract: unlike FLTrust's reference —
+    // one vector, computable before the batch exists — Zeno needs one
+    // score per candidate, so the sidecar can only be asked *after* the
+    // flush, with the surviving batch in hand.
     if state.aggregator.requires_candidate_scores() {
         fetch_and_inject_candidate_scores(state, round, &weights, &filtered).await?;
     }
@@ -192,7 +193,7 @@ fn check_privacy_budget(state: &AppState, round: u64) -> Result<(), ServerError>
     }
 }
 
-/// (`AccountingScope::PerClient`): excludes any client whose
+/// Under `AccountingScope::PerClient`, excludes any client whose
 /// *own* cumulative epsilon has already reached `target_epsilon` from
 /// this round's batch, before its update reaches server-side privacy or
 /// aggregation — the same "exclude, don't fail the whole round" shape
@@ -243,13 +244,12 @@ fn filter_by_per_client_budget(
 /// one is malformed at the byte level — a corrupt/truncated payload is a
 /// protocol-level problem, not a numerically-degenerate-but-well-formed
 /// value), then excludes — not fails the round over — any decoded update
-/// containing a non-finite (`NaN`/`Inf`) value. a single
-/// client with degenerate local data (e.g. a zero-sample shard from an
-/// aggressive Dirichlet split) can otherwise poison
-/// `conflux-reputation`'s shared batch-mean reference via `NaN`
-/// propagation, rejecting every other client's honest update too — see
-/// `docs/E2E_TESTING.md`'s "Real findings" #3. Excluded here,
-/// unconditionally, before that reference is ever computed — regardless
+/// containing a non-finite (`NaN`/`Inf`) value. A single client with
+/// degenerate local data (e.g. a zero-sample shard from an aggressive
+/// Dirichlet split) can otherwise poison `conflux-reputation`'s shared
+/// batch-mean reference via `NaN` propagation, rejecting every other
+/// client's honest update too. Excluded here, unconditionally, before
+/// that reference is ever computed — regardless
 /// of whether `reputation_filter_enabled` is on, since this is a plain
 /// correctness bug, not a robustness policy choice.
 fn decode_flushed_deltas(deltas: &[ClientDelta]) -> Result<Vec<(String, Vec<f32>)>, ServerError> {
@@ -293,37 +293,55 @@ fn apply_server_side_privacy(
     decoded
 }
 
+/// Rebuilds the batch that goes to the aggregator: every submitted delta
+/// whose client survived decoding, the privacy-budget check, and the
+/// reputation filter, with its (possibly privacy-transformed) weights
+/// re-encoded.
+///
+/// `decoded` is looked up by client id, never by position. It is
+/// shorter than `deltas` whenever a client was excluded upstream, and a
+/// positional pairing would then hand one client's metadata another
+/// client's weights for every entry after the exclusion — silently.
+/// (A client id submitted twice in one round maps both deltas to the
+/// same decoded copy; the buffer does not deduplicate, and says so.)
 fn reencode_passing_deltas(
     deltas: &[ClientDelta],
     decoded: &[(String, Vec<f32>)],
     passed_ids: &HashSet<String>,
 ) -> Vec<ClientDelta> {
+    let weights_by_client: std::collections::HashMap<&str, &Vec<f32>> = decoded
+        .iter()
+        .map(|(id, weights)| (id.as_str(), weights))
+        .collect();
     deltas
         .iter()
-        .zip(decoded)
-        .filter(|(delta, _)| passed_ids.contains(&delta.client_id))
-        .map(|(delta, (_, weights))| ClientDelta {
-            client_id: delta.client_id.clone(),
-            round: delta.round,
-            weights: encode_weights(weights),
-            num_samples: delta.num_samples,
-            // ADR 0012's fields are carried through explicitly rather
-            // than left to `..Default::default()`, which resets them to
-            // `None`. This is the last hop before `aggregate`, so
-            // dropping them here is indistinguishable from a client
-            // never sending them: `qfedavg` finds no `local_loss` and
-            // quietly falls back to FedAvg, FedNova never sees a step
-            // count, SCAFFOLD never sees a control variate. Nothing
-            // fails — the configured method simply does not run.
-            //
-            // Only `weights` is deliberately *not* copied: it is
-            // re-encoded above because server-side privacy may have
-            // transformed it. Any future field added to `ClientDelta`
-            // has to be added here too, and the tests below are what
-            // will notice if it is not.
-            local_steps: delta.local_steps,
-            local_loss: delta.local_loss,
-            control_variate: delta.control_variate.clone(),
+        .filter(|delta| passed_ids.contains(&delta.client_id))
+        .filter_map(|delta| {
+            let weights = weights_by_client.get(delta.client_id.as_str())?;
+            Some(ClientDelta {
+                client_id: delta.client_id.clone(),
+                round: delta.round,
+                weights: encode_weights(weights),
+                num_samples: delta.num_samples,
+                // The optional per-method fields are carried through
+                // explicitly rather than left to `..Default::default()`,
+                // which resets them to `None`. This is the last hop
+                // before `aggregate`, so dropping them here is
+                // indistinguishable from a client never sending them:
+                // `qfedavg` finds no `local_loss` and quietly falls back
+                // to FedAvg, FedNova never sees a step count, SCAFFOLD
+                // never sees a control variate. Nothing fails — the
+                // configured method simply does not run.
+                //
+                // Only `weights` is deliberately *not* copied: it is
+                // re-encoded above because server-side privacy may have
+                // transformed it. Any future field added to `ClientDelta`
+                // has to be added here too, and the tests below are what
+                // will notice if it is not.
+                local_steps: delta.local_steps,
+                local_loss: delta.local_loss,
+                control_variate: delta.control_variate.clone(),
+            })
         })
         .collect()
 }
@@ -361,7 +379,7 @@ async fn record_round_privacy_cost(
 
     // Persisted immediately, not batched — a crash between updating the
     // in-memory accountant and this append would otherwise leave the
-    // durable log one round behind, which is exactly the drift
+    // durable log one round behind, which is exactly the drift the log
     // exists to prevent. A persistence failure here is surfaced, not
     // swallowed: silently degrading back to in-memory-only accounting
     // would defeat the point of having `accountant_log` at all.
@@ -400,7 +418,7 @@ fn mean_vector(decoded: &[(String, Vec<f32>)]) -> Vec<f32> {
 }
 
 /// Fetches this round's trusted reference from the sidecar and hands it
-/// to the aggregator (ADR 0011).
+/// to the aggregator.
 ///
 /// Every failure here is fatal to the round rather than something to
 /// continue past, and that is the whole point. A `trusted`-family method
@@ -522,7 +540,7 @@ mod tests {
     use super::*;
     use conflux_proto::decode_weights;
 
-    /// ADR 0012's three optional fields must survive the *last* hop
+    /// The three optional per-method fields must survive the *last* hop
     /// before aggregation.
     ///
     /// `optional_field_reassembly.rs` already proves they survive chunk
@@ -559,6 +577,46 @@ mod tests {
         assert_eq!(out[0].local_steps, Some(30), "FedNova reads this");
         assert_eq!(out[0].local_loss, Some(2.31), "q-FedAvg reads this");
         assert_eq!(out[0].control_variate, Some(variate), "SCAFFOLD reads this");
+    }
+
+    /// An exclusion upstream (a NaN update, an exhausted per-client
+    /// budget) shortens `decoded` but not `deltas`. Pairing by position
+    /// would give every later client the wrong weights.
+    #[test]
+    fn reencoding_pairs_weights_by_client_not_by_position() {
+        let delta = |id: &str, w: f32| ClientDelta {
+            client_id: id.to_string(),
+            round: 1,
+            weights: encode_weights(&[w]),
+            num_samples: 1,
+            ..Default::default()
+        };
+        let deltas = vec![
+            delta("a", 1.0),
+            delta("b", f32::NAN),
+            delta("c", 3.0),
+            delta("d", 4.0),
+        ];
+        // What `decode_flushed_deltas` produces: `b` is gone.
+        let decoded = decode_flushed_deltas(&deltas).unwrap();
+        assert_eq!(decoded.len(), 3);
+        let passed: HashSet<String> = decoded.iter().map(|(id, _)| id.clone()).collect();
+
+        let out = reencode_passing_deltas(&deltas, &decoded, &passed);
+
+        let got: Vec<(String, f32)> = out
+            .iter()
+            .map(|d| (d.client_id.clone(), decode_weights(&d.weights).unwrap()[0]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("a".to_string(), 1.0),
+                ("c".to_string(), 3.0),
+                ("d".to_string(), 4.0)
+            ],
+            "every surviving client must keep its own weights"
+        );
     }
 
     /// And absent must stay absent — the same distinction the wire

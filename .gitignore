@@ -19,3 +19,5 @@ CLAUDE.md
 .env.*
 !.env.example
 conflux-fl-workspace.code-workspace
+# multi-seed sweep output (python/conflux_client/examples/*/run_fairness_comparison.sh)
+fairness_results/

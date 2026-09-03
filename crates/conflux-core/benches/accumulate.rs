@@ -1,4 +1,4 @@
-//! the evidence: does vectorizing the combine step actually help,
+//! The evidence: does vectorizing the combine step actually help,
 //! and where does it stop helping?
 //!
 //! Two comparisons, at model dimensions spanning what this project's own
@@ -15,8 +15,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-/// The loop every family member's combine step used before this phase,
-/// kept here verbatim so the comparison is against what was actually
+/// The loop every family member's combine step used before the shared
+/// helper existed, kept verbatim so the comparison is against what was
 /// replaced rather than a re-imagining of it.
 fn scalar_accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
     for (a, s) in acc.iter_mut().zip(src) {
@@ -57,8 +57,7 @@ fn simd_accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
 /// implementation was doing redundant copying."
 // Deliberately `chunks_exact`, not `as_chunks`: the iterator shape (with
 // `by_ref`/`into_remainder`) is exactly what this variant exists to measure,
-// and this is a bench, not shipped code. (clippy::chunks_exact_to_as_chunks,
-// new in 1.98.)
+// and this is a bench, not shipped code.
 #[allow(clippy::chunks_exact_to_as_chunks)]
 fn simd_chunked_accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
     let splat = wide::f32x8::splat(weight);

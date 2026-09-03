@@ -1,12 +1,11 @@
-//! Tier 5 (H3): the server must exit cleanly on `SIGTERM`, not be killed
-//! mid-round.
+//! The server must exit cleanly on `SIGTERM`, not be killed mid-round.
 //!
-//! The defect this exists to prevent: neither binary handled `SIGTERM` or
-//! Ctrl-C at all. `docker stop`, a Kubernetes eviction, and systemd all
-//! send `SIGTERM` first and `SIGKILL` after a grace period — with no
-//! handler, the default disposition terminates the process immediately, so
-//! the grace period was spent doing nothing and the round in flight was
-//! lost along with any checkpoint being written.
+//! The failure this prevents: a binary that does not handle `SIGTERM` or
+//! Ctrl-C. `docker stop`, a Kubernetes eviction, and systemd all send
+//! `SIGTERM` first and `SIGKILL` after a grace period — with no handler,
+//! the default disposition terminates the process immediately, so the
+//! grace period is spent doing nothing and the round in flight is lost
+//! along with any checkpoint being written.
 //!
 //! This drives the **real binary** rather than a library function, because
 //! signal handling is process-level behavior and the wiring between the

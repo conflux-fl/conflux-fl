@@ -115,12 +115,20 @@ inventory::submit! {
 pub enum SelectorBuildError {
     #[error(
         "unknown selector \"{0}\" — not a registered conflux-selector strategy \
-         (known: \"uniform_random\")"
+         (known: {known})",
+        known = known_selectors()
     )]
     /// The name isn't in this crate's registry. Almost always a typo in a
     /// resolved `selector` config value, since the set of valid names is
     /// fixed at compile time.
     Unknown(String),
+}
+
+/// The registered selector names, for the error above — read from the
+/// registry rather than hardcoded, so the message cannot drift from what
+/// `build_selector` actually accepts.
+fn known_selectors() -> String {
+    conflux_config::registered_names(StrategyKind::Selector).join(", ")
 }
 
 /// Constructs the `ClientSelector` named by a resolved
@@ -285,6 +293,15 @@ mod tests {
             Err(SelectorBuildError::Unknown(name)) => assert_eq!(name, "does_not_exist"),
             Ok(_) => panic!("expected an error, got a constructed ClientSelector"),
         }
+    }
+
+    #[test]
+    fn the_unknown_name_error_lists_the_registered_names() {
+        let err = match build_selector("nope", SelectionSeed::Fixed(1)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected an error"),
+        };
+        assert!(err.to_string().contains("uniform_random"), "{err}");
     }
 
     #[test]

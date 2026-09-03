@@ -1,5 +1,5 @@
-//! Push-mode tests for `NodeBridge` — the client-side half of a capability
-//! `conflux-net`'s server side has had.
+//! Push-mode tests for `NodeBridge` — the client-side half of the
+//! capability `conflux-net`'s server side provides.
 //!
 //! Same shape as `integration.rs`'s pull-mode tests: a fake
 //! `RoundDispatcher` stands in for the real `conflux-server`, and a real
@@ -370,11 +370,10 @@ fn issue_leaf(ca: &GeneratedCa, common_name: &str, san_dns: &str) -> (String, St
     (cert.pem(), key_pair.serialize_pem())
 }
 
-/// `cross_silo`'s topology defaults are `push` + `mtls`. Until now those
-/// two were only ever tested apart — mTLS against `register` in
-/// `conflux-net`'s own suite, push against a plaintext hop above — so
-/// nothing actually proved the framework's own default configuration
-/// works end to end. This is that proof.
+/// `cross_silo`'s topology defaults are `push` + `mtls`. Elsewhere those
+/// two are tested apart — mTLS against `register` in `conflux-net`'s own
+/// suite, push against a plaintext hop above — so this is what proves
+/// the framework's own default configuration works end to end.
 #[tokio::test]
 async fn cross_silo_defaults_push_over_mtls_deliver_a_task_end_to_end() {
     let server_ca = make_ca("conflux-test-server-ca-push");
@@ -426,8 +425,8 @@ async fn cross_silo_defaults_push_over_mtls_deliver_a_task_end_to_end() {
         .unwrap();
     assert!(registered.accepted);
 
-    // The local hop stays plaintext loopback — ADR 0004: mTLS secures the
-    // network hop, not the localhost one.
+    // The local hop stays plaintext loopback — mTLS secures the network
+    // hop, not the localhost one.
     let bridge = Arc::new(NodeBridge::new_push(upstream, "node-1".to_string()));
     let local_addr = spawn_local_hop(bridge).await;
 

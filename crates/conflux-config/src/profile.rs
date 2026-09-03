@@ -1,10 +1,10 @@
 //! Profile files: topology and mode profiles defined in TOML, extending
-//! a base via `inherits` (spec §4.1's last open item).
+//! a base via `inherits`.
 //!
 //! The four topologies and two modes ship as compiled-in defaults, and
 //! that is deliberately still true — a builtin profile involves no I/O
 //! and cannot be misspelled into silence. What this module adds is the
-//! spec's promise that **a new special case is config, never a code
+//! framework's promise that **a new special case is config, never a code
 //! change**: a deployment that is "cross_silo, but slower" writes
 //!
 //! ```toml
@@ -15,8 +15,8 @@
 //!
 //! and sets `CONFLUX_TOPOLOGY=hospital_silo`. Everything not overridden
 //! falls through to the base, and every resolved parameter's startup log
-//! line names the file in the chain that actually set it (ADR 0007 —
-//! the chain is said out loud, not just the winner).
+//! line names the file in the chain that actually set it (the chain is
+//! said out loud, not just the winner).
 //!
 //! # Rules, and why each exists
 //!
@@ -24,8 +24,8 @@
 //!   A profile from nothing would need its own answer for every
 //!   parameter, which is how two profiles drift apart; extending is the
 //!   only mode offered because it is the only one that stays coherent.
-//! - **A profile may only set its own axis's parameters** (ADR 0001:
-//!   the two axes own disjoint sets). A topology profile setting
+//! - **A profile may only set its own axis's parameters** (the two axes
+//!   own disjoint sets). A topology profile setting
 //!   `allow_stub_client` is told it is a mode parameter — not "unknown
 //!   key", which would send someone hunting for a typo that isn't there.
 //! - **A profile may not shadow a builtin name.** `cross_device.toml`
@@ -153,8 +153,8 @@ pub enum ProfileError {
 
     #[error(
         "{key} is a {owner}-axis parameter, but \"{name}\" is a {axis} profile — the \
-         two axes own disjoint parameter sets (ADR 0001), so put it in your {owner} \
-         profile instead"
+         two axes own disjoint parameter sets, so put it in your {owner} profile \
+         instead"
     )]
     /// A real parameter, wrong axis — deliberately distinct from
     /// [`Self::UnknownKey`], because "you misspelled something" and "you
@@ -183,8 +183,8 @@ pub enum ProfileError {
 }
 
 /// A loaded topology profile: the merged defaults, the base builtin it
-/// terminates at, and — for ADR 0007's logs — which link in the chain
-/// set each parameter.
+/// terminates at, and — for the startup log's provenance — which link in
+/// the chain set each parameter.
 #[derive(Debug, Clone)]
 pub struct TopologyProfile {
     /// The name resolution selects it by.
@@ -793,7 +793,7 @@ mod tests {
         let msg = err.to_string();
         assert!(matches!(err, ProfileError::WrongAxis { .. }), "{msg}");
         assert!(msg.contains("mode-axis parameter"), "{msg}");
-        assert!(msg.contains("ADR 0001"), "{msg}");
+        assert!(msg.contains("disjoint parameter sets"), "{msg}");
     }
 
     #[test]

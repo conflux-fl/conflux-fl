@@ -1,6 +1,8 @@
-//! Runnable demonstration of `conflux-privacy`'s two independent halves:
-//! clipping + noising one client's update, and tracking cumulative
-//! epsilon across several rounds with `RdpAccountant`.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-privacy`](https://confluxfl.dev/crate-deep-dives/conflux-privacy/):
+//! the crate's two independent halves — clipping + noising one client's
+//! update, and tracking cumulative epsilon across several rounds with
+//! `RdpAccountant`.
 //!
 //! Run with:
 //!

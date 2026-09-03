@@ -4,7 +4,7 @@
 //! Kept separate from the model itself so a deployer implementing
 //! [`TrustedModel`] never writes gRPC code, and so this file has exactly
 //! one job: translating flat `f32` buffers to and from a model that knows
-//! what they mean. The server on the other end still does not (ADR 0004).
+//! what they mean. The server on the other end still does not, by design.
 
 use std::sync::Arc;
 
@@ -36,6 +36,19 @@ fn decode(bytes: &[u8], field: &str) -> Result<Vec<f32>, Status> {
         .iter()
         .map(|c| f32::from_le_bytes(*c))
         .collect())
+}
+
+/// A request carrying a non-finite global model is the caller's error,
+/// and is reported as one. Without this check the model would train from
+/// `NaN`, fall back to returning its input, and the service would then
+/// blame *the model* for a non-finite reference it never produced.
+fn require_finite(weights: &[f32], field: &str) -> Result<(), Status> {
+    match weights.iter().position(|w| !w.is_finite()) {
+        Some(index) => Err(Status::invalid_argument(format!(
+            "{field} is non-finite at index {index}"
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn encode(weights: &[f32]) -> Vec<u8> {
@@ -85,6 +98,7 @@ impl<M: TrustedModel + 'static> TrustedReference for TrustedReferenceService<M> 
         }
 
         let global = decode(&req.global_weights, "global_weights")?;
+        require_finite(&global, "global_weights")?;
         let reference = self.model.train_reference(&global);
 
         // The one invariant the service enforces on its own model: a
@@ -131,6 +145,7 @@ impl<M: TrustedModel + 'static> TrustedReference for TrustedReferenceService<M> 
         }
 
         let global = decode(&req.global_weights, "global_weights")?;
+        require_finite(&global, "global_weights")?;
 
         let mut scores = Vec::with_capacity(req.candidates.len());
         for candidate in &req.candidates {
@@ -182,7 +197,7 @@ impl<M: TrustedModel + 'static> TrustedReference for TrustedReferenceService<M> 
 
 /// Runs a sidecar on `addr` until the process is signalled.
 ///
-/// Plaintext, matching `conflux-node`'s own local hop (ADR 0004): a
+/// Plaintext, matching `conflux-node`'s own local hop: a
 /// sidecar is normally colocated with the server it serves. A deployment
 /// that separates them should put the sidecar behind TLS —
 /// `conflux_net::TrustedReferenceTransport::connect_with_tls` is the
@@ -200,8 +215,8 @@ pub async fn serve<M: TrustedModel + 'static>(
     tonic::transport::Server::builder()
         .add_service(TrustedReferenceServer::new(service))
         .serve_with_shutdown(addr, async {
-            // Same shutdown posture as both binaries gained in Tier 5's
-            // H3: a sidecar killed mid-request should close its listener
+            // Same shutdown posture as the server and node binaries: a
+            // sidecar killed mid-request should close its listener
             // rather than vanish, so the server sees a closed connection
             // instead of a reset.
             let _ = tokio::signal::ctrl_c().await;
@@ -210,4 +225,63 @@ pub async fn serve<M: TrustedModel + 'static>(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LinearLeastSquares;
+    use conflux_proto::ScoreCandidate;
+    use tonic::Code;
+
+    fn service() -> TrustedReferenceService<LinearLeastSquares> {
+        TrustedReferenceService::new(LinearLeastSquares::new(
+            vec![(vec![1.0, 0.0], 2.0), (vec![0.0, 1.0], 3.0)],
+            0.05,
+            10,
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_non_finite_global_is_the_callers_fault_not_the_models() {
+        let err = service()
+            .get_reference_update(Request::new(ReferenceRequest {
+                round: 1,
+                global_weights: encode(&[f32::NAN, 0.0]),
+            }))
+            .await
+            .expect_err("must be refused");
+        assert_eq!(err.code(), Code::InvalidArgument, "{err}");
+        assert!(err.message().contains("global_weights"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn scoring_against_a_non_finite_global_is_refused_the_same_way() {
+        let err = service()
+            .score_updates(Request::new(ScoreRequest {
+                round: 1,
+                global_weights: encode(&[0.0, f32::INFINITY]),
+                candidates: vec![ScoreCandidate {
+                    client_id: "c".into(),
+                    weights: encode(&[1.0, 1.0]),
+                }],
+            }))
+            .await
+            .expect_err("must be refused");
+        assert_eq!(err.code(), Code::InvalidArgument, "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_finite_global_still_trains() {
+        let update = service()
+            .get_reference_update(Request::new(ReferenceRequest {
+                round: 3,
+                global_weights: encode(&[0.0, 0.0]),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(update.round, 3);
+        assert_eq!(decode(&update.weights, "w").unwrap().len(), 2);
+    }
 }

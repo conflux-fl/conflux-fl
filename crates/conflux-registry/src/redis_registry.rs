@@ -54,6 +54,39 @@ impl RedisRegistry {
             key: key.into(),
         })
     }
+
+    /// `heartbeat` with the clock as an argument, so the same-millisecond
+    /// case below is testable without racing a real clock.
+    async fn heartbeat_at(&self, id: &ClientId, at_millis: f64) -> Result<(), RegistryError> {
+        let mut conn = self.conn.clone();
+        // ZADD XX CH: only update if the member already exists, and
+        // report whether the score actually changed.
+        let changed: i64 = redis::cmd("ZADD")
+            .arg(&self.key)
+            .arg("XX")
+            .arg("CH")
+            .arg(at_millis)
+            .arg(&id.0)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| RegistryError::Backend(e.to_string()))?;
+        if changed == 0 {
+            // CH counts *changed* scores, so a heartbeat landing in the
+            // same millisecond as the previous one also reports 0 — for a
+            // client that is very much registered. Ask directly rather
+            // than treating a fast heartbeat as an eviction.
+            let score: Option<f64> = redis::cmd("ZSCORE")
+                .arg(&self.key)
+                .arg(&id.0)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| RegistryError::Backend(e.to_string()))?;
+            if score.is_none() {
+                return Err(RegistryError::NotRegistered(id.clone()));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn now_millis() -> f64 {
@@ -84,21 +117,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn heartbeat(&self, id: &ClientId) -> Result<(), RegistryError> {
-        let mut conn = self.conn.clone();
-        // ZADD XX CH: only update if the member already exists.
-        let changed: i64 = redis::cmd("ZADD")
-            .arg(&self.key)
-            .arg("XX")
-            .arg("CH")
-            .arg(now_millis())
-            .arg(&id.0)
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| RegistryError::Backend(e.to_string()))?;
-        if changed == 0 {
-            return Err(RegistryError::NotRegistered(id.clone()));
-        }
-        Ok(())
+        self.heartbeat_at(id, now_millis()).await
     }
 
     async fn evict_expired(&self, ttl: Duration) {
@@ -138,12 +157,13 @@ impl Registry for RedisRegistry {
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     /// This test module's backend URL, overridable from the environment so
     /// CI can point at its own service containers. See `.env.example`.
     fn test_backend_url(var: &str, default: &str) -> String {
         std::env::var(var).unwrap_or_else(|_| default.to_string())
     }
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// These tests need a real Redis reachable here; start one with
     /// `docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine`.
@@ -153,14 +173,11 @@ mod tests {
 
     /// Every test gets its own Redis key so `cargo test`'s parallel
     /// execution against one real, shared Redis doesn't let tests race on
-    /// the same sorted set (this actually happened the first time these
-    /// tests ran: `duplicate_register_errors` saw a client another test
-    /// had just written). The process id is part of the key too, not just
-    /// a per-process counter — a counter alone restarts at 0 on every
-    /// fresh `cargo test` invocation, so two separate runs against the
-    /// same real (persistent, un-wiped) Redis could otherwise land on the
-    /// same key and collide with a previous run's leftover data — which
-    /// is exactly what happened the second time these tests ran.
+    /// the same sorted set. The process id is part of the key too, not
+    /// just a per-process counter — a counter alone restarts at 0 on
+    /// every fresh `cargo test` invocation, so two separate runs against
+    /// the same real (persistent, un-wiped) Redis could otherwise land on
+    /// the same key and collide with a previous run's leftover data.
     fn unique_key(test_name: &str) -> String {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -228,6 +245,24 @@ mod tests {
         registry.evict_expired(Duration::from_millis(200)).await;
 
         assert_eq!(registry.active_clients().await.unwrap(), vec![id("fresh")]);
+    }
+
+    /// A heartbeat that lands in the same millisecond as the previous
+    /// score is still a heartbeat from a registered client. `ZADD XX CH`
+    /// reports 0 changed in that case, and that must not be read as
+    /// "not registered".
+    #[tokio::test]
+    async fn heartbeat_in_the_same_millisecond_is_not_mistaken_for_eviction() {
+        let registry = fresh_registry("same_ms_heartbeat").await;
+        registry.register(id("c1")).await.unwrap();
+
+        let at = 1_700_000_000_000.0;
+        registry.heartbeat_at(&id("c1"), at).await.unwrap();
+        registry.heartbeat_at(&id("c1"), at).await.unwrap();
+
+        // And an unknown client is still refused on the same path.
+        let err = registry.heartbeat_at(&id("ghost"), at).await.unwrap_err();
+        assert!(matches!(err, RegistryError::NotRegistered(_)));
     }
 
     #[tokio::test]

@@ -6,9 +6,9 @@
 //!
 //! The real, cross-language, cross-process verification (actual
 //! `conflux-server` + actual `conflux-node` + the actual
-//! `stub_client.py`) is a manual smoke test recorded in the STATUS record —
-//! spawning arbitrary external processes inside `cargo test` isn't
-//! hermetic or standard practice.
+//! `stub_client.py`) lives in the e2e harnesses under
+//! `python/conflux_client/examples/` — spawning arbitrary external
+//! processes inside `cargo test` isn't hermetic or standard practice.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};

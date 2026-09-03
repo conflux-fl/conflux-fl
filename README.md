@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml"><img src="https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://confluxfl.dev"><img src="https://img.shields.io/badge/docs-confluxfl.dev-2b6cb0" alt="Docs"></a>
-  <img src="https://img.shields.io/badge/Rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="Rust 1.88+">
+  <img src="https://img.shields.io/badge/Rust-1.94%2B-dea584?logo=rust&logoColor=white" alt="Rust 1.94+">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0">
   <img src="https://img.shields.io/badge/version-0.1.0-informational" alt="Version 0.1.0">
 </p>
@@ -148,6 +148,10 @@ stronger model.
 </table>
 
 ## 🚀 Quick start
+
+Needs Rust **1.94.1+** to build the whole workspace (`conflux-store` and
+`conflux-server` pull in `aws-sdk-s3`, which requires it); the library
+crates themselves promise **1.88**.
 
 ```bash
 cargo build --workspace

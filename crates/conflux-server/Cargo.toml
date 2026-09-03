@@ -27,7 +27,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "syn
 tokio-stream = { workspace = true, features = ["net", "sync"] }
 # tls-aws-lc, not tls-ring: matches conflux-net/conflux-store's existing
 # crypto-provider choice (see conflux-net/Cargo.toml's comment) — needed
-# here too now that Phase 8c's tests spin up a real mTLS server directly.
+# here too because this crate's tests spin up a real mTLS server directly.
 tonic = { workspace = true, features = ["tls-aws-lc"] }
 axum.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -39,13 +39,13 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
-# Phase 17: seeding the client-side transform in the composition test.
+# Seeding the client-side transform in the composition test.
 rand.workspace = true
 tower = { workspace = true, features = ["util"] }
 http-body-util.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
-# Phase 16: signing real JWTs in tests. The server itself only ever
-# verifies — an `EncodingKey` exists nowhere outside these tests.
+# Signing real JWTs in tests. The server itself only ever verifies — an
+# `EncodingKey` exists nowhere outside these tests.
 jsonwebtoken = { workspace = true, features = ["use_pem", "aws_lc_rs"] }
 serde = { workspace = true, features = ["derive"] }

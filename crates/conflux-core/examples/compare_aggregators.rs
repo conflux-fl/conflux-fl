@@ -1,6 +1,7 @@
-//! Runnable "try it" for `conflux-core`: every shipped aggregation
-//! method, on one batch, so the differences between them are visible
-//! rather than described.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-core`](https://confluxfl.dev/crate-deep-dives/conflux-core/):
+//! every shipped aggregation method, on one batch, so the differences
+//! between them are visible rather than described.
 //!
 //! Run with:
 //!   cargo run --example compare_aggregators -p conflux-core
@@ -13,20 +14,12 @@
 use conflux_core::{AggregatorError, AggregatorParams, build_aggregator};
 use conflux_proto::{ClientDelta, encode_weights};
 
-const ALL: &[&str] = &[
-    "fedavg",
-    "krum",
-    "multi_krum",
-    "trimmed_mean",
-    "median",
-    "faba",
-    "bulyan",
-    "geometric_median",
-    "median_of_means",
-    "divide_and_conquer",
-    "foolsgold",
-    "centered_clipping",
-];
+/// Every registered aggregator, straight from the strategy registry —
+/// the trusted family prints its refusal to run without a sidecar,
+/// which is itself worth seeing.
+fn all() -> Vec<&'static str> {
+    conflux_config::registered_names(conflux_config::StrategyKind::Aggregator)
+}
 
 fn delta(id: &str, w: &[f32], num_samples: u64) -> ClientDelta {
     ClientDelta {
@@ -41,7 +34,7 @@ fn delta(id: &str, w: &[f32], num_samples: u64) -> ClientDelta {
 fn run(label: &str, batch: &[ClientDelta], note: &str) {
     println!("\n=== {label} ===");
     println!("{note}\n");
-    for &name in ALL {
+    for name in all() {
         let aggregator = build_aggregator(name, AggregatorParams::default()).unwrap();
         match aggregator.aggregate(batch) {
             Ok(out) => println!("  {name:<20} {:?}", round3(&out)),

@@ -1,4 +1,5 @@
-//! Runnable "try it" for the crate-deep-dives article on `conflux-net`.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-net`](https://confluxfl.dev/crate-deep-dives/conflux-net/).
 //!
 //! Run with:
 //!   cargo run --example dual_mode_demo -p conflux-net

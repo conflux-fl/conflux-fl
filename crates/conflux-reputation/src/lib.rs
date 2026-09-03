@@ -62,10 +62,18 @@ pub trait ContributionScorer: Send + Sync {
 /// outlier or adversarial submissions. Returns `0.0` rather than
 /// dividing by zero if either vector is the zero vector, since cosine
 /// similarity is undefined there.
+///
+/// Two vectors of different lengths are not comparable at all, and score
+/// `NaN` — the one value [`filter_by_threshold`] can never accept. A
+/// silent prefix comparison would let a truncated update score as if it
+/// were whole.
 pub struct CosineScorer;
 
 impl ContributionScorer for CosineScorer {
     fn score(&self, update: &[f32], reference: &[f32]) -> f32 {
+        if update.len() != reference.len() {
+            return f32::NAN;
+        }
         let dot: f32 = update.iter().zip(reference).map(|(a, b)| a * b).sum();
         let norm_update = l2_norm(update);
         let norm_reference = l2_norm(reference);
@@ -215,6 +223,18 @@ mod tests {
         assert!(score.is_nan());
 
         let passed = filter_by_threshold(&updates, &reference, &CosineScorer, -1.0);
+        assert!(passed.is_empty());
+    }
+
+    #[test]
+    fn a_length_mismatch_scores_nan_rather_than_a_prefix() {
+        // A truncated update must not score like a whole one: NaN is the
+        // one value the filter can never accept.
+        let score = CosineScorer.score(&[1.0, 0.0], &[1.0, 0.0, 0.0]);
+        assert!(score.is_nan());
+
+        let updates = vec![("short".to_string(), vec![1.0, 0.0])];
+        let passed = filter_by_threshold(&updates, &[1.0, 0.0, 0.0], &CosineScorer, -1.0);
         assert!(passed.is_empty());
     }
 

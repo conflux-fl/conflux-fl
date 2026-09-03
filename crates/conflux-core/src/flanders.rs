@@ -39,7 +39,7 @@
 //! attacker's own history consistent with its poisoned update, which is
 //! why the paper reports resilience past 50% malicious.
 //!
-//! # Fidelity notes (ADR 0008)
+//! # Fidelity notes
 //!
 //! - **MAR(1) with ALS**, per §"MAR Estimation": the coefficients are
 //!   re-fit each round from the last `l` observation matrices by
@@ -65,14 +65,12 @@
 //!   (`max_forecast_dim`). A model with fewer coordinates is fitted
 //!   whole, so synthetic experiments at `dim = 3` are unaffected.
 //!
-//!   This was originally left unimplemented, on the reasoning that
-//!   omitting it was more honest than approximating it. That reasoning
-//!   was wrong, and expensively so: the MAR coefficient matrix is
-//!   `d × d`, which at a 50,890-parameter model is 20.7 GB for a single
-//!   allocation. Running it on real MNIST OOM-killed the server process
-//!   twice. The bound is not an approximation of the paper — it *is* the
-//!   paper, and leaving it out made the implementation unable to do the
-//!   thing the paper was written to do.
+//!   Leaving the subsampling out is not "more honest": the MAR
+//!   coefficient matrix is `d × d`, which at a 50,890-parameter model is
+//!   20.7 GB for a single allocation, and running the unbounded fit on
+//!   real MNIST OOM-kills the server process. The bound is not an
+//!   approximation of the paper — it *is* the paper, and without it the
+//!   implementation cannot do the thing the paper was written to do.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -239,10 +237,8 @@ pub struct FlandersAggregator {
     /// **A safety bound, not a tuning knob.** The MAR coefficient matrix
     /// `A` is `d × d`, so fitting allocates `O(d²)`. At a
     /// 50,890-parameter model that is **20.7 GB for a single matrix**,
-    /// and the server process is OOM-killed in the third round — the
-    /// first round with enough history to fit anything. That is not
-    /// hypothetical: it happened, twice, and took the desktop session
-    /// with it.
+    /// and an unbounded fit OOM-kills the server process in the third
+    /// round — the first round with enough history to fit anything.
     ///
     /// The bound is the paper's own answer. FLANDERS samples 500
     /// coordinates "for tractability on real models", and 500 is the
@@ -250,7 +246,7 @@ pub struct FlandersAggregator {
     /// whole, so every synthetic experiment at `dim = 3` is unaffected
     /// and its results are unchanged.
     pub max_forecast_dim: usize,
-    /// `Mutex` per ADR 0012 — `aggregate` takes `&self`.
+    /// `Mutex` because `aggregate` takes `&self`.
     history: Mutex<VecDeque<HashMap<String, Vec<f32>>>>,
     /// The previous output, which is the current global model — needed
     /// for the paper's cold-start branch.
@@ -563,7 +559,7 @@ impl Aggregator for FlandersAggregator {
 
         // Record this round *after* a successful aggregation, so a
         // rejected batch cannot poison the forecast for later rounds —
-        // the Tier 6 rule about stateful methods, applied here.
+        // the standing rule for stateful methods.
         history.push_back(current);
         while history.len() > self.history_window {
             history.pop_front();
@@ -616,8 +612,7 @@ mod tests {
 
     #[test]
     fn the_forecast_is_bounded_at_real_model_dimension() {
-        // The regression test for an OOM that killed the server process
-        // twice and the desktop session with it.
+        // The regression test for the OOM an unbounded fit causes.
         //
         // The MAR coefficient matrix `A` is `d x d`. At MNIST's 50,890
         // parameters that is 50890^2 * 8 bytes = 20.7 GB for one matrix,
@@ -852,9 +847,9 @@ mod tests {
 
     #[test]
     fn a_rejected_batch_does_not_enter_the_history() {
-        // Tier 6's rule for stateful methods: state is recorded only
-        // after a successful round, so a batch the base rejected cannot
-        // shape later forecasts.
+        // The rule for stateful methods: state is recorded only after a
+        // successful round, so a batch the base rejected cannot shape
+        // later forecasts.
         let f = FlandersAggregator::new(fedavg());
         f.aggregate(&[delta("a", &[1.0]), delta("b", &[1.0])])
             .unwrap();

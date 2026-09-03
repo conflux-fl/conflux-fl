@@ -1,12 +1,12 @@
-//! Tier 5 (H1): `submit_delta` must bound how much of a client's stream it
-//! will hold.
+//! `submit_delta` must bound how much of a client's stream it will hold.
 //!
-//! The defect these tests exist to prevent: `submit_delta` collected the
-//! whole client stream into a `Vec` before handing it to the dispatcher,
-//! with no cap on how many chunks that could be. gRPC's own message-size
-//! limit is per *message*, so a client sending an unbounded number of
-//! individually-legal chunks grew the server's heap until the process
-//! died — a one-client, remotely-triggerable memory exhaustion.
+//! The defect these tests exist to prevent: a `submit_delta` that collects
+//! the whole client stream into a `Vec` before handing it to the
+//! dispatcher, with no cap on how many chunks that can be. gRPC's own
+//! message-size limit is per *message*, so a client sending an unbounded
+//! number of individually-legal chunks would grow the server's heap until
+//! the process died — a one-client, remotely-triggerable memory
+//! exhaustion.
 //!
 //! The rule these encode: **the transport may reject a stream, but it must
 //! never let one client's stream decide how much memory the server
@@ -205,11 +205,10 @@ fn the_default_bound_is_finite_and_not_zero() {
     );
 }
 
-/// ADR 0012 added `control_variate`, a second arbitrary-length,
-/// client-controlled byte field. H1's bound counts every such field, not
-/// just `data`.
+/// `control_variate` is a second arbitrary-length, client-controlled
+/// byte field. The bound counts every such field, not just `data`.
 ///
-/// Without this, the Tier 5 fix would still *exist* and still be
+/// Without this, the bound would still *exist* and still be
 /// bypassable: a client that puts its flood in `control_variate` and
 /// leaves `data` tiny allocates exactly as much server memory as before,
 /// while every byte counted against the limit stays near zero. A ceiling

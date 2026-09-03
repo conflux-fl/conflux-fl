@@ -1,8 +1,8 @@
-//! Cited implementations of published FL attacks — see
-//! its phase brief for the full source list
-//! and scope notes. Each attack is "omniscient": `craft` sees the
-//! honest batch before producing malicious updates, the strongest and
-//! most conservative threat model this literature studies.
+//! Cited implementations of published FL attacks, plus two synthetic
+//! constructions that say so in their own docs. Each attack is
+//! "omniscient": `craft` sees the honest batch before producing
+//! malicious updates, the strongest and most conservative threat model
+//! this literature studies.
 
 use std::sync::Mutex;
 
@@ -55,7 +55,7 @@ pub struct GaussianAttack {
     pub std_dev: f32,
     /// Seeded for reproducible tests — an OS-seeded variant isn't needed
     /// here, unlike `conflux-privacy`'s noise (which must vary run to
-    /// run in production); this crate is test/dev-only (ADR 0010).
+    /// run in production); this crate is test/dev-only.
     pub seed: u64,
 }
 
@@ -283,14 +283,12 @@ impl Attack for PersistentSybilAttack {
 /// [`PersistentSybilAttack`]'s identical submissions.
 ///
 /// This exists to answer a question the identical-Sybil model
-/// structurally cannot. A defense whose gate combines "erratic" with
-/// "mutually similar" cannot be told apart from one testing eagerness
-/// alone when it is measured against Sybils submitting byte-identical
-/// updates: *every* client's similarity score saturates, so the signal
-/// carries no information for anyone. Such a result is about the
-/// *model*, not about
-/// the mechanism: it could not distinguish "the collusion signal adds
-/// nothing" from "this attack makes the collusion signal unmeasurable."
+/// structurally cannot. Against Sybils submitting byte-identical
+/// updates, *every* pairwise similarity score among them saturates, so
+/// a similarity-based defense (FoolsGold, or any method that scores how
+/// alike clients are) is measured only on its easiest possible case.
+/// Such a result cannot distinguish "the collusion signal adds nothing"
+/// from "this attack makes the collusion signal trivial."
 ///
 /// Each attacker here submits `shared_update + offset_i`, where
 /// `offset_i` is drawn per attacker from `N(0, divergence²)`. The
@@ -298,7 +296,7 @@ impl Attack for PersistentSybilAttack {
 /// individually distinguishable, which is both more realistic — real
 /// colluders coordinate on an objective, not on a byte stream, and
 /// identical submissions are trivially detectable by simple
-/// deduplication — and, for this document's purposes, *measurable*.
+/// deduplication — and measurable as a continuous parameter.
 ///
 /// `resample_each_round` selects the case:
 ///
@@ -310,9 +308,9 @@ impl Attack for PersistentSybilAttack {
 /// - `true`: offsets are redrawn every round, making the group unstable
 ///   as well. Included as the contrast case, not the primary one.
 ///
-/// This is *this work*, not a published attack — the same status as
-/// [`AdaptiveEvasionAttack`]. It is a measurement instrument for §5.6's
-/// open question, not a claim about how real adversaries behave.
+/// A synthetic construction, not a published attack — the same status
+/// as [`AdaptiveEvasionAttack`]. It is a measurement instrument, not a
+/// claim about how real adversaries behave.
 pub struct CorrelatedSybilAttack {
     /// The common objective every colluder pulls toward.
     pub shared_update: Vec<f32>,
@@ -388,34 +386,32 @@ impl Attack for CorrelatedSybilAttack {
 /// dilution*. Every other attack in this module is a fixed, non-adaptive
 /// strategy — the standard, conservative "omniscient but non-reactive"
 /// threat model most robustness papers evaluate against first. This one
-/// specifically models a *reactive* adversary, closing part of the gap
-/// the cross-round collusion literature
-/// flagged as a stretch goal: whether a temporal defense still holds
-/// against an attacker that's also adapting round to round, not just a
-/// defense reacting to a static attack.
+/// specifically models a *reactive* adversary, so a temporal defense can
+/// be asked whether it still holds against an attacker that is also
+/// adapting round to round, not just against a static attack.
 ///
-/// **v2, revised from a v1 bug the research proposal documented rather
-/// than hid** (§5.3, Finding 3): comparing the previous round's
+/// **Why the baseline is computed rather than a fixed threshold.**
+/// Comparing the previous round's
 /// `‖aggregate − submission‖ / ‖submission‖` against a fixed threshold
-/// alone can't distinguish "a real defense pulled me back" from "I'm a
-/// minority of the batch, so *any* weighted average dilutes me" — v1
-/// retreated even against completely undefended `FedAvg`, since sheer
-/// minority-share dilution already exceeded its threshold. v2 instead
-/// computes the **expected** dilution a plain, undefended weighted
-/// average would have produced from last round's honest batch and
-/// submission, and only treats the actual outcome as "suppressed" if it
-/// deviates from *that* baseline by more than `suppression_margin` —
-/// isolating an active defense's effect from ordinary averaging
-/// arithmetic.
+/// alone cannot distinguish "a real defense pulled me back" from "I'm a
+/// minority of the batch, so *any* weighted average dilutes me" — such
+/// an attacker retreats even against completely undefended `FedAvg`,
+/// since sheer minority-share dilution already exceeds any reasonable
+/// threshold. This attack instead computes the **expected** dilution a
+/// plain, undefended weighted average would have produced from last
+/// round's honest batch and submission, and only treats the actual
+/// outcome as "suppressed" if it deviates from *that* baseline by more
+/// than `suppression_margin` — isolating an active defense's effect
+/// from ordinary averaging arithmetic.
 ///
 /// **Not a reproduction of a specific published optimization-based
 /// attack** (e.g. Fang, Cao, Jia, Gong & Liu, 2020's gradient-based
 /// search over a defense's own decision boundary, *Local Model
 /// Poisoning Attacks to Byzantine-Robust Federated Learning*, USENIX
-/// Security 2020) — still a simpler, deliberately transparent local
+/// Security 2020) — a simpler, deliberately transparent local
 /// hill-climbing heuristic, easy to verify deterministically. A real
-/// optimization-based attack search is flagged as separate, harder
-/// future work in that document, not claimed here.
+/// optimization-based attack search would be separate, harder work,
+/// not claimed here.
 pub struct AdaptiveEvasionAttack {
     /// Attacked direction — not required to be a unit vector, scaled by
     /// the adapting magnitude below.

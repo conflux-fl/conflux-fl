@@ -74,10 +74,9 @@ mod tests {
     }
 
     /// `docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine`.
-    /// The key includes the process id — a bare literal collided with
-    /// leftover data from a previous `cargo test` run the first time this
-    /// test was written; see `redis_registry.rs`'s own tests for the same
-    /// fix, applied here from the start this time.
+    /// The key includes the process id so a previous `cargo test` run's
+    /// leftover data on the same Redis cannot collide with this one — the
+    /// same isolation `redis_registry.rs`'s own tests use.
     #[tokio::test]
     async fn redis_variant_delegates_correctly() {
         let key = format!(

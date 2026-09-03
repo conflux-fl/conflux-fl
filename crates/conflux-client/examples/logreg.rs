@@ -3,7 +3,7 @@
 //! Run with:
 //!   cargo run --example logreg -p conflux-client -- --client-id c1 --client-index 0
 //!
-//! This is phase 23's spike. It mirrors
+//! It mirrors
 //! `python/conflux_client/examples/e2e_numpy_logreg` — same model, same
 //! flat `[w_1..w_d, bias]` layout, same full-batch gradient descent — so
 //! the two can be compared rather than argued about.
@@ -25,7 +25,7 @@
 //! framework — the gradient is a few lines — which is exactly why it is
 //! the right spike: it isolates *the architecture* from *the ML stack*.
 //! A model with hidden layers wants [Burn](https://github.com/tracel-ai/burn)
-//! or equivalent, and that is a separate evaluation with a separate cost.
+//! or equivalent — see the `burn_mlp` example.
 
 use conflux_client::{ClientApp, RunConfig, TrainResult, is_placeholder_init, run};
 

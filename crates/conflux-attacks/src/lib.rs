@@ -1,13 +1,14 @@
 //! Simulated known attacks on federated learning, for validating
 //! `conflux-core`'s defenses against real published adversaries — not
-//! just ad hoc outliers. **Test/dev-only** (ADR 0010): never a
-//! `conflux-server` dependency, and depends on `conflux-core` only as a
-//! dev-dependency for this crate's own application-level tests
+//! just ad hoc outliers. **Test/dev-only**: never a `conflux-server`
+//! dependency, and depends on `conflux-core` only as a dev-dependency
+//! for this crate's own application-level tests
 //! (`tests/attack_vs_defense.rs`).
 //!
-//!  for the full source
-//! list, and `https://confluxfl.dev/guides/extending/`'s "Adding a new attack" section for how
-//! to add another one.
+//! Each attack's doc comment cites the paper it implements (or says
+//! plainly that it is a synthetic construction), and
+//! `https://confluxfl.dev/guides/extending/`'s "Adding a new attack"
+//! section covers how to add another one.
 //!
 //! # Example
 //!

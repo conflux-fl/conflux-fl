@@ -1,6 +1,6 @@
 //! Real end-to-end node-auth enforcement tests — proving the
-//! allow-list built actually gates the `Register` RPC, not just
-//! that its data model works in isolation. See
+//! allow-list actually gates the `Register` RPC, not just that its data
+//! model works in isolation.
 
 use std::sync::Arc;
 
@@ -125,9 +125,9 @@ async fn revoke_then_register_fails_even_with_the_originally_correct_token() {
 #[tokio::test]
 async fn require_node_auth_false_keeps_registration_working_with_no_allowlist_entry() {
     // The default (research mode) — proves the toggle has zero effect
-    // when off, not just that it compiles when off. Every pre-Phase-8
-    // registration test already exercises this path
-    // unmodified; this test makes the "off means off" claim explicit.
+    // when off, not just that it compiles when off. Every other
+    // registration test already exercises this path; this one makes the
+    // "off means off" claim explicit.
     let state = Arc::new(AppState::new(config_with_node_auth(false), vec![0.0]));
 
     let addr = spawn_plaintext(Arc::clone(&state)).await;
@@ -137,8 +137,7 @@ async fn require_node_auth_false_keeps_registration_working_with_no_allowlist_en
     assert!(response.accepted);
 }
 
-// --- mTLS-based identity: proves gaps 2 and 3 of the Flower-platform design review
-// is actually closed — a cert signed by a trusted CA is no longer
+// --- mTLS-based identity: a cert signed by a trusted CA is not
 // sufficient on its own, the specific identity must also be allow-listed.
 
 struct GeneratedCa {
@@ -253,8 +252,8 @@ async fn mtls_client_whose_cert_fingerprint_is_allowlisted_registers_successfull
 
 #[tokio::test]
 async fn mtls_client_with_a_ca_trusted_cert_but_no_allowlist_entry_is_rejected() {
-    // The specific case the Flower-platform design review flagged as missing:
-    // CA trust alone (a valid handshake) must not be sufficient — the
+    // The case worth pinning down: CA trust alone (a valid handshake)
+    // must not be sufficient — the
     // presented identity also has to be on the allow-list.
     let server_ca = make_ca("conflux-test-server-ca-not-allowed");
     let client_ca = make_ca("conflux-test-client-ca-not-allowed");

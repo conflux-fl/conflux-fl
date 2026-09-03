@@ -13,7 +13,7 @@ use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 /// the connection used mTLS and the server verified a client cert.
 ///
 /// `None` is a normal, expected case, not an error: no TLS at all (the
-/// local loopback hop between `conflux-node` and the Python `ClientApp`
+/// local loopback hop between `conflux-node` and its `ClientApp`
 /// never uses TLS, or a deployment may simply use
 /// `NodeIdentity::SharedToken` instead), or TLS without `client_ca_root`
 /// configured so no client cert was requested or verified. Callers fall

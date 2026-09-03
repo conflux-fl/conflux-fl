@@ -1,4 +1,4 @@
-//! The `robust` (Byzantine-resilient) aggregation family (spec §5).
+//! The `robust` (Byzantine-resilient) aggregation family.
 //!
 //! Two composable shapes rather than one. The first pairs
 //! `UpdateFilter` with `FilteredAggregator<F, C>`, for methods that pick
@@ -9,13 +9,13 @@
 //! updates" at all, so forcing them through the first shape would
 //! misrepresent what they compute.
 //!
-//! rationale, including why this split (rather than one shape, or two
-//! unrelated ones) is what lets a future method needing *both* — e.g.
-//! Bulyan, El Mhamdi, Guerraoui & Rouault (2018), *The Hidden
-//! Vulnerability of Distributed Learning in Byzantine Settings*, ICML —
-//! compose as `FilteredAggregator<SomeFilter,
-//! CoordinateWiseAggregator<SomeStatistic>>` without changing anything in
-//! this module.
+//! The split (rather than one shape, or two unrelated ones) is what lets
+//! a method needing *both* — Bulyan, El Mhamdi, Guerraoui & Rouault
+//! (2018), *The Hidden Vulnerability of Distributed Learning in
+//! Byzantine Settings*, ICML — compose as
+//! `FilteredAggregator<SomeFilter, CoordinateWiseAggregator<SomeStatistic>>`
+//! without changing anything in this module, which is exactly how
+//! `build_aggregator` constructs it.
 
 use conflux_proto::ClientDelta;
 
@@ -204,8 +204,8 @@ impl UpdateFilter for KrumFilter {
 /// presentation of Multi-Krum weights survivors this way, but every
 /// other aggregator here already weights by `num_samples` and there's no
 /// reason for this one to be the exception without a specific deployment
-/// showing it should be (ADR 0008's "changing a default means
-/// re-justifying against the literature," applied within a method).
+/// showing it should be ("changing a default means re-justifying
+/// against the literature," applied within a method).
 pub struct MultiKrumFilter {
     /// Assumed fraction of the batch that may be Byzantine, sizing how
     /// many updates are kept.
@@ -245,7 +245,7 @@ pub trait CoordinateWiseRobustStatistic: Send + Sync {
     fn combine(&self, values_at_one_coordinate: &mut [f32]) -> f32;
 }
 
-/// Shared accumulation for coordinate-wise `robust` members (ADR 0002's
+/// Shared accumulation for coordinate-wise `robust` members (the family
 /// pattern, applied a second time within this family): decode every
 /// update, then for each coordinate independently gather that
 /// coordinate's value across every client and ask `S` to combine them.
@@ -372,7 +372,7 @@ impl CoordinateWiseRobustStatistic for MedianOfMeansStatistic {
 /// mean of whatever currently remains, `f` times, then hands the
 /// survivors to a combiner (`FedAvg` here — the same documented
 /// sample-count-weighted-combiner modeling choice as Multi-Krum's own
-/// combiner, ADR 0008). Simpler than Krum's pairwise-distance scoring —
+/// combiner). Simpler than Krum's pairwise-distance scoring —
 /// FABA's whole pitch is speed — at the cost of only ever removing one
 /// point per pass instead of scoring everyone against everyone.
 pub struct FabaFilter {
@@ -438,7 +438,7 @@ impl UpdateFilter for FabaFilter {
 /// TrimmedMeanStatistic>` instead (trimming `byzantine_fraction` of the
 /// *selected* set's size) keeps this a zero-new-architecture composition,
 /// consistent with Multi-Krum's own documented combiner simplification
-/// (ADR 0008) — the selection mechanism, which is Bulyan's actual novel
+/// — the selection mechanism, which is Bulyan's actual novel
 /// contribution over Multi-Krum, is unmodified and exact.
 pub struct BulyanFilter {
     /// Assumed Byzantine fraction, sizing the selection step.
@@ -615,7 +615,7 @@ pub trait RobustVectorStatistic: Send + Sync {
     fn combine(&self, weighted_updates: &[(f32, Vec<f32>)]) -> Vec<f32>;
 }
 
-/// Shared accumulation for whole-vector `robust` members (ADR 0002's
+/// Shared accumulation for whole-vector `robust` members (the family
 /// pattern, applied a third time within this family): decode every
 /// update, pair each with its `num_samples` as a weight, hand the whole
 /// batch to `S` at once.
@@ -764,7 +764,7 @@ mod tests {
         }
     }
 
-    // --- DistanceMatrix (unchanged behavior from) ---
+    // --- DistanceMatrix ---
 
     #[test]
     fn distance_to_self_is_zero() {
@@ -1011,10 +1011,10 @@ mod tests {
     }
 
     // --- Composability: FilteredAggregator accepts any Aggregator as its
-    // combiner, not just FedAvg — the concrete claim this phase's
-    // redesign makes (a future Bulyan-shaped method is a Krum-style
-    // filter composed with a coordinate-wise combiner, with zero new
-    // plumbing). Proven directly here, not just asserted in prose.
+    // combiner, not just FedAvg — the concrete claim this module's
+    // design makes (a Bulyan-shaped method is a Krum-style filter
+    // composed with a coordinate-wise combiner, with zero new plumbing).
+    // Proven directly here, not just asserted in prose.
 
     #[test]
     fn filtered_aggregator_composes_with_a_non_fedavg_combiner() {

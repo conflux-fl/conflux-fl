@@ -1,16 +1,15 @@
-//! Runnable "try it" for `conflux-attacks`: every shipped attack against
-//! every shipped defense, on the same batch.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-attacks`](https://confluxfl.dev/crate-deep-dives/conflux-attacks/):
+//! every shipped attack against every shipped defense, on the same batch.
 //!
 //! Run with:
 //!   cargo run --release --example attack_vs_defense -p conflux-attacks
 //!
-//! The three research runners beside this file (`run_experiment`,
-//! `run_fairness_experiment`, `run_dss_diagnostics`) sweep parameter
-//! grids and emit JSONL for out-of-tree experiment scripts.
-//! This one is the opposite: one table, one glance, no output files.
+//! One table, one glance, no output files — the quickest way to see
+//! which defenses hold against which attacks.
 //!
-//! **Test/dev only** (ADR 0010). `conflux-server` must never depend on
-//! this crate, at any depth.
+//! **Test/dev only.** `conflux-server` must never depend on this crate,
+//! at any depth.
 
 use conflux_attacks::{
     AdaptiveEvasionAttack, AlieAttack, Attack, CorrelatedSybilAttack, GaussianAttack,

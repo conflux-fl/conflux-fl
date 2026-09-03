@@ -24,8 +24,8 @@
 //! client.register("node-1", "my-auth-token").await?;
 //!
 //! // Ask for this round's task. The weights are an opaque little-endian
-//! // f32 buffer — the server has no idea what architecture they describe
-//! // (ADR 0004), which is the whole reason Python stays client-side.
+//! // f32 buffer — the server has no idea what architecture they describe,
+//! // which is the whole reason model code stays client-side.
 //! let task = client.fetch_task("node-1").await?;
 //! let weights = decode_weights(&task.model_weights)?;
 //!
@@ -95,8 +95,8 @@ pub enum TransportError {
          — a reference from the wrong round is a well-formed vector of the right length, so \
          using it would weaken the defense silently rather than fail"
     )]
-    /// The sidecar's response carried a different round than the request
-    /// (ADR 0011). Its own category rather than a generic `Rpc` error
+    /// The sidecar's response carried a different round than the request.
+    /// Its own category rather than a generic `Rpc` error
     /// because the RPC *succeeded* — this is a correctness failure in a
     /// well-formed answer, which is exactly the kind that otherwise goes
     /// unnoticed.

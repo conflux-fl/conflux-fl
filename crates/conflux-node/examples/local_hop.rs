@@ -1,15 +1,17 @@
-//! Runnable "try it" for `conflux-node`: the two-hop bridge, with both
-//! connection modes and the client-side privacy transform.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-node`](https://confluxfl.dev/crate-deep-dives/conflux-node/):
+//! the two-hop bridge, with both connection modes and the client-side
+//! privacy transform.
 //!
 //! Run with:
 //!   cargo run --example local_hop -p conflux-node
 //!
 //! `conflux-node` is a proxy, not a driver. It opens one connection
 //! upstream to `conflux-server`, then serves its own gRPC listener on
-//! localhost and waits — the Python `ClientApp` is what drives the round
-//! by calling `fetch_task` on that local hop. Both hops speak the same
-//! `.proto` (ADR 0004), which is what this example makes visible: the
-//! "Python client" below is just another `conflux-net` transport.
+//! localhost and waits — the `ClientApp` is what drives the round by
+//! calling `fetch_task` on that local hop. Both hops speak the same
+//! `.proto`, which is what this example makes visible: the "Python
+//! client" below is just another `conflux-net` transport.
 
 use std::sync::{Arc, Mutex};
 

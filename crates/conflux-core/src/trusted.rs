@@ -1,23 +1,21 @@
 //! The `trusted` family: methods anchored to a signal the server
-//! computes for itself, rather than one derived from the client batch
-//! (ADR 0011).
+//! computes for itself, rather than one derived from the client batch.
 //!
 //! Every other family in this crate reads only the batch. That is a real
-//! ceiling, and the aggregation-landscape design notes' Category 2 analysis
-//! names it: a colluding majority *is* the batch's consensus, so a method
+//! ceiling: a colluding majority *is* the batch's consensus, so a method
 //! whose only evidence is the batch has nothing left to appeal to. The
 //! `trusted` family is the structural answer — it compares each client
 //! against something no client can influence.
 //!
 //! The signal comes from outside this crate, and outside
-//! `conflux-server`. ADR 0011's option 2 puts the training capability in
-//! an optional sidecar process (`conflux-trusted-reference`), so the
-//! server never gains a model-architecture dependency and ADR 0004's
-//! boundary survives. What arrives here is a plain `f32` vector.
+//! `conflux-server`. The training capability lives in an optional
+//! sidecar process (`conflux-trusted-reference`), so the server never
+//! gains a model-architecture dependency and its model-opacity boundary
+//! survives. What arrives here is a plain `f32` vector.
 //!
 //! # How the reference reaches an aggregator
 //!
-//! Via ADR 0012's interior-mutability pattern, and this is the first
+//! Via the crate's interior-mutability pattern, and this is the first
 //! member to actually need it for something other than history:
 //! `Aggregator::aggregate` is synchronous and has no network access, so
 //! the server fetches the reference asynchronously *before* the call and
@@ -118,7 +116,7 @@ fn l2_norm_f64(v: &[f32]) -> f64 {
 /// trust bootstrap is the whole method, and it is exactly as good as the
 /// data behind it.
 ///
-/// # Fidelity notes (ADR 0008)
+/// # Fidelity notes
 ///
 /// - The combine is FLTrust's own trust-weighted mean. It deliberately
 ///   does **not** use Conflux's `num_samples` weighting convention —
@@ -129,15 +127,15 @@ fn l2_norm_f64(v: &[f32]) -> f64 {
 ///   and adds it back at the end. That is a change of representation,
 ///   not of algorithm: every quantity the paper defines is computed on
 ///   exactly the vectors it defines them on.
-/// - The reference comes from a sidecar this crate cannot see (ADR
-///   0011). If none was injected, this refuses to run rather than
+/// - The reference comes from a sidecar this crate cannot see. If none
+///   was injected, this refuses to run rather than
 ///   degrading to an unweighted mean — see
 ///   [`AggregatorError::MissingTrustedReference`].
 pub struct FlTrustAggregator {
-    /// `Mutex` for ADR 0012's stated reason: `aggregate` takes `&self` so
-    /// one aggregator serves every round behind an `Arc`, and interior
+    /// `Mutex` for the usual reason: `aggregate` takes `&self` so one
+    /// aggregator serves every round behind an `Arc`, and interior
     /// mutability is how a method carries per-round state without
-    /// changing the trait for the twelve methods that need none.
+    /// changing the trait for the methods that need none.
     ///
     /// `None` until the server injects one, and reset is never automatic:
     /// a stale reference is caught by the round check in
@@ -315,7 +313,7 @@ pub struct CandidateScores {
 ///
 /// # Where it sits next to FLTrust
 ///
-/// Both anchor to server-side data (ADR 0011), but they consume the
+/// Both anchor to server-side data, but they consume the
 /// sidecar differently, which is why the service has two RPCs. FLTrust
 /// needs **one vector before the batch is known** — its reference
 /// update. Zeno needs **one number per candidate**, so it can only ask
@@ -354,10 +352,10 @@ pub struct ZenoAggregator {
     pub byzantine_fraction: f32,
     /// The paper's `ρ`: how hard update magnitude is penalized. The
     /// builtin `0.0005` is the value the paper's own experiments use
-    /// (§5); like every cited default it is a starting point, not a
+    /// (their §5); like every cited default it is a starting point, not a
     /// tuned recommendation.
     pub rho: f32,
-    /// This round's scores. `Mutex<Option<…>>` per ADR 0012's pattern;
+    /// This round's scores. `Mutex<Option<…>>` per the crate's pattern;
     /// `Option` because "not injected yet" is a state `aggregate` must
     /// refuse, and `take()`n on use so it cannot go stale.
     scores: Mutex<Option<CandidateScores>>,
@@ -606,7 +604,7 @@ mod tests {
 
     #[test]
     fn extreme_but_finite_updates_do_not_produce_a_non_finite_aggregate() {
-        // The Tier 6 rule, applied to the newest family member: an
+        // The standing rule, applied to this family member: an
         // aggregator may reject, but must never return a non-finite
         // value. `f32::MAX` squared overflows `f32`, which is why the
         // cosine and the norms here are computed in `f64`.

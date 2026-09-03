@@ -1,4 +1,5 @@
-//! Runnable "try it" for the crate-deep-dives article on `conflux-buffer`.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-buffer`](https://confluxfl.dev/crate-deep-dives/conflux-buffer/).
 //!
 //! Run with:
 //!   cargo run --example round_flow -p conflux-buffer

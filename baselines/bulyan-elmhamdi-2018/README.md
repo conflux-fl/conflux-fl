@@ -4,7 +4,7 @@ Reproduces **Bulyan** from *The Hidden Vulnerability of Distributed
 Learning in Byzantium* (El Mhamdi, Guerraoui, Rouault — ICML 2018).
 
 This is the **worked example** in [Add a baseline, step by
-step](https://conflux-fl docs/guides/baselines-add) — a *manifest-only*
+step](https://confluxfl.dev/guides/baselines-add/) — a *manifest-only*
 reproduction: no new client code, because the Burn `burn_mlp` example
 already drives any cataloged aggregator by name.
 

@@ -1,8 +1,7 @@
-//! (and its later extensions, FABA/Bulyan/Geometric Median):
-//! proves each `robust` family member resolves through `conflux-config`'s
+//! Proves each `robust` family member resolves through `conflux-config`'s
 //! strategy registry and completes a real round end-to-end — the same
-//! shape as the `strategy_registry.rs::
-//! explicit_aggregator_and_selector_overrides_resolve_through_the_registry_end_to_end`.
+//! shape as `strategy_registry.rs`'s
+//! `explicit_aggregator_and_selector_overrides_resolve_through_the_registry_end_to_end`.
 
 use std::sync::Arc;
 

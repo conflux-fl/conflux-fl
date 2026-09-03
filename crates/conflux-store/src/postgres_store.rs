@@ -46,6 +46,16 @@ impl PostgresStore {
         table: impl Into<String>,
     ) -> Result<Self, StoreError> {
         let table = table.into();
+        // The table name is spliced into SQL text below (a bind parameter
+        // cannot name a table), so it must be a plain identifier — a
+        // table name of `x; DROP TABLE y` is refused here, before it
+        // reaches the database.
+        if !is_plain_identifier(&table) {
+            return Err(StoreError::Backend(format!(
+                "table name {table:?} is not a plain SQL identifier \
+                 (letters, digits, underscores; not starting with a digit)"
+            )));
+        }
         let (client, connection) = tokio_postgres::connect(postgres_url, NoTls)
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))?;
@@ -99,6 +109,17 @@ impl PostgresStore {
             client_privacy_rounds_table,
         })
     }
+}
+
+/// `[A-Za-z_][A-Za-z0-9_]*` — the identifier grammar that needs no
+/// quoting and cannot smuggle a second statement.
+fn is_plain_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 impl PrivacyRoundLog for PostgresStore {
@@ -233,13 +254,14 @@ impl Store for PostgresStore {
 mod tests {
     use super::*;
 
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     /// This test module's backend URL, overridable from the environment so
     /// CI can point at its own service containers. See `.env.example`.
     fn test_backend_url(var: &str, default: &str) -> String {
         std::env::var(var).unwrap_or_else(|_| default.to_string())
     }
-    use std::collections::HashMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-postgres -e POSTGRES_PASSWORD=conflux
     /// -e POSTGRES_DB=conflux -p 15432:5432 postgres:16-alpine`
@@ -263,6 +285,22 @@ mod tests {
         PostgresStore::connect_with_table(&test_postgres_url(), unique_table(test_name))
             .await
             .expect("connect to the dev Postgres container — is it running?")
+    }
+
+    /// Table names are spliced into SQL, so anything but a plain
+    /// identifier is refused before a connection is even attempted.
+    #[tokio::test]
+    async fn a_table_name_that_is_not_a_plain_identifier_is_refused() {
+        let Err(err) =
+            PostgresStore::connect_with_table("postgres://unused", "x; DROP TABLE y").await
+        else {
+            panic!("a table name carrying a statement separator must be refused");
+        };
+        assert!(matches!(err, StoreError::Backend(msg) if msg.contains("plain SQL identifier")));
+
+        assert!(is_plain_identifier("conflux_checkpoints_1"));
+        assert!(!is_plain_identifier("1abc"));
+        assert!(!is_plain_identifier(""));
     }
 
     #[tokio::test]

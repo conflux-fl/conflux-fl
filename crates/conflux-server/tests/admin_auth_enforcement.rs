@@ -1,4 +1,4 @@
-//! The admin token, enforced against a real router (Phase S3).
+//! The admin token, enforced against a real router.
 //!
 //! `admin_auth.rs`'s own unit tests cover the startup decision and the
 //! token comparison. These drive actual HTTP requests through the real

@@ -1,6 +1,6 @@
 [package]
 name = "conflux-node"
-description = "Conflux FL client binary — Rust-side networking and orchestration, bridging to a Python ClientApp."
+description = "Conflux FL client binary — Rust-side networking and orchestration, bridging to a local ClientApp (Python or Rust)."
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
@@ -10,15 +10,14 @@ edition.workspace = true
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
 conflux-net = { path = "../conflux-net" }
-# Phase 17. This is a real change to the dependency line the v1 specification's §2
-# draws for `conflux-node` ("conflux-proto and conflux-net only"), made
-# deliberately: spec §8's own sequence diagram shows `Node->>Priv: clip +
-# noise (optional)` as a distinct step from the server-side transform, and
-# there is no way to honor that without conflux-node being able to reach
-# the mechanism. Note it transitively pulls in conflux-config too (that's
-# where conflux-privacy registers itself, ADR 0002) — conflux-node still
-# calls no conflux-config API directly, keeping Phase 6's "read env vars,
-# mirror the defaults inline" convention (see startup_guard.rs).
+# The client-side privacy transform (`clip + noise` before an update
+# leaves the node) is a distinct pipeline step from the server-side
+# transform, and there is no way to honor it without conflux-node being
+# able to reach the mechanism. Note it transitively pulls in
+# conflux-config too (that's where conflux-privacy registers itself) —
+# conflux-node still calls no conflux-config API directly, keeping its
+# "read env vars, mirror the defaults inline" convention (see
+# startup_guard.rs).
 conflux-privacy = { path = "../conflux-privacy" }
 rand.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }

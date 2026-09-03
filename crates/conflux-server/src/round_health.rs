@@ -1,12 +1,12 @@
-//! Tier 5 (H2): what the round loop is actually doing, published so
-//! `/health` can report it.
+//! What the round loop is actually doing, published so `/health` can
+//! report it.
 //!
-//! The defect this closes: the round loop ran in its own task, and
-//! `/health` returned a hardcoded `"ok"`. When the loop stopped — which it
-//! did on any error at all — the gRPC and HTTP servers kept serving, so the
-//! process stayed up and kept answering health checks affirmatively while
-//! doing no work. An orchestrator saw a healthy pod indefinitely; the only
-//! evidence anywhere was a single log line.
+//! The failure this prevents: the round loop runs in its own task, so a
+//! `/health` that returned a hardcoded `"ok"` would keep answering
+//! affirmatively after the loop stopped — the gRPC and HTTP servers keep
+//! serving, the process stays up, and an orchestrator sees a healthy pod
+//! doing no work indefinitely, with a single log line as the only
+//! evidence anywhere.
 //!
 //! A health endpoint that cannot report the failure of the thing the
 //! process exists to do is not a health endpoint. This module is the shared
@@ -172,7 +172,7 @@ impl RoundLoopHealth {
 /// Exponential from a 2-second base, capped at 60 seconds. The cap matters
 /// more than the curve: an unbounded backoff would eventually stop retrying
 /// in practice while still claiming to be trying, which is the same class
-/// of dishonesty as the hardcoded `"ok"` this module exists to remove.
+/// of dishonesty as a hardcoded `"ok"` health check.
 ///
 /// The shift is bounded before it is applied — `1u64 << 64` is undefined
 /// behavior territory in most languages and a panic in debug Rust, and a

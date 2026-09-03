@@ -1,6 +1,6 @@
 [package]
 name = "conflux-client"
-description = "Rust-native ClientApp SDK for Conflux FL — train in Rust, with no Python hop (ADR 0005, phase 23)."
+description = "Rust-native ClientApp SDK for Conflux FL — train in Rust, with no Python hop."
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ edition.workspace = true
 
 [dependencies]
 # The local hop to `conflux-node` speaks the same `FlTransport` schema as
-# every other hop (ADR 0004), so this needs no transport of its own —
+# every other hop, so this needs no transport of its own —
 # `PullTransport` is already exactly the client half.
 conflux-net = { path = "../conflux-net" }
 conflux-proto = { path = "../conflux-proto" }
@@ -20,7 +20,7 @@ tracing.workspace = true
 # Burn is pre-1.0 and self-describes as having breaking changes, and it
 # pulls a large dependency subtree. Keep it STRICTLY opt-in so the default
 # `conflux-client` build stays lean and stable — the same blast-radius
-# containment ADR 0011 uses for the trusted-reference sidecar. Nothing but
+# containment the optional trusted-reference sidecar uses. Nothing but
 # the `burn_mlp` example (which requires this feature) touches it.
 # CPU-only: the `ndarray` backend + `autodiff`, no GPU/CUDA/LibTorch.
 burn = { version = "0.18", optional = true, default-features = false, features = [

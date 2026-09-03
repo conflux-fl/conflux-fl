@@ -1,10 +1,8 @@
-//! Single-experiment state (ADR 0003 — no multi-tenancy): one `AppState`
-//! per server process, wiring together every library crate from Phases
-//! 1–4. Every family here still ships exactly one member (`FedAvg`,
-//! `GaussianClippingPrivacy`, `UniformRandomSelector`, `CosineScorer`), so
-//! this phase wires them concretely rather than through
-//! `conflux-config`'s `inventory` registry — see
-//! its phase brief's scope note.
+//! Single-experiment state (no multi-tenancy): one `AppState` per server
+//! process, wiring together every library crate. The aggregator,
+//! selector, and privacy mechanism are constructed by name through
+//! `conflux-config`'s `inventory` registry; the reputation scorer is the
+//! one concrete type, since `conflux-reputation` ships a single scorer.
 //!
 //! `registry`/`store` are `Arc<AnyRegistry>`/`Arc<AnyStore>` —
 //! see `backend_selection.rs` for how a caller picks which backend each
@@ -58,7 +56,7 @@ pub enum AppStateError {
 /// startup and shared by every gRPC handler, HTTP handler, and the
 /// round loop.
 ///
-/// One process serves exactly one experiment (ADR 0003), which is why
+/// One process serves exactly one experiment, which is why
 /// nothing here is keyed by experiment id.
 pub struct AppState {
     /// The fully resolved configuration, including the topology and mode
@@ -68,21 +66,21 @@ pub struct AppState {
     pub registry: Arc<AnyRegistry>,
     /// Where checkpoints are read from and written to.
     pub store: Arc<AnyStore>,
-    /// always constructed, even when `config.require_node_auth`
+    /// Always constructed, even when `config.require_node_auth`
     /// is `false` — toggling the parameter is then just a config change
     /// and a restart, not a wiring change, matching how every other
     /// startup-only config value in this codebase works.
     pub node_allowlist: Arc<AnyNodeAllowlist>,
-    /// constructed by name from `config.selector.value` /
+    /// Constructed by name from `config.selector.value` /
     /// `config.aggregator.value` via each family's own `build_*`
-    /// function (`conflux-config`'s `inventory` registry, ADR 0002) —
+    /// function (`conflux-config`'s `inventory` registry) —
     /// `Box<dyn _>` rather than a concrete type since the constructed
     /// type is only known at runtime.
     pub selector: Box<dyn ClientSelector>,
     /// The aggregation method, constructed by name from the resolved
     /// config.
     pub aggregator: Box<dyn Aggregator>,
-    /// The trusted-reference sidecar connection (ADR 0011), when the
+    /// The trusted-reference sidecar connection, when the
     /// configured aggregator needs one.
     ///
     /// `None` for every deployment that is not running a `trusted`-family
@@ -97,12 +95,12 @@ pub struct AppState {
     ///
     /// Note the type: `conflux-server` holds a *client* from
     /// `conflux-net`. It does not depend on `conflux-trusted-reference`
-    /// and must not be made to — ADR 0011, following ADR 0010's
-    /// precedent, and CI's `isolation` job checks it.
+    /// and must not be made to — the same isolation rule that keeps
+    /// `conflux-attacks` out of the server, and CI's `isolation` job
+    /// checks it.
     pub trusted_reference: Option<TokioMutex<TrustedReferenceTransport>>,
-    /// constructed by name from `config.privacy_mechanism.value`
-    /// via `conflux_privacy::build_privacy_mechanism` — the third of the
-    /// three spec §5 families now registry-wired.
+    /// Constructed by name from `config.privacy_mechanism.value`
+    /// via `conflux_privacy::build_privacy_mechanism`.
     pub privacy: Box<dyn PrivacyMechanism>,
     /// Cumulative privacy loss. `Mutex` because recording a round mutates
     /// it and every handler shares one `AppState`.
@@ -123,8 +121,8 @@ pub struct AppState {
     pub round: AtomicU64,
     /// The open round's staging buffer, or `None` between rounds.
     pub current_buffer: Mutex<Option<Arc<RoundBuffer>>>,
-    /// Tier 5 (H2): what the round loop is doing, so `/health` can report
-    /// it instead of a constant.
+    /// What the round loop is doing, so `/health` can report it instead
+    /// of a constant.
     ///
     /// Lives here rather than being threaded into [`crate::router`] as a
     /// third parameter, because every other handler already reaches its
@@ -133,11 +131,11 @@ pub struct AppState {
     /// that never run a round loop — those simply stay `Starting`, which
     /// is the truthful answer for a server whose loop never started.
     pub round_loop_health: Arc<RoundLoopHealth>,
-    /// Push-mode subscribers (spec §3: `cross_silo`) get every new round's
+    /// Push-mode subscribers (`cross_silo`'s default) get every new round's
     /// task broadcast to them; pull-mode clients just see it on their next
     /// `fetch_task`.
     pub push_sender: broadcast::Sender<TaskResponse>,
-    /// the public key `register()` verifies `auth_token`
+    /// The public key `register()` verifies `auth_token`
     /// against when `config.auth.value == AuthMode::Jwt`. `None` means
     /// none was supplied — which `verify_jwt_if_required` treats as
     /// permitted in research and refused in production, the same
@@ -150,8 +148,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Everything in-memory, no network backends — unchanged from,
-    /// still the default every pre-Phase-8 test and call site uses.
+    /// Everything in-memory, no network backends — the default most
+    /// tests and call sites use.
     pub fn new(config: ResolvedConfig, initial_weights: Vec<f32>) -> Self {
         Self::assemble(
             config,
@@ -224,8 +222,7 @@ impl AppState {
 
         // The allow-list backend follows the registry backend's choice
         // rather than being a fully independent fourth axis — a
-        // deliberate simplification (one fewer env var), documented in
-        // its phase brief.
+        // deliberate simplification (one fewer env var).
         let node_allowlist = match &backends.registry {
             RegistryBackend::Memory => AnyNodeAllowlist::InMemory(InMemoryNodeAllowlist::new()),
             RegistryBackend::Redis { url } => {
@@ -289,11 +286,11 @@ impl AppState {
         };
         let (push_sender, _receiver) = broadcast::channel(16);
 
-        // every existing call site resolves `selector`/
-        // `aggregator` through the builtin fallback ("uniform_random"/
-        // "fedavg", `conflux-config/src/lib.rs`'s `resolve()`), so this
-        // can never actually panic for any test or default deployment —
-        // only an explicit override naming something unregistered would,
+        // Every default call site resolves `selector`/`aggregator`
+        // through the builtin fallback ("uniform_random"/"fedavg"), so
+        // this can never actually panic for any test or default
+        // deployment — only an explicit override naming something
+        // unregistered would,
         // the same "startup-invariant, not a runtime Result" treatment
         // `main.rs` already gives config resolution itself. Keeping
         // `assemble` infallible preserves `AppState::new`'s exact
@@ -307,7 +304,7 @@ impl AppState {
                 clip_radius: config.clip_radius.value,
                 // `Some` unconditionally: `conflux-config` has already
                 // resolved these through its own chain and logged where
-                // each came from (ADR 0007), so passing `None` here to
+                // each came from, so passing `None` here to
                 // mean "use the paper's default" would put a second,
                 // invisible default underneath the one the startup log
                 // just reported.
@@ -348,7 +345,7 @@ impl AppState {
         }
     }
 
-    /// Attaches a trusted-reference sidecar connection (ADR 0011).
+    /// Attaches a trusted-reference sidecar connection.
     ///
     /// A consuming builder, for the same reason `with_jwt_key` is one:
     /// this is optional, startup-only, and needed by a small minority of
@@ -386,7 +383,7 @@ async fn connect_accounting(
     for (noise_multiplier, sample_rate) in log.load_rounds().await? {
         accountant.record_round(noise_multiplier, sample_rate);
     }
-    // always replay per-client history too, regardless of
+    // Always replay per-client history too, regardless of
     // which `accounting_scope` is currently configured — a deployment
     // that switches scope between restarts should never silently lose
     // whichever history it wasn't actively using at the time.

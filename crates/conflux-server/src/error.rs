@@ -5,11 +5,11 @@
 #[derive(Debug, thiserror::Error)]
 /// Why a round failed.
 pub enum ServerError {
-    /// `budget_exhausted_action = halt` (production default, spec §4.1)
+    /// `budget_exhausted_action = halt` (the production default)
     /// and the accountant reports the epsilon budget is spent.
     #[error("privacy budget exhausted for this experiment")]
     BudgetExhausted,
-    /// the `PerClient`-scope counterpart — `budget_exhausted_
+    /// The `PerClient`-scope counterpart — `budget_exhausted_
     /// action = halt` and a specific client's own cumulative epsilon
     /// (not the experiment-wide total) has reached `target_epsilon`.
     #[error("privacy budget exhausted for client {client_id}")]
@@ -28,7 +28,7 @@ pub enum ServerError {
     /// which validation rejected it.
     Aggregator(#[from] conflux_core::AggregatorError),
     /// A `trusted`-family aggregator's reference could not be obtained
-    /// this round (ADR 0011) — no sidecar configured, unreachable,
+    /// this round — no sidecar configured, unreachable,
     /// answering for the wrong round, or returning something
     /// undecodable.
     ///
@@ -50,12 +50,12 @@ pub enum ServerError {
 impl ServerError {
     /// Whether the round loop should try again, or stop for good.
     ///
-    /// Tier 5 (H2). The loop previously stopped on *every* error but
-    /// `EmptyBatch`, which meant one Redis reconnect or one client
-    /// sending a `NaN` ended the experiment permanently — while the gRPC
-    /// and HTTP servers kept running, so nothing outside the process
-    /// could tell. The distinction that matters is not "how bad is this
-    /// error" but **"can the next round differ from this one?"**
+    /// A loop that stopped on *every* error but `EmptyBatch` would let
+    /// one Redis reconnect or one client sending a `NaN` end the
+    /// experiment permanently — while the gRPC and HTTP servers kept
+    /// running, so nothing outside the process could tell. The
+    /// distinction that matters is not "how bad is this error" but
+    /// **"can the next round differ from this one?"**
     ///
     /// - **Transient**: backend I/O ([`ServerError::Registry`],
     ///   [`ServerError::Store`]) and every aggregation rejection. A
@@ -67,7 +67,7 @@ impl ServerError {
     ///   the one case where stopping *is* the specified behavior rather
     ///   than a failure to handle something —
     ///   `budget_exhausted_action = halt` means halt, and no amount of
-    ///   waiting produces more budget (ADR 0006).
+    ///   waiting produces more budget.
     ///
     /// Retrying a transient error is not the same as ignoring it: the
     /// caller backs off, counts consecutive failures, and reports the

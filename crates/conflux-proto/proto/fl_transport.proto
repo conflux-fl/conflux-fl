@@ -3,10 +3,10 @@ syntax = "proto3";
 package conflux.v1;
 
 // FlTransport is reused verbatim over two hops with one schema: the network
-// hop between conflux-server and conflux-node (push or pull, per topology —
-// see docs/spec/conflux-spec-v1.md §3), and the local loopback gRPC hop
-// between conflux-node and the Python ClientApp (no TLS, localhost only —
-// see §7).
+// hop between conflux-server and conflux-node (push or pull, selected by
+// the deployment's topology profile), and the local loopback gRPC hop
+// between conflux-node and the ClientApp — Python (PyTorch) or Rust
+// (conflux-client) — with no TLS, localhost only.
 //
 // Comments here become doc comments on the generated Rust types, so this
 // file is the single place the wire contract is described — for the Rust
@@ -33,7 +33,7 @@ message RegisterRequest {
   // the server's configured public key), otherwise an opaque pre-shared
   // token compared against the allow-list. Ignored entirely on the local
   // loopback hop, where conflux-node has already registered upstream on
-  // the Python client's behalf.
+  // the ClientApp's behalf.
   string auth_token = 2;
 }
 
@@ -87,7 +87,9 @@ message TaskResponse {
   uint64 round = 2;
   // The global model at the start of this round, as little-endian packed
   // f32. The server has no idea what architecture these weights describe
-  // (ADR 0004) — shape and meaning are entirely the client's business.
+  // — model code lives entirely on the client side, and the server treats
+  // every model as an opaque flat vector — so shape and meaning are
+  // entirely the client's business.
   //
   // An all-zero buffer is the server's generic placeholder for "no
   // checkpoint yet": it cannot construct a real initialization for a
@@ -101,14 +103,14 @@ message TaskResponse {
   // The server's global control variate `c`, same little-endian f32
   // encoding and same length as `model_weights`.
   //
-  // This is the *downstream* half of ADR 0012's control-variate plumbing.
-  // `ClientDelta.control_variate` already carried a client's `Δc_i` up;
-  // without this field the server had nowhere to put `c` on the way back,
+  // This is the *downstream* half of the control-variate plumbing.
+  // `DeltaChunk.control_variate` carries a client's `Δc_i` up; without
+  // this field the server would have nowhere to put `c` on the way back,
   // and SCAFFOLD's correction `(c − c_i)` is not computable by a client
-  // that never learns `c`. Adding it is the same additive,
-  // backward-compatible move ADR 0012 made for the upstream fields:
-  // absent means "the configured aggregator maintains no control
-  // variate", which is every method except SCAFFOLD.
+  // that never learns `c`. It is the same additive, backward-compatible
+  // shape as the optional upstream fields: absent means "the configured
+  // aggregator maintains no control variate", which is every method
+  // except SCAFFOLD.
   //
   // Only the aggregator that owns one populates this — see
   // `Aggregator::control_variate`.
@@ -144,17 +146,18 @@ message DeltaChunk {
   // buys proportional influence over the aggregate.
   uint64 num_samples = 6;
 
-  // --- ADR 0012 -------------------------------------------------------
-  // Two optional per-client fields, for methods that need more than a
-  // weight vector and a sample count. Both are `optional` with explicit
+  // --- Optional per-method fields --------------------------------------
+  // Three optional per-client fields, for methods that need more than a
+  // weight vector and a sample count. All are `optional` with explicit
   // presence: absent means "this client is not running that method,"
-  // which is a different fact from zero or empty. Every existing client
-  // sets neither, and every existing aggregator ignores both.
+  // which is a different fact from zero or empty. A client running none
+  // of those methods sets none of them, and an aggregator that does not
+  // need them ignores them.
   //
-  // ADR 0012's own snippet adds these to `ClientDelta` only. They are
-  // here as well because `ClientDelta` is never sent on the wire — it is
-  // what the server *builds* from these chunks — so a field that exists
-  // only there could never be populated by a client at all.
+  // They live on the chunk, not only on `ClientDelta`, because
+  // `ClientDelta` is never sent on the wire — it is what the server
+  // *builds* from these chunks — so a field that existed only there could
+  // never be populated by a client at all.
 
   // How many local optimization steps this client took this round.
   // FedNova's normalization input (Wang, Wang, Nusrat, Poor & Rajan,
@@ -180,7 +183,7 @@ message DeltaChunk {
   // on every chunk or on none — a partial population reassembles into a
   // short vector, which the consuming aggregator rejects on a length
   // check, because the server itself cannot know what length is correct
-  // (ADR 0004: it is opaque to model architecture).
+  // (it is opaque to model architecture).
   //
   // These bytes count toward `max_update_bytes` along with `data`. They
   // have to: the bound exists so that one client cannot grow the
@@ -219,8 +222,7 @@ message SubmitAck {
 }
 
 // A fully reassembled client update, ready for aggregation
-// (conflux-core's Aggregator, conflux-reputation's ContributionScorer —
-// see docs/spec/conflux-spec-v1.md §5).
+// (conflux-core's Aggregator, conflux-reputation's ContributionScorer).
 //
 // Never sent on the wire as-is: it is what the server builds after
 // concatenating a client's DeltaChunks, and what every aggregator consumes.
@@ -240,7 +242,7 @@ message ClientDelta {
   // DeltaChunk.num_samples for what trusting this costs.
   uint64 num_samples = 4;
 
-  // --- ADR 0012 -------------------------------------------------------
+  // --- Optional per-method fields --------------------------------------
   // Reassembled from the correspondingly-named DeltaChunk fields; see
   // those for what each means and what trusting it costs. Absent here
   // means no chunk carried one.

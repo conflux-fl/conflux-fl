@@ -22,7 +22,7 @@ defense from Conflux's separate reputation filter.
 | Edge | Data | Result |
 |---|---|---|
 | **rust** (Burn) | synthetic non-IID + 1 poisoned client | fedavg 0.54 (collapse) → **krum 0.71** (defends); deterministic, seed 0 |
-| **python** (PyTorch) | MNIST + 1 poisoned client | **≈ 0.88** (docs/E2E_TESTING.md: `krum --poison --no-reputation`) |
+| **python** (PyTorch) | MNIST + 1 poisoned client | **≈ 0.88** (measured on the `e2e_pytorch_mnist` harness: `krum --poison --no-reputation`) |
 
 Krum's modest Rust number vs Trimmed-Mean's is its known non-IID weakness:
 it picks *one* client's update, losing the other clients' features. Both

@@ -1,5 +1,5 @@
-//! Minimal HTTP admin surface (spec §10), served on a separate
-//! port from the gRPC `FlTransport` service.
+//! Minimal HTTP admin surface, served on a separate port from the gRPC
+//! `FlTransport` service.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -36,16 +36,14 @@ pub fn router(state: Arc<AppState>, admin_token: Option<AdminToken>) -> Router {
 
 /// What `/health` reports.
 ///
-/// Tier 5 (H2). This used to be the string `"ok"`, unconditionally. The
-/// round loop runs in its own task, so when it stopped, this endpoint
-/// carried on saying the process was fine — which it was, in the narrow
-/// sense that it was still accepting connections, and not at all in the
-/// sense anyone polling `/health` means.
+/// Not a constant: the round loop runs in its own task, so an endpoint
+/// that only proved the process was accepting connections would carry on
+/// saying it was fine after the loop stopped — true in the narrow sense,
+/// and not at all in the sense anyone polling `/health` means.
 #[derive(Serialize)]
 struct HealthResponse {
-    /// `"ok"` or `"unhealthy"`. Kept as the first field, and `"ok"` kept
-    /// as its value, because the previous endpoint returned exactly that
-    /// string and something out there may be matching on it.
+    /// `"ok"` or `"unhealthy"`. Kept as the first field so a probe that
+    /// matches on the bare string still sees it.
     status: &'static str,
     /// `starting`, `running`, `degraded`, or `stopped`.
     round_loop: &'static str,
@@ -117,13 +115,12 @@ struct RegisterHttpResponse {
 ///
 /// **It is not a second *authentication* path either, and that is worth
 /// being explicit about.** The gRPC `Register` RPC runs JWT verification
-/// and the node allow-list check; this handler
-/// runs neither. Before the admin token existed, that made it a way to
-/// register a client while bypassing both — the HTTP port undoing the
-/// gRPC port's authentication. It is now behind the admin token, so
-/// reaching it already requires an operator credential, which is the
-/// only footing on which "register this client, no questions asked" is a
-/// reasonable thing to offer.
+/// and the node allow-list check; this handler runs neither. Without the
+/// admin token it would be a way to register a client while bypassing
+/// both — the HTTP port undoing the gRPC port's authentication. It sits
+/// behind the admin token, so reaching it already requires an operator
+/// credential, which is the only footing on which "register this client,
+/// no questions asked" is a reasonable thing to offer.
 async fn register(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterHttpRequest>,
@@ -133,9 +130,8 @@ async fn register(
     Json(RegisterHttpResponse { accepted })
 }
 
-/// admin surface — mirrors `flwr supernode register`/`list`/
-/// `unregister`: the operator's way to populate the allow-list
-/// built and `dispatcher.rs`'s `register()` now enforces (when
+/// The allow-list admin surface: the operator's way to populate the
+/// allow-list `dispatcher.rs`'s `register()` enforces (when
 /// `config.require_node_auth` is on).
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

@@ -1,6 +1,6 @@
 [package]
 name = "conflux-proto"
-description = "Shared protobuf schema for Conflux FL — one FlTransport service for both the network hop and the local Python IPC hop."
+description = "Shared protobuf schema for Conflux FL — one FlTransport service for both the server-node network hop and the node-ClientApp loopback hop."
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true

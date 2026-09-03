@@ -34,6 +34,41 @@ pub enum NodeIdentity {
     SharedToken(String),
 }
 
+impl NodeIdentity {
+    /// Whether `presented` is the same identity as `self`, compared in
+    /// constant time.
+    ///
+    /// Not `==`: the derived `PartialEq` stops at the first differing
+    /// byte, so how long a comparison takes leaks how much of a
+    /// credential an attacker guessed right. A shared token is a secret,
+    /// and the allow-list check is the one place it is compared against
+    /// untrusted input, so this is where the comparison has to be
+    /// length-independent. The variant kind and the length may still
+    /// leak — both are already known to the peer.
+    pub fn matches(&self, presented: &NodeIdentity) -> bool {
+        let (a, b) = match (self, presented) {
+            (Self::CertFingerprint(a), Self::CertFingerprint(b)) => (a, b),
+            (Self::SharedToken(a), Self::SharedToken(b)) => (a, b),
+            _ => return false,
+        };
+        constant_time_eq(a.as_bytes(), b.as_bytes())
+    }
+}
+
+/// Byte equality that touches every byte regardless of where the first
+/// mismatch is. `black_box` keeps the optimizer from turning the loop back
+/// into an early-exit compare.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b) {
+        diff |= std::hint::black_box(x ^ y);
+    }
+    diff == 0
+}
+
 /// Every error a `NodeAllowlist` implementation can return.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeAuthError {
@@ -76,7 +111,9 @@ pub trait NodeAllowlist: Send + Sync {
     /// identity it was allowed with — a valid-but-wrong credential for a
     /// real `id`, or any credential for an unknown `id`, both resolve to
     /// `Ok(false)`, not an error. `Err` is reserved for the backend itself
-    /// failing to answer the question at all.
+    /// failing to answer the question at all. Implementations compare
+    /// with [`NodeIdentity::matches`], never `==`, so the answer takes the
+    /// same time whether the credential was close or nowhere near.
     fn check(
         &self,
         id: &ClientId,
@@ -123,7 +160,9 @@ impl NodeAllowlist for InMemoryNodeAllowlist {
 
     async fn check(&self, id: &ClientId, presented: &NodeIdentity) -> Result<bool, NodeAuthError> {
         let entries = self.entries.lock().expect("allow-list mutex poisoned");
-        Ok(entries.get(id) == Some(presented))
+        Ok(entries
+            .get(id)
+            .is_some_and(|stored| stored.matches(presented)))
     }
 
     async fn list(&self) -> Result<Vec<ClientId>, NodeAuthError> {
@@ -222,6 +261,23 @@ mod tests {
         // Each client's own token still works for itself.
         assert!(allowlist.check(&id("c1"), &token_for_c1).await.unwrap());
         assert!(allowlist.check(&id("c2"), &token_for_c2).await.unwrap());
+    }
+
+    /// `matches` must agree with `==` on every combination — it exists to
+    /// change *how long* the comparison takes, never what it answers.
+    #[test]
+    fn matches_agrees_with_equality() {
+        let token = NodeIdentity::SharedToken("abc".to_string());
+        let other_token = NodeIdentity::SharedToken("abd".to_string());
+        let longer_token = NodeIdentity::SharedToken("abcd".to_string());
+        let cert = NodeIdentity::CertFingerprint("abc".to_string());
+
+        assert!(token.matches(&token.clone()));
+        assert!(!token.matches(&other_token));
+        assert!(!token.matches(&longer_token));
+        assert!(!token.matches(&cert));
+        assert!(cert.matches(&cert.clone()));
+        assert!(!cert.matches(&token));
     }
 
     #[tokio::test]

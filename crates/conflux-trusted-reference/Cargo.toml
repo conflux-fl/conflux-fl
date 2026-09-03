@@ -1,6 +1,6 @@
 [package]
 name = "conflux-trusted-reference"
-description = "Optional trusted-reference sidecar for Conflux FL — the server-side training/scoring capability FLTrust and Zeno need, kept out of conflux-server (ADR 0011)."
+description = "Optional trusted-reference sidecar for Conflux FL — the server-side training/scoring capability FLTrust and Zeno need, kept out of conflux-server as a separate process."
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
@@ -26,9 +26,9 @@ tokio-stream.workspace = true
 # server uses, and a real `FlTrustAggregator` consuming the result.
 #
 # The test lives here rather than in `conflux-server` deliberately:
-# ADR 0011 (following ADR 0010's precedent) requires that
-# `conflux-server` never depend on this crate at any depth, not even
-# through a dev-dependency. Putting the end-to-end test on this side of
-# the boundary proves the hop works while leaving that graph untouched.
+# `conflux-server` must never depend on this crate at any depth, not
+# even through a dev-dependency (the same rule that keeps it away from
+# `conflux-attacks`). Putting the end-to-end test on this side of the
+# boundary proves the hop works while leaving that graph untouched.
 conflux-net = { path = "../conflux-net" }
 conflux-core = { path = "../conflux-core" }

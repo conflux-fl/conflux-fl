@@ -83,8 +83,8 @@ pub trait PrivacyMechanism: Send + Sync {
 // Registers this family's one member into `conflux-config`'s compile-time
 // strategy registry, so `config.privacy_mechanism = "gaussian_clipping"`
 // resolves to a concrete implementation without `conflux-server` needing
-// to name this type directly. See the `rust-compile-time-registries-inventory`
-// blog post for how the registry mechanism itself works.
+// to name this type directly. How the registry mechanism itself works:
+// `https://confluxfl.dev/blog/rust-compile-time-registries-inventory/`.
 inventory::submit! {
     StrategyEntry {
         kind: StrategyKind::PrivacyMechanism,
@@ -101,11 +101,19 @@ inventory::submit! {
 pub enum PrivacyMechanismBuildError {
     #[error(
         "unknown privacy mechanism \"{0}\" — not a registered conflux-privacy strategy \
-         (known: \"gaussian_clipping\")"
+         (known: {known})",
+        known = known_mechanisms()
     )]
     /// The name isn't in this crate's registry — almost always a typo in a
     /// resolved `privacy_mechanism` config value.
     Unknown(String),
+}
+
+/// The registered mechanism names, for the error above — read from the
+/// registry rather than hardcoded, so the message cannot drift from what
+/// `build_privacy_mechanism` actually accepts.
+fn known_mechanisms() -> String {
+    conflux_config::registered_names(StrategyKind::PrivacyMechanism).join(", ")
 }
 
 /// Constructs the `PrivacyMechanism` named by a resolved
@@ -178,7 +186,11 @@ impl GaussianClippingPrivacy {
     /// `&mut StdRng` still just works, via automatic unsized coercion.
     pub fn add_noise(&self, weights: &mut [f32], rng: &mut dyn rand::Rng) {
         let std_dev = (self.noise_multiplier * self.clip_norm) as f64;
-        if std_dev == 0.0 {
+        // Zero disables the noise by design. A negative or NaN product can
+        // only come from a caller bypassing config validation (which
+        // rejects negative `clip_norm`/`noise_multiplier`); treat it as
+        // "no noise" rather than panicking inside `Normal::new`.
+        if std_dev <= 0.0 || std_dev.is_nan() {
             return;
         }
         let normal = Normal::new(0.0, std_dev).expect("std_dev > 0, checked above");
@@ -371,6 +383,8 @@ impl PrivacyAccountant for RdpAccountant {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     #[test]
     fn build_privacy_mechanism_succeeds_for_gaussian_clipping() {
@@ -389,6 +403,15 @@ mod tests {
     }
 
     #[test]
+    fn the_unknown_name_error_lists_the_registered_names() {
+        let err = match build_privacy_mechanism("nope", 1.0, 1.0) {
+            Err(err) => err,
+            Ok(_) => panic!("expected an error"),
+        };
+        assert!(err.to_string().contains("gaussian_clipping"), "{err}");
+    }
+
+    #[test]
     fn every_buildable_name_is_also_registry_visible() {
         assert!(build_privacy_mechanism("gaussian_clipping", 1.0, 1.0).is_ok());
         assert!(
@@ -398,9 +421,6 @@ mod tests {
 
     #[test]
     fn registry_constructed_mechanism_behaves_like_the_concrete_type() {
-        use rand::SeedableRng;
-        use rand::rngs::StdRng;
-
         let mechanism = build_privacy_mechanism("gaussian_clipping", 1.0, 0.0).unwrap();
         let mut weights = vec![3.0, 4.0]; // L2 norm 5.0
         let mut rng = StdRng::seed_from_u64(1);
@@ -409,8 +429,6 @@ mod tests {
 
         assert!((l2_norm(&weights) - 1.0).abs() < 1e-5);
     }
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
 
     #[test]
     fn clip_scales_down_vector_above_bound() {
@@ -452,6 +470,22 @@ mod tests {
         privacy.clip(&mut weights);
 
         assert_eq!(weights, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_negative_noise_scale_adds_no_noise_instead_of_panicking() {
+        // Config validation rejects negatives upstream; a caller that
+        // bypasses it must still not crash the process.
+        let privacy = GaussianClippingPrivacy {
+            clip_norm: 1.0,
+            noise_multiplier: -1.0,
+        };
+        let mut weights = vec![0.5, 0.5];
+        let mut rng = StdRng::seed_from_u64(1);
+
+        privacy.add_noise(&mut weights, &mut rng);
+
+        assert_eq!(weights, vec![0.5, 0.5]);
     }
 
     #[test]

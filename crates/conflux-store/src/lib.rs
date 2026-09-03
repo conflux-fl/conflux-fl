@@ -4,10 +4,11 @@
 //! global model's weights across rounds (the `Store` trait), and
 //! persisting the raw history a differential-privacy accountant needs to
 //! survive a restart without its epsilon budget silently resetting (the
-//! `PrivacyRoundLog` trait). Four concrete backends ship today —
-//! `InMemoryStore`, `FileStore`, `PostgresStore`, `S3Store` — unified at
-//! runtime by the `AnyStore` enum so a caller can pick a backend by
-//! config without needing `Box<dyn Store>`.
+//! `PrivacyRoundLog` trait). Four concrete backends ship —
+//! `InMemoryStore`, `FileStore`, `PostgresStore`, `S3Store` — and the
+//! three `conflux-server` selects between at runtime are unified by the
+//! `AnyStore` enum, so a caller can pick a backend by config without
+//! needing `Box<dyn Store>`.
 
 //! # Example
 //!
@@ -51,6 +52,10 @@ mod s3_store;
 pub use any_store::AnyStore;
 pub use postgres_store::PostgresStore;
 pub use s3_store::S3Store;
+
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Persists the sequence of `(noise_multiplier, sample_rate)` pairs an
 /// `RdpAccountant` (`conflux-privacy`) has recorded, so a restarted
@@ -108,10 +113,6 @@ pub trait PrivacyRoundLog: Send + Sync {
     ) -> impl Future<Output = Result<std::collections::HashMap<String, Vec<(f32, f32)>>, StoreError>>
     + Send;
 }
-
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
 /// Why a checkpoint or privacy-log operation failed.
@@ -182,6 +183,10 @@ pub trait Store: Send + Sync {
 /// Research/testing backend — the latest checkpoint lives in process
 /// memory and is lost on restart. Seeded with an initial global model at
 /// construction so `load_latest_weights` always has something to return.
+///
+/// "Latest" means the highest round number, exactly as it does for every
+/// other backend: a lower round saved after a higher one (a late retry)
+/// does not replace it.
 pub struct InMemoryStore {
     latest: Mutex<(u64, Vec<f32>)>,
 }
@@ -203,7 +208,9 @@ impl Store for InMemoryStore {
 
     async fn save_checkpoint(&self, round: u64, weights: &[f32]) -> Result<(), StoreError> {
         let mut latest = self.latest.lock().expect("store mutex poisoned");
-        *latest = (round, weights.to_vec());
+        if round >= latest.0 {
+            *latest = (round, weights.to_vec());
+        }
         Ok(())
     }
 }
@@ -278,9 +285,9 @@ impl Store for FileStore {
     // `write` that can stall on a slow disk, and while it stalls that
     // thread cannot poll *anything* — not the gRPC service accepting
     // client submissions, not the round timer. At the scale a local
-    // research run writes checkpoints this was tolerable, which is why it
-    // stood; on a real deployment it converts one slow disk into
-    // server-wide unresponsiveness.
+    // research run writes checkpoints that is tolerable; on a real
+    // deployment it converts one slow disk into server-wide
+    // unresponsiveness.
     //
     // `spawn_blocking` moves the work to a pool sized for exactly this,
     // leaving the async threads free. It costs one task spawn per call,
@@ -301,10 +308,18 @@ impl Store for FileStore {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
         blocking(move || {
-            std::fs::write(&path, bytes).map_err(|source| StoreError::Io {
+            // Write to a sibling temp file and rename it into place. A
+            // crash mid-write then leaves a stray `.tmp`, which the
+            // latest-round scan ignores, instead of a truncated
+            // `checkpoint-<round>.bin` that would win the scan and fail
+            // every later load with `MalformedCheckpoint`.
+            let tmp = path.with_extension("bin.tmp");
+            let io = |source| StoreError::Io {
                 path: path.display().to_string(),
                 source,
-            })
+            };
+            std::fs::write(&tmp, bytes).map_err(io)?;
+            std::fs::rename(&tmp, &path).map_err(io)
         })
         .await
     }
@@ -364,6 +379,21 @@ mod tests {
             store.load_latest_weights().await.unwrap(),
             vec![1.0, 2.0, 3.0]
         );
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_keeps_the_highest_round() {
+        let store = InMemoryStore::new(vec![0.0]);
+
+        store.save_checkpoint(1, &[1.0]).await.unwrap();
+        store.save_checkpoint(3, &[3.0]).await.unwrap();
+        store.save_checkpoint(2, &[2.0]).await.unwrap();
+
+        assert_eq!(store.load_latest_weights().await.unwrap(), vec![3.0]);
+
+        // A retry of the highest round replaces it.
+        store.save_checkpoint(3, &[9.0]).await.unwrap();
+        assert_eq!(store.load_latest_weights().await.unwrap(), vec![9.0]);
     }
 
     #[tokio::test]
@@ -443,6 +473,20 @@ mod tests {
             StoreError::MalformedCheckpoint { len, .. } => assert_eq!(len, 6),
             other => panic!("expected MalformedCheckpoint, got {other:?}"),
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A leftover temp file from a crash mid-write must not be mistaken
+    /// for a checkpoint, and must not hide the real latest one.
+    #[tokio::test]
+    async fn file_store_ignores_a_leftover_temp_file() {
+        let dir = temp_dir("leftover_tmp");
+        let store = FileStore::new(&dir).unwrap();
+        store.save_checkpoint(1, &[1.0]).await.unwrap();
+
+        std::fs::write(dir.join("checkpoint-2.bin.tmp"), [0u8, 1, 2]).unwrap();
+
+        assert_eq!(store.load_latest_weights().await.unwrap(), vec![1.0]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

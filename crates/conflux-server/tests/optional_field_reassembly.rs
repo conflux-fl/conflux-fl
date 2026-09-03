@@ -1,4 +1,5 @@
-//! ADR 0012's new fields, through the server's real chunk reassembly.
+//! The optional per-method fields, through the server's real chunk
+//! reassembly.
 //!
 //! `submit_delta` is where `DeltaChunk`s become the `ClientDelta` every
 //! aggregator consumes, so it is where the two new fields either survive
@@ -67,8 +68,8 @@ fn chunk(index: u32, total: u32, data: Vec<u8>) -> DeltaChunk {
 #[tokio::test]
 async fn a_submission_with_neither_field_reassembles_to_absent() {
     // The backward-compatible path, and by far the most common one: a
-    // client that has never heard of ADR 0012 must produce a delta whose
-    // new fields are absent — not zero, and not an empty vector, either
+    // client that predates the optional fields must produce a delta whose
+    // optional fields are absent — not zero, and not an empty vector, either
     // of which an aggregator could mistake for a real answer.
     let bytes = encode_weights(&[1.0, 2.0, 3.0, 4.0]);
     let mid = bytes.len() / 2;
@@ -186,7 +187,7 @@ async fn local_loss_survives_reassembly_and_absent_stays_absent() {
 
 #[tokio::test]
 async fn all_three_optional_fields_travel_together() {
-    // The full ADR 0012 payload as a real client now sends it: FedNova's
+    // The full optional payload as a real client sends it: FedNova's
     // step count, q-FedAvg's loss, and SCAFFOLD's variate, in one
     // submission, out of order.
     let variate = [0.1_f32, 0.2, 0.3, 0.4];
@@ -219,8 +220,8 @@ async fn all_three_optional_fields_travel_together() {
 async fn a_partially_populated_control_variate_reassembles_short_rather_than_being_padded() {
     // Documented behavior, asserted so it stays deliberate. A client that
     // sets `control_variate` on only some of its chunks is malformed, but
-    // the server cannot say so: it is opaque to model architecture (ADR
-    // 0004), so it has no basis for knowing what length is correct. It
+    // the server cannot say so: it is opaque to model architecture, so
+    // it has no basis for knowing what length is correct. It
     // therefore concatenates what it was given and hands the result on
     // — short — for the consuming aggregator to reject on a length check.
     //

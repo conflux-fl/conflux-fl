@@ -1,13 +1,12 @@
 //! Client binary — Rust-side networking/orchestration, hands training off
-//! to the Python `ClientApp` over local loopback gRPC.
+//! to a local `ClientApp` (Python or Rust) over loopback gRPC.
 //!
-//! See the v1 specification §7, §10. No CLI/config
-//! resolution yet — address/id come from env vars, matching
+//! No CLI/config resolution — address/id come from env vars, matching
 //! `conflux-server`'s `main.rs`.
 //!
 //! `CONFLUX_MODE`/`CONFLUX_ALLOW_STUB_CLIENT`/
 //! `CONFLUX_CLIENT_APP_KIND` gate startup via `startup_guard` — see that
-//! module and its phase brief.
+//! module.
 //!
 //! `CONFLUX_CONNECTION_MODE` (`push`/`pull`) picks which upstream
 //! transport to open. It defaults to `pull`, which is *not* the same as
@@ -55,9 +54,8 @@ async fn main() {
     };
     let client_app_kind = match std::env::var("CONFLUX_CLIENT_APP_KIND").as_deref() {
         Ok("real") => ClientAppKind::Real,
-        // Default "stub" matches what's actually shipped today
-        // (`python/conflux_client/stub_client.py`) — see
-        // ADR 0005.
+        // Default "stub" matches the shipped placeholder
+        // (`python/conflux_client/stub_client.py`).
         _ => ClientAppKind::Stub,
     };
     validate_client_app_startup(mode, allow_stub_client, client_app_kind)
@@ -80,11 +78,11 @@ async fn main() {
     // carries it differs — but it has to happen on the same transport the
     // node will go on using, not a throwaway one, so it lives inside each
     // branch rather than before them.
-    // optional local DP, read from env vars for the same
-    // reason `startup_guard.rs` reads its own — `conflux-node` calls no
-    // `conflux-config` API directly, so the
-    // few values it needs are read here and their builtin fallbacks
-    // mirrored inline. These names and defaults match
+    // Optional local DP, read from env vars for the same reason
+    // `startup_guard.rs` reads its own — `conflux-node` calls no
+    // `conflux-config` API directly, so the few values it needs are
+    // read here and their builtin fallbacks mirrored inline. These
+    // names and defaults match
     // `conflux-config`'s `client_side_privacy_transform` (false),
     // `clip_norm` (1.0), and `noise_multiplier` (1.0) exactly.
     let client_side_privacy = matches!(
@@ -166,7 +164,7 @@ async fn main() {
         .expect("failed to bind local listener");
     tracing::info!(
         local_addr = %listener.local_addr().unwrap(),
-        "local gRPC server listening for the Python ClientApp"
+        "local gRPC server listening for the ClientApp"
     );
 
     tonic::transport::Server::builder()
@@ -178,12 +176,12 @@ async fn main() {
 }
 
 /// Resolves when the process is asked to stop: Ctrl-C on any platform, or
-/// `SIGTERM` on Unix (Tier 5, H3).
+/// `SIGTERM` on Unix.
 ///
 /// The node's shutdown is simpler than the server's — it holds no round
 /// state and writes no checkpoints, so there is nothing to drain. What it
 /// gains is an *orderly* stop: the local listener closes rather than the
-/// process vanishing, so a Python `ClientApp` mid-call sees a closed
+/// process vanishing, so a `ClientApp` mid-call sees a closed
 /// connection instead of a reset, and `docker stop` produces exit code 0
 /// rather than a signal death.
 async fn shutdown_signal() {

@@ -1,21 +1,21 @@
-//! enforcing the resolved `auth` config value (spec §3 ties
-//! topology to auth mode; `conflux-config` resolves and logs it, but
-//! nothing previously read it to decide whether the gRPC server actually
-//! binds with TLS). Closes gap 4 of the Flower-platform design review.
+//! Enforcing the resolved `auth` config value: the topology profile ties
+//! a deployment to an auth mode, `conflux-config` resolves and logs it,
+//! and this module is what reads it to decide whether the gRPC server
+//! actually binds with TLS and whether registrations must carry a
+//! verifiable token.
 //!
-//! added the `Jwt` arm's other half. `auth = "jwt"` no longer
-//! just means "mTLS isn't required" — it now also means every
-//! `register()` must present a token this deployment's public key can
-//! verify. The two are independent: `resolve_server_tls` decides how the
-//! socket is secured, `verify_jwt_if_required` decides whether a caller
-//! proved who it is.
+//! `auth = "jwt"` does not merely mean "mTLS isn't required" — it also
+//! means every `register()` must present a token this deployment's
+//! public key can verify. The two halves are independent:
+//! `resolve_server_tls` decides how the socket is secured,
+//! `verify_jwt_if_required` decides whether a caller proved who it is.
 
 use conflux_config::{AuthMode, Mode};
 use conflux_net::jwt::{JwtAuthError, JwtKeyMaterial, verify_token_for_client};
 use conflux_net::tls::server_tls_config;
 use tonic::transport::ServerTlsConfig;
 
-/// Plain PEM bytes, matching every other/8 backend's
+/// Plain PEM bytes, matching every other backend's
 /// "argument-based, not `conflux-config`-driven" precedent for connection
 /// material (a cert path is a deployment detail, not an experiment-tuning
 /// parameter).
@@ -72,9 +72,8 @@ pub fn resolve_server_tls(
         }
         // Research's deliberately more permissive default — falls back to
         // plaintext. The call site logs a warning; this function only
-        // makes the decision, not the announcement (ADR 0007's "say so,
-        // out loud" principle is a startup-log concern, not this pure
-        // function's).
+        // makes the decision, not the announcement ("say so, out loud"
+        // is a startup-log concern, not this pure function's).
         None => Ok(None),
     }
 }

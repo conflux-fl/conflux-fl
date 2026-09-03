@@ -317,6 +317,32 @@ mod tests {
     }
 
     #[test]
+    fn a_token_that_names_a_different_algorithm_is_refused_on_its_header() {
+        // The algorithm-confusion defense: the key pins ES256, so a token
+        // whose header claims HS256 must be refused on the header alone —
+        // never verified as an HMAC over the public key bytes.
+        let keys = test_keys();
+        let material = JwtKeyMaterial::from_public_key_pem(keys.public_pem.as_bytes()).unwrap();
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &TestClaims {
+                sub: "node-1".to_string(),
+                exp: now() + 3600,
+                iat: now(),
+            },
+            &EncodingKey::from_secret(keys.public_pem.as_bytes()),
+        )
+        .unwrap();
+
+        let err = verify_token(&material, &token)
+            .expect_err("an HS256 token must not verify against an ES256 key");
+        assert!(
+            matches!(err, JwtAuthError::WrongAlgorithm { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn an_expired_token_is_rejected_and_says_so_specifically() {
         let keys = test_keys();
         let material = JwtKeyMaterial::from_public_key_pem(keys.public_pem.as_bytes()).unwrap();

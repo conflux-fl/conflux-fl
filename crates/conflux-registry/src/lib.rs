@@ -77,8 +77,8 @@ impl std::fmt::Display for ClientId {
 ///
 /// `thiserror`'s derive macro generates the `Display`/`std::error::Error`
 /// impls from the `#[error("...")]` strings below, so callers get a real
-/// typed enum to match on instead of a bag of `String`s — see the
-/// `Conventions` section of `CLAUDE.md`.
+/// typed enum to match on instead of a bag of `String`s — the rule every
+/// fallible public fn in this workspace follows.
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
     #[error("client {0} is already registered")]

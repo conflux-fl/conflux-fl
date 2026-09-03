@@ -21,7 +21,7 @@ partition = "iid"
 # Two training edges reproduce this paper: Python (PyTorch) and Rust (Burn).
 [clients.python]
 harness   = "e2e_pytorch_mnist"
-expected  = 0.90 # docs/E2E_TESTING.md: 0.905 held-out @ round 15
+expected  = 0.90 # measured on the e2e_pytorch_mnist harness: 0.905 held-out @ round 15
 tolerance = 0.06
 smoke     = { clients = 5, rounds = 15 }
 full      = { clients = 100, rounds = 500 }

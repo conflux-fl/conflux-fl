@@ -1,5 +1,5 @@
-//! Runnable "try it" for the crate-deep-dives article on
-//! `conflux-selector`.
+//! Runnable "try it" for the [crate-deep-dives article on
+//! `conflux-selector`](https://confluxfl.dev/crate-deep-dives/conflux-selector/).
 //!
 //! Run with:
 //!   cargo run --example select_clients -p conflux-selector

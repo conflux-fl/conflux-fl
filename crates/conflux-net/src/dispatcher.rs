@@ -135,7 +135,7 @@ pub trait RoundDispatcher: Send + Sync + 'static {
     /// mTLS and the server verified a client cert (see
     /// `peer_cert_fingerprint` in this crate) — `None` is the normal case
     /// for a `SharedToken`-based deployment or a non-TLS hop (e.g. the
-    /// local loopback connection between `conflux-node` and the Python
+    /// local loopback connection between `conflux-node` and its
     /// `ClientApp`, which never uses TLS), not an error.
     async fn register(
         &self,

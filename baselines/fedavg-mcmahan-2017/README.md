@@ -18,7 +18,7 @@ them, it does not re-implement them.
 | Edge | Setting | Held-out accuracy | Source |
 |---|---|---|---|
 | **rust** (Burn) | synthetic non-IID, 5 clients, 8 rounds | **0.95 ± 0.05** | Burn MLP, deterministic (seed 0) — what `verify` asserts |
-| **python** `[smoke]` | MNIST, 5 clients, 15 rounds, IID | **0.90 ± 0.06** | `docs/E2E_TESTING.md` (0.905 @ round 15) |
+| **python** `[smoke]` | MNIST, 5 clients, 15 rounds, IID | **0.90 ± 0.06** | measured on the `e2e_pytorch_mnist` harness (0.905 @ round 15) |
 | **python** `[full]` | MNIST, 100 clients, C=0.1, 500 rounds | ~0.97+ (paper trend) | the paper — real hardware |
 
 The `[full]` regime needs real hardware (100 real clients is past a

@@ -1,17 +1,18 @@
 //! Aggregation algorithms (family-based): turns one round's batch of
 //! client-submitted weight updates into the new global model weights.
-//! Every shipped method belongs to one of three families — `averaging`,
-//! `robust` (Byzantine-resilient), and `temporal` (cross-round,
-//! history-aware) — each built around one small trait capturing what a
-//! family member varies, so a new method is typically a short trait impl
-//! reusing the family's existing accumulation logic rather than a whole
-//! new implementation written from scratch.
+//! Every shipped method belongs to one of five families — `averaging`,
+//! `robust` (Byzantine-resilient), `temporal` (cross-round,
+//! history-aware), `trusted` (anchored to server-side data via a
+//! sidecar), and `optimization` (server-side optimizers over the
+//! aggregate) — each built around one small trait or shared shape
+//! capturing what a family member varies, so a new method is typically
+//! a short trait impl reusing the family's existing accumulation logic
+//! rather than a whole new implementation written from scratch.
 //!
 //! # Example
 //!
 //! Config names a method; this crate builds it. `conflux-server` never
-//! learns what "krum" is — that is the whole point of the registry
-//! (ADR 0002).
+//! learns what "krum" is — that is the whole point of the registry.
 //!
 //! ```
 //! use conflux_core::{AggregatorParams, build_aggregator};
@@ -108,8 +109,12 @@ use conflux_proto::ClientDelta;
 /// coordinate-wise `robust` members (`Trimmed Mean`, `Median`,
 /// `Median-of-Means`) via `CoordinateWiseAggregator`; whole-vector
 /// `robust` members (`Geometric Median`) via `VectorRobustAggregator`;
-/// and history-aware `temporal` members (`FoolsGold`, `Centered
-/// Clipping`) with their own internal state. Conflux's aim is a
+/// history-aware `temporal` members (`FoolsGold`, `Centered Clipping`,
+/// `FLANDERS`) with their own internal state; the `trusted` members
+/// (`FLTrust`, `Zeno`) against a sidecar-supplied signal; and the
+/// `optimization` members (FedOpt's three variants, FedAvgM, q-FedAvg,
+/// FedNova, SCAFFOLD) as server-side optimizers over the aggregate.
+/// Conflux's aim is a
 /// faithful, extensible catalog of published methods for researchers to
 /// compare against — see each type's own doc comment for its citation;
 /// adding another method is a new small trait impl composed with the
@@ -123,7 +128,7 @@ pub trait Aggregator: Send + Sync {
     /// `temporal` family) use interior mutability rather than changing
     /// this signature for everyone.
     ///
-    /// # Cross-round state: the standing pattern (ADR 0012)
+    /// # Cross-round state: the standing pattern
     ///
     /// **A method that needs memory across rounds holds it in a `Mutex`
     /// field on itself. It does not get a `&mut self` signature.** This
@@ -134,17 +139,20 @@ pub trait Aggregator: Send + Sync {
     /// treats a boxed aggregator as freely shareable) in exchange for a
     /// capability a minority of methods need.
     ///
-    /// Four shipped methods already follow it, and they are the worked
-    /// examples to copy from:
+    /// The shipped stateful methods all follow it, and they are the
+    /// worked examples to copy from:
     ///
     /// | Method | State it keeps |
     /// |---|---|
     /// | [`FoolsGoldAggregator`] | per-client update history |
     /// | [`CenteredClippingAggregator`] | the running reference vector |
-    /// | (future) FedOpt | first/second-moment estimates |
+    /// | [`FlandersAggregator`] | a window of past batches and the last output |
+    /// | [`FedOptAggregator`], [`FedAvgMAggregator`] | moment estimates and the last output |
+    /// | [`QFedAvgAggregator`], [`FedNovaAggregator`], [`ScaffoldAggregator`] | the last output (plus SCAFFOLD's `c`) |
+    /// | [`FlTrustAggregator`], [`ZenoAggregator`] | the injected per-round reference or scores |
     ///
-    /// Two obligations come with it, both learned the hard way in Tier 6
-    /// rather than anticipated:
+    /// Two obligations come with it, both learned the hard way rather
+    /// than anticipated:
     ///
     /// - **Validate what you store, not just what you receive.**
     ///   `decode_and_validate` guards the batch in front of you; nothing
@@ -158,7 +166,7 @@ pub trait Aggregator: Send + Sync {
     fn aggregate(&self, updates: &[ClientDelta]) -> Result<Vec<f32>, AggregatorError>;
 
     /// Whether this method needs a server-computed trusted reference
-    /// each round (ADR 0011).
+    /// each round.
     ///
     /// `false` for every method that reads only the batch, which is all
     /// of them except the `trusted` family. The round pipeline calls
@@ -174,11 +182,11 @@ pub trait Aggregator: Send + Sync {
     /// is called.
     ///
     /// A default no-op, so adding the `trusted` family changed nothing
-    /// for the twelve methods that ignore it — the additive-extension
-    /// rule ADR 0002 exists to protect. `&self` for the same reason
+    /// for the methods that ignore it — the additive-extension rule the
+    /// family pattern exists to protect. `&self` for the same reason
     /// `aggregate` takes it: the aggregator is shared behind an `Arc`,
-    /// and a member that stores this uses interior mutability (ADR
-    /// 0012), exactly as `FlTrustAggregator` does.
+    /// and a member that stores this uses interior mutability, exactly
+    /// as `FlTrustAggregator` does.
     ///
     /// Split from `aggregate` rather than passed as an argument because
     /// the reference arrives over the network: fetching it is `async`
@@ -192,14 +200,13 @@ pub trait Aggregator: Send + Sync {
     /// whose algorithm requires the server to send state *down* to
     /// clients as well as receive it. The round pipeline calls this when
     /// building each `TaskResponse`; returning `None` leaves the wire
-    /// field absent, so nothing changes for the eighteen methods that
-    /// ignore it — the additive-extension rule ADR 0002 exists to
-    /// protect, and the same shape as `requires_trusted_reference`
-    /// above.
+    /// field absent, so nothing changes for the methods that ignore it
+    /// — the additive-extension rule again, and the same shape as
+    /// `requires_trusted_reference` above.
     ///
     /// Returns owned weights rather than a borrow because the value
-    /// lives behind this aggregator's own `Mutex` (ADR 0012) and a
-    /// reference could not outlive the guard.
+    /// lives behind this aggregator's own `Mutex` and a reference could
+    /// not outlive the guard.
     fn control_variate(&self) -> Option<Vec<f32>> {
         None
     }
@@ -463,9 +470,8 @@ pub enum AggregatorBuildError {
     /// compile time.
     ///
     /// The alternatives are read from the registry rather than written
-    /// out here. The hardcoded version named twelve methods long after
-    /// twenty-one were registered — an error that lists the alternatives
-    /// is only useful if it cannot go stale.
+    /// out here — an error that lists the alternatives is only useful if
+    /// it cannot go stale.
     Unknown(String),
 
     #[error(
@@ -481,8 +487,9 @@ pub enum AggregatorBuildError {
     /// Its own variant instead of falling through to [`Self::Unknown`]:
     /// someone who writes `aggregator = "fedprox"` has not misspelled
     /// anything, and being told the name is unrecognized would send them
-    /// looking for the wrong thing. ADR 0004's client/server split is
-    /// what makes this category exist at all.
+    /// looking for the wrong thing. The client/server split — model code
+    /// lives only on the client — is what makes this category exist at
+    /// all.
     ClientSideOnly(String),
 }
 
@@ -641,16 +648,16 @@ pub fn build_aggregator(
         // Selectable by config like any other method, but it is the one
         // entry here that will not run on its own: it refuses to
         // aggregate until the round pipeline injects a trusted reference
-        // from a sidecar (ADR 0011). Selecting it without running one is
-        // a startup-time failure, not a silent fallback.
+        // from a sidecar. Selecting it without running one is a
+        // startup-time failure, not a silent fallback.
         "fltrust" => Ok(Box::new(FlTrustAggregator::new())),
         // FLANDERS is a pre-aggregation *filter*, so it needs something
         // to aggregate what survives. The paper names its own choice —
         // "ϕ = Krum or any other existing robust aggregation heuristic"
         // — and the catalog follows it rather than pairing with `fedavg`.
         //
-        // That is not a stylistic preference. Measurement
-        // measured `flanders_fedavg` scoring *worse than undefended
+        // That is not a stylistic preference. Measurement showed
+        // `flanders_fedavg` scoring *worse than undefended
         // FedAvg* against every Sybil attack tested (24.5 vs 17.2 at 20%
         // malicious, 84.0 vs 67.9 at 80%), because a colluder that
         // repeats itself is the easiest client in the batch to forecast
@@ -798,7 +805,7 @@ pub enum AggregatorError {
         len: usize,
     },
     /// A `trusted`-family aggregator was asked to run without a
-    /// reference (ADR 0011).
+    /// reference.
     ///
     /// A hard error rather than a fallback, and deliberately so. The
     /// obvious fallback — an unweighted mean — *is* FedAvg, the method
@@ -808,7 +815,7 @@ pub enum AggregatorError {
     #[error(
         "no trusted reference was supplied for this round — a trusted-family aggregator \
          cannot run without one, and falling back to an unweighted mean would silently \
-         replace the defense with the method it exists to replace (ADR 0011)"
+         replace the defense with the method it exists to replace"
     )]
     MissingTrustedReference,
 
@@ -870,24 +877,17 @@ pub enum AggregatorError {
 mod tests {
     use super::*;
 
-    const NAMES: &[&str] = &[
-        "fedavg",
-        "krum",
-        "multi_krum",
-        "trimmed_mean",
-        "median",
-        "faba",
-        "bulyan",
-        "geometric_median",
-        "median_of_means",
-        "divide_and_conquer",
-        "foolsgold",
-        "centered_clipping",
-    ];
+    /// Every registered aggregator name, from the registry itself — a
+    /// hand-written list here would cover whatever was shipped when it
+    /// was written and silently miss everything after.
+    fn names() -> Vec<&'static str> {
+        conflux_config::registered_names(StrategyKind::Aggregator)
+    }
 
     #[test]
     fn build_aggregator_succeeds_for_every_shipped_name() {
-        for &name in NAMES {
+        assert!(names().len() >= 22, "registry lost entries: {:?}", names());
+        for name in names() {
             assert!(
                 build_aggregator(name, AggregatorParams::default()).is_ok(),
                 "{name} failed to build"
@@ -922,8 +922,9 @@ mod tests {
         }
     }
 
-    /// ADR 0008 as a registry fact: every real entry names the paper it
-    /// implements, its family, and the parameters it reads. A method
+    /// The cite-the-paper discipline as a registry fact: every real entry
+    /// names the paper it implements, its family, and the parameters it
+    /// reads. A method
     /// added without a citation fails here — the discipline stops being
     /// a review-time convention.
     #[test]
@@ -968,15 +969,13 @@ mod tests {
 
     /// The alternatives an unknown name is offered come from the
     /// registry, so they cannot drift from the set that actually works.
-    /// A hardcoded list did drift — it named twelve while twenty-one
-    /// were registered.
     #[test]
     fn the_unknown_name_error_lists_every_registered_aggregator() {
         let message = build_aggregator("nope", AggregatorParams::default())
             .err()
             .expect("unknown name errors")
             .to_string();
-        for &name in NAMES {
+        for name in names() {
             assert!(
                 message.contains(name),
                 "the error should offer {name} as an alternative, got: {message}"
@@ -989,7 +988,7 @@ mod tests {
     /// also be found by the other.
     #[test]
     fn every_buildable_name_is_also_registry_visible() {
-        for &name in NAMES {
+        for name in names() {
             assert!(build_aggregator(name, AggregatorParams::default()).is_ok());
             assert!(
                 conflux_config::lookup(StrategyKind::Aggregator, name).is_some(),

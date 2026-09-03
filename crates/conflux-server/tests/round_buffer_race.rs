@@ -1,6 +1,6 @@
-//! Real reproduction of the `RoundBuffer` lost-update race
-//! (its phase brief) at the `conflux-server`
-//! level: `run_round` retrying past `AggregatorError::EmptyBatch` leaves
+//! Real reproduction of the `RoundBuffer` lost-update race at the
+//! `conflux-server` level: `run_round` retrying past
+//! `AggregatorError::EmptyBatch` leaves
 //! `AppState.current_buffer` pointing at an already-flushed buffer, and a
 //! late submission against it must be explicitly rejected, not silently
 //! swallowed into a buffer nobody reads again.
@@ -37,7 +37,7 @@ async fn late_submission_against_an_already_flushed_round_is_rejected_not_lost()
     // with an empty batch, `aggregator.aggregate(&[])` fails with
     // `EmptyBatch`, and `run_round` returns early — before advancing
     // `state.round` or clearing `current_buffer` — exactly the retry
-    // precondition the phase brief describes.
+    // precondition that opens the race window.
     let result = run_round(&state).await;
     assert!(matches!(
         result,

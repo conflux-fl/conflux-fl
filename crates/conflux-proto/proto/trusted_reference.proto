@@ -2,23 +2,22 @@ syntax = "proto3";
 
 package conflux.v1;
 
-// The server <-> trusted-reference-sidecar hop (ADR 0011).
+// The server <-> trusted-reference-sidecar hop.
 //
 // FLTrust (Cao, Fang, Liu, Jia & Gong, 2021) and Zeno/Zeno++ (Xie,
 // Koyejo & Gupta, 2019/2020) are the only two methods in Conflux's
-// tracked landscape whose published algorithm requires the *server* to
-// hold data and train or evaluate loss on it. ADR 0004 keeps PyTorch
-// entirely client-side and `conflux-server` opaque to model
-// architecture, which is why the wire format is a flat f32 array — so
-// neither method is implementable inside the server binary as it
-// stands.
+// catalog whose published algorithm requires the *server* to hold data
+// and train or evaluate loss on it. Conflux keeps model code entirely
+// client-side and `conflux-server` opaque to model architecture, which
+// is why the wire format is a flat f32 array — so neither method is
+// implementable inside the server binary as it stands.
 //
-// ADR 0011's resolution: the capability moves to a separate, optional
-// process rather than into `conflux-server`. This file is the contract
-// between them. It is the third reuse of ADR 0004's "one schema,
-// multiple hops" idea, after server<->node and node<->ClientApp, and it
-// deliberately keeps the same flat-f32 shape: the sidecar knows what
-// the model is, the server still does not.
+// The resolution: the capability moves to a separate, optional process
+// rather than into `conflux-server`. This file is the contract between
+// them. It is the third reuse of the "one schema, multiple hops" idea,
+// after server<->node and node<->ClientApp, and it deliberately keeps
+// the same flat-f32 shape: the sidecar knows what the model is, the
+// server still does not.
 //
 // A deployer who has not configured `aggregator = "fltrust"` or
 // `"zeno"` never runs a sidecar and never opens this connection.

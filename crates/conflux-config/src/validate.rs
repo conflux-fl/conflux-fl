@@ -23,10 +23,10 @@
 //!   method's paper-stated `n` requirement fails at quorum-sized
 //!   rounds. The server starts, and says so.
 //!
-//! The rules here are conservative on purpose (ADR 0008's spirit):
-//! every bound is either a mathematical fact about the parameter or a
-//! requirement the cited paper states — never a taste judgment about
-//! what values are "reasonable" for research.
+//! The rules here are conservative on purpose: every bound is either a
+//! mathematical fact about the parameter or a requirement the cited
+//! paper states — never a taste judgment about what values are
+//! "reasonable" for research.
 
 use crate::{ResolvedConfig, source::ConfigSource};
 
@@ -320,26 +320,24 @@ impl ResolvedConfig {
             } else if let Some(quorum) = &self.quorum
                 && u64::from(self.scaffold_num_clients.value) < u64::from(quorum.value)
             {
-                {
-                    v.push(
-                        Error,
-                        "scaffold_num_clients",
-                        self.scaffold_num_clients.value,
-                        &self.scaffold_num_clients.source,
-                        format!(
-                            "N is the total client population and cannot be smaller than \
-                             quorum ({}) — a round's minimum batch cannot exceed the \
-                             population it is drawn from",
-                            quorum.value
-                        ),
-                    );
-                }
+                v.push(
+                    Error,
+                    "scaffold_num_clients",
+                    self.scaffold_num_clients.value,
+                    &self.scaffold_num_clients.source,
+                    format!(
+                        "N is the total client population and cannot be smaller than \
+                         quorum ({}) — a round's minimum batch cannot exceed the \
+                         population it is drawn from",
+                        quorum.value
+                    ),
+                );
             }
         }
 
         // A Byzantine *majority* is outside every batch-only robust
         // guarantee; FLTrust and Zeno are the exceptions because their
-        // anchor never touches the batch (ADR 0011).
+        // anchor never touches the batch.
         let robust_batch_method = matches!(
             aggregator,
             "krum"

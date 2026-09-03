@@ -2,8 +2,6 @@
 //! impl, the round pipeline, and the HTTP admin surface. `main.rs` is a
 //! thin wrapper around this.
 //!
-//! See the v1 specification §8, §10.
-//!
 //! # Example
 //!
 //! One round, driven directly. `run_round` is the whole pipeline —
@@ -25,8 +23,8 @@
 //!     &Overrides { aggregator: Some("krum".into()), ..Default::default() },
 //! )?;
 //!
-//! // One process, one experiment — there is no tenant dimension here
-//! // (ADR 0003). Running two experiments means two processes.
+//! // One process, one experiment — there is no tenant dimension here.
+//! // Running two experiments means two processes.
 //! let state = Arc::new(AppState::new(config, vec![0.0; 3]));
 //!
 //! let summary = run_round(&state).await?;
@@ -44,7 +42,7 @@
 //!
 //! `conflux-server` never names an aggregator itself — it asks
 //! `conflux-core` to build whatever `config.aggregator.value` says, which
-//! is why adding a method never touches this crate (ADR 0002).
+//! is why adding a method never touches this crate.
 
 #![warn(missing_docs)]
 

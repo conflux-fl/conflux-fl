@@ -20,14 +20,14 @@ use crate::TrustedModel;
 /// descent on a fixed trusted dataset.
 ///
 /// No bias term: Conflux transmits a flat weight vector whose meaning is
-/// the client's business (ADR 0004), so a caller that wants a bias adds a
+/// the client's business, so a caller that wants a bias adds a
 /// constant `1.0` feature itself. Inventing an extra parameter here would
 /// make the sidecar's vector a different length than the model's, which
 /// is the one thing the length check downstream exists to catch.
 pub struct LinearLeastSquares {
     /// `(features, target)` pairs. The trusted root dataset — the single
     /// piece of data in the whole system that the defense's integrity
-    /// rests on, which is why ADR 0011 puts it behind a boundary the
+    /// rests on, which is why it lives behind a process boundary the
     /// server itself cannot be tricked into crossing.
     dataset: Vec<(Vec<f32>, f32)>,
     learning_rate: f32,
@@ -52,7 +52,15 @@ impl LinearLeastSquares {
         }
     }
 
-    /// Mean squared error of `weights` over the dataset.
+    /// Whether every trusted example has exactly `dim` features. A
+    /// dataset of some other width can neither train nor score a
+    /// `dim`-weight model: `zip` would silently pair up a prefix.
+    fn fits(&self, dim: usize) -> bool {
+        self.dataset.iter().all(|(f, _)| f.len() == dim)
+    }
+
+    /// Mean squared error of `weights` over the dataset. Callers check
+    /// [`Self::fits`] first.
     fn loss(&self, weights: &[f32]) -> f64 {
         if self.dataset.is_empty() {
             return 0.0;
@@ -87,7 +95,7 @@ impl TrustedModel for LinearLeastSquares {
         // improvement" rather than being mistaken for a real reference of
         // some other shape.
         let dim = global_weights.len();
-        if self.dataset.is_empty() || self.dataset.iter().any(|(f, _)| f.len() != dim) {
+        if self.dataset.is_empty() || !self.fits(dim) {
             return global_weights.to_vec();
         }
 
@@ -128,10 +136,12 @@ impl TrustedModel for LinearLeastSquares {
     }
 
     fn score(&self, global_weights: &[f32], candidate: &[f32]) -> f32 {
-        if candidate.len() != global_weights.len() {
-            // Not scoreable. `f32::NEG_INFINITY` would be a strong
-            // opinion; this is an absence of one, and the service omits
-            // unscoreable candidates rather than reporting a number.
+        if candidate.len() != global_weights.len() || !self.fits(global_weights.len()) {
+            // Not scoreable — the candidate is a different shape than the
+            // global model, or the trusted data is a different width than
+            // both. `f32::NEG_INFINITY` would be a strong opinion; this is
+            // an absence of one, and the service omits unscoreable
+            // candidates rather than reporting a number.
             return f32::NAN;
         }
         let improvement = self.loss(global_weights) - self.loss(candidate);
@@ -230,6 +240,16 @@ mod tests {
         assert_eq!(reference, vec![0.0; 5]);
 
         assert!(model.score(&[0.0; 5], &[0.0; 3]).is_nan());
+    }
+
+    #[test]
+    fn a_dataset_of_the_wrong_width_scores_nothing_rather_than_a_prefix() {
+        let model = LinearLeastSquares::new(dataset(), 0.05, 100);
+        // Two-feature trusted data cannot judge a three-weight model.
+        // Before this check, `zip` scored the first two coordinates and
+        // reported a confident number about a comparison it never made.
+        assert!(model.score(&[0.0; 3], &[2.0, 3.0, 9.0]).is_nan());
+        assert!(model.score(&[0.0; 1], &[2.0]).is_nan());
     }
 
     #[test]

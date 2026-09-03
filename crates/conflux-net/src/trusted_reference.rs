@@ -1,12 +1,12 @@
-//! The server's client for the trusted-reference sidecar hop (ADR 0011).
+//! The server's client for the trusted-reference sidecar hop.
 //!
 //! This lives in `conflux-net` rather than in a crate of its own for a
-//! reason ADR 0011 is explicit about: `conflux-server` must gain **zero**
-//! new dependencies from FLTrust/Zeno existing. It already depends on
+//! deliberate reason: `conflux-server` must gain **zero** new
+//! dependencies from FLTrust/Zeno existing. It already depends on
 //! `conflux-net` for every other hop, so putting the client here means
 //! the server can *call* a sidecar without ever depending on the crate
-//! that *is* one — the same separation ADR 0010 keeps between
-//! `conflux-server` and `conflux-attacks`.
+//! that *is* one — the same separation kept between `conflux-server`
+//! and `conflux-attacks`.
 //!
 //! The connection is opened only when a deployer has configured an
 //! aggregator that needs it. A deployment that has not is unchanged: no
@@ -55,10 +55,10 @@ impl From<DescribeResponse> for SidecarCapabilities {
 /// A connection to a trusted-reference sidecar.
 ///
 /// Deliberately thin: it moves flat `f32` buffers back and forth and has
-/// no idea what model produced them, which is the whole point of ADR
-/// 0011's option 2. The sidecar knows what the model is; the server
-/// still does not, so ADR 0004's boundary survives intact even though
-/// FLTrust and Zeno become possible.
+/// no idea what model produced them, which is the whole point of putting
+/// the capability in a sidecar. The sidecar knows what the model is; the
+/// server still does not, so the server's model-opacity boundary survives
+/// intact even though FLTrust and Zeno become possible.
 pub struct TrustedReferenceTransport {
     client: TrustedReferenceClient<Channel>,
 }
@@ -66,8 +66,8 @@ pub struct TrustedReferenceTransport {
 impl TrustedReferenceTransport {
     /// Connects without TLS. Appropriate when the sidecar runs beside the
     /// server — the same posture as `conflux-node`'s local loopback hop
-    /// to its Python `ClientApp` (ADR 0004), and for the same reason: a
-    /// process on localhost talking to its own helper.
+    /// to its `ClientApp`, and for the same reason: a process on
+    /// localhost talking to its own helper.
     pub async fn connect(addr: impl Into<String>) -> Result<Self, TransportError> {
         let client = TrustedReferenceClient::connect(addr.into()).await?;
         Ok(Self { client })

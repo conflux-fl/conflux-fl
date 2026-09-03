@@ -103,7 +103,10 @@ impl NodeAllowlist for RedisNodeAllowlist {
             .query_async(&mut conn)
             .await
             .map_err(|e| NodeAuthError::Backend(e.to_string()))?;
-        Ok(stored.as_deref().and_then(decode).as_ref() == Some(presented))
+        Ok(stored
+            .as_deref()
+            .and_then(decode)
+            .is_some_and(|stored| stored.matches(presented)))
     }
 
     async fn list(&self) -> Result<Vec<ClientId>, NodeAuthError> {
@@ -121,12 +124,13 @@ impl NodeAllowlist for RedisNodeAllowlist {
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     /// This test module's backend URL, overridable from the environment so
     /// CI can point at its own service containers. See `.env.example`.
     fn test_backend_url(var: &str, default: &str) -> String {
         std::env::var(var).unwrap_or_else(|_| default.to_string())
     }
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// `docker run -d --name conflux-dev-redis -p 16379:6379 redis:7-alpine`
     fn test_redis_url() -> String {

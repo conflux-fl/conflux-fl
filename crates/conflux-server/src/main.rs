@@ -1,52 +1,35 @@
 //! Server binary — integrates the library crates into the round pipeline.
 //!
-//! See the v1 specification §8, §10. CLI/experiment-file
-//! parsing into `conflux-config::Overrides` isn't built yet (spec §11 Open
-//! Item 2) — topology/mode are picked from `CONFLUX_TOPOLOGY`/`CONFLUX_MODE`
-//! env vars for now.
+//! Configuration arrives three ways: topology/mode from
+//! `CONFLUX_TOPOLOGY`/`CONFLUX_MODE` (a builtin name or a profile file
+//! under `CONFLUX_PROFILE_DIR`), an optional experiment file via
+//! `CONFLUX_EXPERIMENT_CONFIG_PATH`, and per-parameter `CONFLUX_*` env
+//! vars (`overrides_from_env` below). There is no CLI-flag tier yet.
 //!
-//! Backend selection is env-var driven too, deliberately kept
-//! separate from `conflux-config`'s `Overrides` — see
-//! its phase brief's scope note: a Redis URL is
-//! a deployment detail, not an experiment-tuning parameter.
+//! Backend selection is env-var driven too, deliberately kept separate
+//! from `conflux-config`'s `Overrides`: a Redis URL is a deployment
+//! detail, not an experiment-tuning parameter.
 //!
-//! Node auth needs no separate wiring here: `require_node_auth`
-//! is a regular `conflux-config` parameter (already covered by the
+//! Node auth needs no separate wiring here: `require_node_auth` is a
+//! regular `conflux-config` parameter (already covered by the
 //! provenance-log loop below), and `AppState::connect` derives the
-//! allow-list backend from `CONFLUX_REGISTRY_BACKEND` itself — see
-//! its phase brief's scope note on why
-//! that's one fewer env var rather than a fully independent backend axis.
+//! allow-list backend from `CONFLUX_REGISTRY_BACKEND` itself — one fewer
+//! env var rather than a fully independent backend axis.
 //!
-//! `overrides_from_env` (below) closes part of the gap flagged in
-//! the STATUS record's "Next" section after the manual
-//! verification needed a throwaway example binary to select a
-//! non-default aggregator: `CONFLUX_AGGREGATOR`/`CONFLUX_SELECTOR`/
-//! `CONFLUX_PRIVACY_MECHANISM`/`CONFLUX_ROBUST_BYZANTINE_FRACTION`, plus
-//! `CONFLUX_QUORUM`/`CONFLUX_ROUND_TIMEOUT_SECS`/`CONFLUX_CLIP_NORM`/
-//! `CONFLUX_NOISE_MULTIPLIER`/`CONFLUX_MIN_REPUTATION_SCORE` (needed to
-//! run `docs/E2E_TESTING.md`'s harness without code changes — the last
-//! one specifically to isolate `robust`-family aggregation defenses from
-//! `conflux-reputation`'s own, separately-vulnerable filtering stage;
-//! see that doc's "A real finding" section). A focused, demo-motivated
-//! expansion, not full config-file parsing — spec §11 Open Item 2 stays
-//! open for the remaining `Overrides` fields.
+//! `CONFLUX_GRPC_ADDR`/`CONFLUX_HTTP_ADDR` (below) exist because both
+//! listeners default to `127.0.0.1`, which is unreachable from a separate
+//! container (e.g. a FastAPI/Django backend calling the HTTP admin API
+//! from its own container) unless it shares this process's network
+//! namespace — see `https://confluxfl.dev/guides/web-app-integration/`.
+//! Defaults stay loopback-only; binding the admin API wider requires
+//! `CONFLUX_ADMIN_TOKEN`, enforced at startup.
 //!
-//! `CONFLUX_GRPC_ADDR`/`CONFLUX_HTTP_ADDR` (below) close a gap
-//! `https://confluxfl.dev/guides/web-app-integration/` surfaced: both listeners were hardcoded
-//! to `127.0.0.1`, which is unreachable from a separate container (e.g. a
-//! FastAPI/Django backend calling the HTTP admin API from its own
-//! container) unless it shares this process's network namespace. Defaults
-//! stay loopback-only — the admin API has no auth of its own, so binding
-//! wider is an explicit opt-in, not a new default.
-//!
-//! `CONFLUX_REPUTATION_FILTER_ENABLED`: reputation filtering
-//! is opt-in, defaulting to `false` — `conflux-reputation`'s
-//! `CosineScorer`, applied unconditionally in front of every aggregator,
-//! was itself the bug the "real finding" above documents: no cited paper
-//! (Krum, Trimmed Mean, Median, ...) asks for an extra uncited filter
-//! ahead of it.
-//! `CONFLUX_MIN_REPUTATION_SCORE` still controls the threshold used
-//! *when* this is explicitly turned on.
+//! `CONFLUX_REPUTATION_FILTER_ENABLED`: reputation filtering is opt-in,
+//! defaulting to `false`. A `CosineScorer` applied unconditionally in
+//! front of every aggregator would be an uncited filter no paper (Krum,
+//! Trimmed Mean, Median, ...) asks for, and would mask the aggregator's
+//! own behavior. `CONFLUX_MIN_REPUTATION_SCORE` controls the threshold
+//! used *when* it is turned on.
 
 use conflux_net::jwt::JwtKeyMaterial;
 use std::net::SocketAddr;
@@ -68,11 +51,10 @@ async fn main() {
 
     // Topology and mode select either a builtin or a profile file from
     // CONFLUX_PROFILE_DIR (`<name>.toml`, extending a base via
-    // `inherits` — spec §4.1). Unset falls back to the builtins the
-    // defaults have always been; a name that matches *nothing* is now a
-    // startup error naming what exists, where it used to silently
-    // become `cross_device` — a typo like `cros_silo` produced a
-    // correctly-logged, wrong deployment.
+    // `inherits`). Unset falls back to the builtins; a name that matches
+    // *nothing* is a startup error naming what exists, never a silent
+    // fallback to `cross_device` — a typo like `cros_silo` would
+    // otherwise produce a correctly-logged, wrong deployment.
     let profile_dir =
         std::env::var("CONFLUX_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
     let profile_dir = std::path::Path::new(&profile_dir);
@@ -117,9 +99,8 @@ async fn main() {
     // still production everywhere strictness is decided.
     let mode = mode_profile.base;
 
-    // an optional experiment-level config file. Unset behaves
-    // exactly as before — `None` into the tier that has always been
-    // there. Set, it is a hard failure if unreadable: an operator who
+    // An optional experiment-level config file. Unset means `None` into
+    // the file tier. Set, it is a hard failure if unreadable: an operator who
     // named a config file meant it, and silently continuing with
     // defaults would produce a run whose logged provenance is correct
     // and whose configuration is not what anyone asked for.
@@ -142,8 +123,8 @@ async fn main() {
     )
     .expect("config resolution failed");
 
-    // ADR 0007: every resolved parameter is logged before the server is
-    // "ready".
+    // Every resolved parameter is logged, with its source, before the
+    // server is "ready".
     for line in config.to_log_lines(config.config_log_format.value) {
         println!("{line}");
     }
@@ -168,7 +149,7 @@ async fn main() {
         );
     }
 
-    // makes the just-logged `auth` value real — `mode =
+    // Makes the just-logged `auth` value real — `mode =
     // production` with `auth = mtls` and no TLS material refuses to
     // start here (`resolve_server_tls`'s own fail-fast), rather than
     // silently binding a plaintext gRPC server for a topology whose
@@ -184,9 +165,9 @@ async fn main() {
     }
 
     // `CONFLUX_INITIAL_WEIGHTS_DIM`: the real model this deployment trains
-    // dictates this, not Conflux (ADR 0004 — a flat f32 vector is all
-    // Conflux ever sees) — e.g. `docs/E2E_TESTING.md`'s harness sets this
-    // to its logistic-regression model's actual parameter count. Every
+    // dictates this, not Conflux (a flat f32 vector is all Conflux ever
+    // sees) — e.g. the e2e harnesses set this to their model's actual
+    // parameter count. Every
     // client's submitted weights must match this dimension or
     // `AggregatorError::MismatchedLength` rejects the round.
     let initial_weights_dim: usize = std::env::var("CONFLUX_INITIAL_WEIGHTS_DIM")
@@ -196,7 +177,7 @@ async fn main() {
                 .expect("CONFLUX_INITIAL_WEIGHTS_DIM must be a positive integer")
         })
         .unwrap_or(4);
-    // the `auth = jwt` counterpart to the mTLS check above.
+    // The `auth = jwt` counterpart to the mTLS check above.
     // Loaded and validated *before* binding, so a production JWT
     // deployment with no key to verify against never starts — the same
     // fail-fast discipline, for the other three topologies' default
@@ -219,8 +200,8 @@ async fn main() {
             );
         }
         // A key supplied under `auth = mtls` is configuration that does
-        // nothing. Said out loud rather than ignored (ADR 0007): the
-        // operator plainly intended it to be used.
+        // nothing. Said out loud rather than ignored: the operator
+        // plainly intended it to be used.
         (Some(_), _) => tracing::warn!(
             "CONFLUX_JWT_PUBLIC_KEY_PATH is set but auth resolved to mtls; \
              no token will be verified"
@@ -228,11 +209,11 @@ async fn main() {
         (None, _) => {}
     }
 
-    // ADR 0007's "say so, out loud" applied to a default that is
-    // actively dangerous. `clip_radius` has a builtin fallback so the
-    // config layer has something to resolve, but there is no value that
-    // is right for an unknown model — and the placeholder measured
-    // *worse than no defense at all* on a real one (§5.13). An operator
+    // "Say so, out loud" applied to a default that is actively
+    // dangerous. `clip_radius` has a builtin fallback so the config
+    // layer has something to resolve, but there is no value that is
+    // right for an unknown model — and the placeholder measured *worse
+    // than no defense at all* on a real one. An operator
     // who selected this aggregator and never set the radius has almost
     // certainly not made a choice; say so before serving a round.
     if config.aggregator.value == "centered_clipping"
@@ -254,7 +235,7 @@ async fn main() {
         .expect("backend connection failed")
         .with_jwt_key(jwt_key);
 
-    // ADR 0011: connect to the trusted-reference sidecar, but only if the
+    // Connect to the trusted-reference sidecar, but only if the
     // configured aggregator actually needs one. Asking the aggregator
     // rather than checking whether the env var is set keeps the two
     // failure directions symmetric — a sidecar configured for `fedavg` is
@@ -308,8 +289,8 @@ async fn main() {
     }
 
     // One `watch` channel, three consumers: the two servers stop accepting
-    // work, and the round loop finishes the round it is in and then exits
-    // (Tier 5, H3). `watch` rather than `broadcast` because the value is a
+    // work, and the round loop finishes the round it is in and then exits.
+    // `watch` rather than `broadcast` because the value is a
     // latch — a late subscriber must still see that shutdown was requested,
     // which a missed broadcast message would not give it.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -373,8 +354,7 @@ async fn main() {
             // Checked between rounds, never during one. `run_round` is
             // awaited as a unit below, so a shutdown that arrives mid-round
             // waits for that round to finish rather than abandoning
-            // buffered submissions and a half-written checkpoint (Tier 5,
-            // H3).
+            // buffered submissions and a half-written checkpoint.
             if *round_shutdown.borrow() {
                 tracing::info!("shutdown requested; round loop exiting between rounds");
                 health.record_stopped(None);
@@ -386,11 +366,11 @@ async fn main() {
                     tracing::info!(?summary, "round completed");
                     health.record_success(summary.round);
                 }
-                // Tier 5 (H2). This used to `break` on everything but
-                // `EmptyBatch`, so one Redis reconnect ended the
-                // experiment permanently while the process stayed up.
-                // `is_transient` draws the line — see `ServerError` for
-                // why it falls where it does.
+                // Retryable errors back off rather than ending the
+                // experiment: a `break` here would let one Redis
+                // reconnect end the run permanently while the process
+                // stayed up. `is_transient` draws the line — see
+                // `ServerError` for why it falls where it does.
                 Err(e) if e.is_transient() => {
                     let failures = health.record_transient_failure(&e.to_string());
                     let delay = conflux_server::backoff_secs(failures);
@@ -441,12 +421,11 @@ async fn main() {
 /// Resolves when the process is asked to stop: Ctrl-C on any platform, or
 /// `SIGTERM` on Unix.
 ///
-/// `SIGTERM` is the one that matters in production and the one that was
-/// missing (Tier 5, H3) — it is what `docker stop`, a Kubernetes eviction,
-/// and systemd all send first, with `SIGKILL` following after a grace
-/// period. Without a handler the default disposition terminates the process
-/// immediately, so the grace period was being spent doing nothing and the
-/// round in flight was lost either way.
+/// `SIGTERM` is the one that matters in production — it is what
+/// `docker stop`, a Kubernetes eviction, and systemd all send first, with
+/// `SIGKILL` following after a grace period. Without a handler the
+/// default disposition terminates the process immediately, so the grace
+/// period would be spent doing nothing and the round in flight lost.
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -605,7 +584,7 @@ fn jwt_key_from_env() -> Option<JwtKeyMaterial> {
 }
 
 /// Connects to the trusted-reference sidecar and verifies it can serve
-/// the configured aggregator (ADR 0011).
+/// the configured aggregator.
 ///
 /// Panics on every failure, deliberately, and in the same register as
 /// `validate_production_backends` and `allow_stub_client`: a server that
@@ -620,7 +599,7 @@ fn jwt_key_from_env() -> Option<JwtKeyMaterial> {
 async fn connect_trusted_reference(state: AppState, initial_weights_dim: usize) -> AppState {
     let addr = std::env::var("CONFLUX_TRUSTED_REFERENCE_ADDR").unwrap_or_else(|_| {
         panic!(
-            "aggregator = {:?} requires a trusted-reference sidecar (ADR 0011), but \
+            "aggregator = {:?} requires a trusted-reference sidecar, but \
              CONFLUX_TRUSTED_REFERENCE_ADDR is not set. Start one — \
              `cargo run -p conflux-trusted-reference` — or choose an aggregator that \
              scores from the batch alone.",

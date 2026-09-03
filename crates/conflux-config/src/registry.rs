@@ -7,17 +7,18 @@
 //! collect these into a central list by hand.
 //!
 //! `conflux-core`, `conflux-selector`, and `conflux-privacy` each submit
-//! one entry per algorithm they ship — `conflux-core` alone currently
-//! registers every member of its `averaging` and `robust` aggregator
-//! families this way. Each of those crates also calls [`lookup`]
+//! one entry per algorithm they ship — `conflux-core` alone registers
+//! every member of all five of its aggregator families this way. Each
+//! of those crates also calls [`lookup`]
 //! themselves, in their own "construct the implementation for this
 //! configured name" dispatch function, to check a name against every
 //! entry submitted anywhere in the final binary before building the
 //! corresponding implementation.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Which family a registered strategy belongs to. The three families
-/// spec §5 defines.
+/// Which kind of strategy a registered entry is — the three kinds
+/// configuration selects by name (`aggregator`, `selector`,
+/// `privacy_mechanism`).
 pub enum StrategyKind {
     /// `conflux-core`'s aggregation methods.
     Aggregator,
@@ -38,10 +39,11 @@ pub struct StrategyEntry {
     pub kind: StrategyKind,
     /// The name configuration selects it by, e.g. `"fedavg"`.
     pub name: &'static str,
-    /// The published work this implements — the ADR 0008 discipline as
-    /// a registry field rather than a review-time convention. A test
-    /// asserts it is never empty for a real entry, so "add a method
-    /// without saying what paper it is" no longer compiles past CI.
+    /// The published work this implements — the cite-the-paper
+    /// discipline as a registry field rather than a review-time
+    /// convention. A test asserts it is never empty for a real entry, so
+    /// "add a method without saying what paper it is" does not get past
+    /// CI.
     pub citation: &'static str,
     /// The family the implementation belongs to (`averaging`, `robust`,
     /// `temporal`, `trusted`, `optimization` for aggregators; the kind's
@@ -79,9 +81,8 @@ pub fn entries(kind: StrategyKind) -> Vec<&'static StrategyEntry> {
 ///
 /// Exists so an error message can list what *is* available without
 /// hardcoding it. A hand-maintained list in an error string drifts
-/// silently — this crate shipped one that named twelve aggregators while
-/// twenty-one were registered, because nine methods landed after it was
-/// written and nothing connected the two.
+/// silently as methods land; one derived from the same `submit!` sites
+/// that make a name buildable cannot.
 pub fn registered_names(kind: StrategyKind) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = inventory::iter::<StrategyEntry>()
         .filter(|entry| entry.kind == kind)

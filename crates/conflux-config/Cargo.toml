@@ -10,8 +10,8 @@ edition.workspace = true
 [dependencies]
 thiserror.workspace = true
 inventory.workspace = true
-# Phase 20: experiment-level config files. `Overrides`' fields were
-# already all `Option<T>` — exactly what a partial TOML file needs — so
-# this is a derive plus a reader, not a change to how resolution works.
+# Experiment-level config files and TOML profiles. `Overrides`' fields
+# are all `Option<T>` — exactly what a partial TOML file needs — so this
+# is a derive plus a reader, not a change to how resolution works.
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true

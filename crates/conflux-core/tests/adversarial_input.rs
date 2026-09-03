@@ -31,23 +31,16 @@
 use conflux_core::{AggregatorError, AggregatorParams, build_aggregator};
 use conflux_proto::{ClientDelta, encode_weights};
 
-/// Every name in `build_aggregator`'s catalog. Deliberately spelled out
-/// rather than derived, so adding a method to the catalog without adding
-/// it here is a visible omission in a diff.
-const ALL_AGGREGATORS: &[&str] = &[
-    "fedavg",
-    "krum",
-    "multi_krum",
-    "trimmed_mean",
-    "median",
-    "faba",
-    "bulyan",
-    "geometric_median",
-    "median_of_means",
-    "divide_and_conquer",
-    "foolsgold",
-    "centered_clipping",
-];
+/// Every name in `build_aggregator`'s catalog, read from the strategy
+/// registry — the same source `build_aggregator` checks against — so a
+/// method cannot join the catalog without joining this suite.
+fn all_aggregators() -> Vec<&'static str> {
+    // Force the lib to link so its `inventory::submit!` entries exist.
+    let _ = build_aggregator;
+    let names = conflux_config::registered_names(conflux_config::StrategyKind::Aggregator);
+    assert!(names.len() >= 22, "registry lost entries: {names:?}");
+    names
+}
 
 fn delta(client_id: &str, weights: &[f32], num_samples: u64) -> ClientDelta {
     ClientDelta {
@@ -93,7 +86,7 @@ fn assert_survives(name: &str, updates: &[ClientDelta], scenario: &str) {
 
 #[test]
 fn no_aggregator_panics_or_emits_nan_when_a_client_submits_nan() {
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         assert_survives(
             name,
             &batch_with(delta("hostile", &[f32::NAN, f32::NAN, f32::NAN], 10)),
@@ -104,7 +97,7 @@ fn no_aggregator_panics_or_emits_nan_when_a_client_submits_nan() {
 
 #[test]
 fn no_aggregator_panics_or_emits_nan_when_a_client_submits_infinity() {
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         assert_survives(
             name,
             &batch_with(delta("hostile", &[f32::INFINITY; 3], 10)),
@@ -122,7 +115,7 @@ fn no_aggregator_panics_or_emits_nan_when_a_client_submits_infinity() {
 fn a_single_nan_coordinate_is_caught_not_just_an_all_nan_vector() {
     // The realistic shape: one exploded parameter in an otherwise
     // ordinary update, which is what a diverging real client produces.
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         assert_survives(
             name,
             &batch_with(delta("hostile", &[1.0, f32::NAN, 1.0], 10)),
@@ -155,7 +148,7 @@ fn no_aggregator_is_captured_by_an_impossible_sample_count() {
     // the liar's own submission, with every honest client numerically
     // erased.
     let hostile = delta("liar", &[99.0, 99.0, 99.0], u64::MAX);
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         let aggregator = build_aggregator(name, AggregatorParams::default()).unwrap();
         match aggregator.aggregate(&batch_with(hostile.clone())) {
             Err(_) => { /* rejected */ }
@@ -211,7 +204,7 @@ fn zero_sample_counts_do_not_crash_any_aggregator() {
     // A client that trained on an empty shard. `fedavg` should weight it
     // at zero; nothing should divide by zero. An all-zero batch is the
     // degenerate case, and `ZeroWeightSum` is the right answer to it.
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         assert_survives(
             name,
             &batch_with(delta("empty-shard", &[1.0; 3], 0)),
@@ -234,7 +227,7 @@ fn extreme_but_finite_magnitudes_do_not_produce_infinities() {
     // Just inside f32's range. The risk is intermediate overflow: a sum
     // of squares in a distance calculation reaches infinity long before
     // the inputs do.
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         assert_survives(
             name,
             &batch_with(delta("huge", &[f32::MAX, f32::MAX, f32::MAX], 10)),
@@ -250,7 +243,7 @@ fn extreme_but_finite_magnitudes_do_not_produce_infinities() {
 
 #[test]
 fn degenerate_batch_shapes_do_not_panic() {
-    for &name in ALL_AGGREGATORS {
+    for name in all_aggregators() {
         let aggregator = build_aggregator(name, AggregatorParams::default()).unwrap();
 
         // Empty batch: every method must say EmptyBatch, not panic.

@@ -5,9 +5,10 @@
 //! `FlTransport` is used over two different connections with the exact
 //! same schema: the real network hop between `conflux-server` and
 //! `conflux-node`, and a local loopback hop (no TLS, localhost only)
-//! between `conflux-node` and the Python `ClientApp` it launches. Same
-//! message types, same codec, both times — a client's trained update is
-//! never re-serialized into a different shape between the two hops.
+//! between `conflux-node` and the `ClientApp` that connects to it —
+//! Python (PyTorch) or Rust (`conflux-client`). Same message types, same
+//! codec, both times — a client's trained update is never re-serialized
+//! into a different shape between the two hops.
 //!
 //! It exposes five RPCs: `Register` and `Heartbeat` (client lifecycle),
 //! `FetchTask`/`SubscribeTasks` (pull vs. push mode — a client either
@@ -40,10 +41,10 @@
 //! // What a client actually submits. `weights` is the encoded buffer;
 //! // `num_samples` is self-reported and unauthenticated, which is why
 //! // aggregators bound it rather than trusting it.
-//! // `..Default::default()` rather than naming every field: ADR 0012
-//! // added two optional ones (`local_steps`, `control_variate`) and more
-//! // may follow, so a literal that spells out only what it cares about
-//! // keeps compiling when the schema grows.
+//! // `..Default::default()` rather than naming every field: the schema
+//! // carries optional per-method fields (`local_steps`, `local_loss`,
+//! // `control_variate`) and more may follow, so a literal that spells
+//! // out only what it cares about keeps compiling when the schema grows.
 //! let delta = ClientDelta {
 //!     client_id: "node-1".to_string(),
 //!     round: 7,
@@ -130,18 +131,17 @@ pub fn encode_weights(weights: &[f32]) -> Vec<u8> {
 /// assert!(decode_weights(&[0x00, 0x01, 0x02]).is_err());
 /// ```
 pub fn decode_weights(bytes: &[u8]) -> Result<Vec<f32>, WeightsCodecError> {
-    // `is_multiple_of` is stable since 1.87. This was written as
-    // `% 4 != 0` while the crate claimed an MSRV of 1.85 — a claim that
-    // turned out to be false, since `tonic` alone requires 1.88. With
-    // the MSRV corrected, `clippy::manual_is_multiple_of` fires on the
-    // old form, which is the toolchain noticing the constraint is gone.
+    // `is_multiple_of` (stable since 1.87, inside this crate's MSRV of
+    // 1.88) rather than `% 4 != 0`: it says what is being checked, and
+    // clippy's `manual_is_multiple_of` flags the modulo form.
     if !bytes.len().is_multiple_of(4) {
         return Err(WeightsCodecError::Malformed { len: bytes.len() });
     }
     // `as_chunks::<4>()` over `chunks_exact(4)`: the length is already a
     // multiple of 4 (checked above), so the remainder `.1` is empty, and
     // each chunk is a `&[u8; 4]` that drops straight into `from_le_bytes`
-    // without re-indexing. (clippy::chunks_exact_to_as_chunks, new in 1.98.)
+    // without re-indexing (clippy's `chunks_exact_to_as_chunks` asks for
+    // exactly this form).
     Ok(bytes
         .as_chunks::<4>()
         .0

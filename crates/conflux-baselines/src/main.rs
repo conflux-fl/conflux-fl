@@ -392,7 +392,7 @@ fn cmd_run(args: &[String]) {
             }
         }
         None => {
-            eprintln!("✗ {name}: harness produced no `{METRIC}` (see its logs)");
+            eprintln!("✗ {name}: harness produced no `{METRIC}` (its stderr tail is above)");
             exit(EXIT_FAIL);
         }
     }
@@ -582,7 +582,7 @@ fn drive_python(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
             eprintln!("failed to launch harness: {err}");
             exit(EXIT_FAIL);
         });
-    parse_last_metric(&String::from_utf8_lossy(&output.stdout))
+    harness_result("the Python harness", &output)
 }
 
 fn drive_rust(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
@@ -614,7 +614,37 @@ fn drive_rust(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
             eprintln!("failed to launch the Burn example: {err}");
             exit(EXIT_FAIL);
         });
-    parse_last_metric(&String::from_utf8_lossy(&output.stdout))
+    harness_result("the Burn example", &output)
+}
+
+/// How much of a failed harness's stderr to show. Enough for a Python
+/// traceback or a cargo error; not the whole build log.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// A harness run counts only if it exited cleanly *and* printed the
+/// metric: a harness that crashed after printing a partial result must
+/// not pass as a reproduction. `.output()` captures the child's stderr,
+/// so on any failure its tail is forwarded here — otherwise the user
+/// would be told to look at logs that were never shown.
+fn harness_result(what: &str, output: &std::process::Output) -> Option<f64> {
+    let metric = parse_last_metric(&String::from_utf8_lossy(&output.stdout));
+    if output.status.success() && metric.is_some() {
+        return metric;
+    }
+    if !output.status.success() {
+        eprintln!("  {what} exited with {}", output.status);
+    } else {
+        eprintln!("  {what} exited cleanly but never printed `{METRIC}=`");
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let tail: Vec<&str> = stderr.lines().rev().take(STDERR_TAIL_LINES).collect();
+    if !tail.is_empty() {
+        eprintln!("  last {} line(s) of its stderr:", tail.len());
+        for line in tail.iter().rev() {
+            eprintln!("    {line}");
+        }
+    }
+    None
 }
 
 /// Both edges print `... held_out_accuracy=<number> ...`; the last one is
@@ -635,4 +665,94 @@ fn parse_last_metric(s: &str) -> Option<f64> {
         }
     }
     last
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_last_metric_on_the_output_wins() {
+        let out = "round 1 held_out_accuracy=0.51 x\nround 2 held_out_accuracy=0.884 done\n";
+        assert_eq!(parse_last_metric(out), Some(0.884));
+    }
+
+    #[test]
+    fn a_line_without_the_metric_yields_nothing() {
+        assert_eq!(
+            parse_last_metric("training…\nheld_out_accuracy=oops\n"),
+            None
+        );
+        assert_eq!(parse_last_metric(""), None);
+    }
+
+    #[cfg(unix)]
+    mod with_exit_status {
+        use super::*;
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{ExitStatus, Output};
+
+        fn output(code: i32, stdout: &str, stderr: &str) -> Output {
+            Output {
+                // `from_raw` takes the raw wait status; a normal exit
+                // stores the code in the high byte.
+                status: ExitStatus::from_raw(code << 8),
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: stderr.as_bytes().to_vec(),
+            }
+        }
+
+        #[test]
+        fn a_clean_exit_with_a_metric_is_the_metric() {
+            let out = output(0, "held_out_accuracy=0.97\n", "");
+            assert_eq!(harness_result("t", &out), Some(0.97));
+        }
+
+        #[test]
+        fn a_crash_after_printing_a_metric_does_not_count() {
+            let out = output(1, "held_out_accuracy=0.97\n", "Traceback: boom\n");
+            assert_eq!(harness_result("t", &out), None);
+        }
+
+        #[test]
+        fn a_clean_exit_without_a_metric_does_not_count() {
+            let out = output(0, "nothing here\n", "");
+            assert_eq!(harness_result("t", &out), None);
+        }
+    }
+}
+
+/// The strategy registry's own contract, checked from the one place that
+/// links every family crate: a method that does not say which paper it
+/// implements must not reach the catalog. (`conflux-config` cannot check
+/// this itself — the entries are registered by the family crates above it.)
+#[cfg(test)]
+mod registry_contract {
+    use super::*;
+
+    #[test]
+    fn every_registered_strategy_cites_its_paper() {
+        // Same force-link as `main`: the `inventory` statics live in the
+        // family crates and are dead-stripped unless something references
+        // them.
+        let _ = conflux_core::build_aggregator;
+        let _ = conflux_selector::build_selector;
+        let _ = conflux_privacy::build_privacy_mechanism;
+
+        for kind in [
+            StrategyKind::Aggregator,
+            StrategyKind::Selector,
+            StrategyKind::PrivacyMechanism,
+        ] {
+            let all = entries(kind);
+            assert!(!all.is_empty(), "{kind:?}: nothing registered");
+            for entry in all {
+                assert!(
+                    !entry.citation.trim().is_empty(),
+                    "{kind:?} strategy {:?} has no citation",
+                    entry.name
+                );
+            }
+        }
+    }
 }

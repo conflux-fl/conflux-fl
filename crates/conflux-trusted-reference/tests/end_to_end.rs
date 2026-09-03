@@ -1,16 +1,15 @@
-//! The whole ADR 0011 boundary, end to end, over a real gRPC hop.
+//! The whole sidecar boundary, end to end, over a real gRPC hop.
 //!
 //! A real sidecar process-equivalent (the real service, on a real port),
 //! the real `conflux-net` client `conflux-server` would use, and a real
 //! `FlTrustAggregator` consuming what comes back. Nothing is mocked; the
 //! only thing unrealistic is that both ends are in one process.
 //!
-//! This test lives here rather than in `conflux-server` on purpose. ADR
-//! 0011, following ADR 0010's precedent, requires that `conflux-server`
-//! never depend on this crate at any depth — including through a
-//! dev-dependency, since that is still an edge in the dependency graph.
-//! Testing from this side proves the hop works and leaves that graph
-//! untouched.
+//! This test lives here rather than in `conflux-server` on purpose:
+//! `conflux-server` must never depend on this crate at any depth —
+//! including through a dev-dependency, since that is still an edge in
+//! the dependency graph. Testing from this side proves the hop works and
+//! leaves that graph untouched.
 
 use std::sync::Arc;
 
@@ -208,17 +207,8 @@ async fn a_stale_round_from_the_sidecar_is_caught_not_used() {
     // A reference from the wrong round is a well-formed vector of the
     // right length. Using it would weaken the defense silently rather
     // than fail, which is why the client checks the echoed round.
-    struct WrongRound;
-    impl TrustedModel for WrongRound {
-        fn train_reference(&self, g: &[f32]) -> Vec<f32> {
-            g.to_vec()
-        }
-        fn score(&self, _g: &[f32], _c: &[f32]) -> f32 {
-            0.0
-        }
-    }
-
-    // A service that echoes a fixed round, simulating a lagging sidecar.
+    //
+    // A service that echoes a stale round, simulating a lagging sidecar.
     use conflux_proto::trusted_reference_server::TrustedReference as TrustedReferenceRpc;
     use conflux_proto::{
         DescribeRequest, DescribeResponse, ReferenceRequest, ReferenceUpdate, ScoreRequest,
@@ -256,7 +246,6 @@ async fn a_stale_round_from_the_sidecar_is_caught_not_used() {
             Ok(Response::new(DescribeResponse::default()))
         }
     }
-    let _ = WrongRound;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -299,8 +288,8 @@ async fn the_full_path_a_real_round_would_take() {
         .unwrap();
     let reference_weights = decode_weights(&reference_bytes).unwrap();
 
-    // 2. It injects it (ADR 0012's interior-mutability pattern — the
-    //    aggregator is behind an Arc and `aggregate` takes `&self`).
+    // 2. It injects it (the aggregator's interior-mutability pattern —
+    //    it is behind an Arc and `aggregate` takes `&self`).
     let aggregator = Arc::new(FlTrustAggregator::new());
     aggregator.set_reference(TrustedReference {
         global_weights: global.clone(),

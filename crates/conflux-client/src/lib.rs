@@ -1,9 +1,8 @@
 //! A Rust-native `ClientApp` — training with no Python hop.
 //!
-//! This is the spike phase 23
-//! proposed: the same contract `python/conflux_client/app.py` offers,
-//! expressed in Rust, to find out whether the architecture holds when
-//! the client is not Python.
+//! The same contract `python/conflux_client/app.py` offers, expressed in
+//! Rust, so the architecture is exercised with a client that is not
+//! Python.
 //!
 //! It is deliberately **not** a replacement for the Python SDK.
 //! Researchers want PyTorch and every end-to-end harness is PyTorch.
@@ -13,35 +12,33 @@
 //!
 //! # Why this matters beyond taste
 //!
-//! ADR 0005 defers three questions. A Rust client does not answer two of
-//! them so much as dissolve them:
+//! Two questions a Python client leaves open, a Rust client does not
+//! answer so much as dissolve:
 //!
-//! | ADR 0005 asks | Python | Rust |
+//! | Question | Python | Rust |
 //! |---|---|---|
 //! | how does the client learn the model architecture? | an import path, or a serialized model over a new proto field | **compiled in** — there is no handoff |
 //! | how does a participant *get* the client? | pip / container / something that pushes it | **one static binary** |
 //!
-//! The second is the question ADR 0005 calls "most clearly outside this
-//! codebase's boundary". For `crowdsource` and `edge` — participants who
+//! The second is the one most clearly outside this codebase's boundary.
+//! For `crowdsource` and `edge` — participants who
 //! are not pre-provisioned machines — shipping a binary is a
 //! categorically smaller problem than provisioning a Python environment.
 //!
 //! # What this does not decide
 //!
-//! **Which ML framework.** The bundled example hand-rolls logistic
-//! regression, exactly as `e2e_numpy_logreg` does on the Python side —
-//! full-batch gradient descent over a flat weight vector, no framework
-//! at all. That is the right shape for a spike: it tests the
-//! *architecture* (does the loop close, does the wire format fit, can a
-//! client be a single binary) without committing the workspace to a
-//! pre-1.0 dependency.
-//!
-//! Anything with hidden layers wants a real framework —
-//! [Burn](https://github.com/tracel-ai/burn) is the credible candidate,
-//! being Rust-native with full autodiff and naming federated learning as
-//! a target use case. Slotting it in means implementing [`ClientApp`]
-//! against it and changing nothing here. That evaluation is deliberately
-//! separate from this crate existing.
+//! **Which ML framework.** Two bundled examples show the range. `logreg`
+//! hand-rolls logistic regression, exactly as `e2e_numpy_logreg` does on
+//! the Python side — full-batch gradient descent over a flat weight
+//! vector, no framework at all — which tests the *architecture* (does
+//! the loop close, does the wire format fit, can a client be a single
+//! binary) without committing the default build to a pre-1.0
+//! dependency. `burn_mlp` (opt-in, `--features burn`) trains a real MLP
+//! with [Burn](https://github.com/tracel-ai/burn)'s autodiff against the
+//! same trait and the same flat-weight contract, and drives the real
+//! `conflux-core` aggregators with it. Slotting in any other framework
+//! means implementing [`ClientApp`] against it and changing nothing
+//! here.
 //!
 //! # Example
 //!
@@ -157,7 +154,7 @@ impl TrainResult {
     /// Reports a control variate, for SCAFFOLD.
     ///
     /// Its length must match `weights`; the server cannot check that for
-    /// you, being opaque to model architecture (ADR 0004).
+    /// you, being opaque to model architecture.
     pub fn with_control_variate(mut self, variate: Vec<f32>) -> Self {
         self.control_variate = Some(variate);
         self
@@ -185,7 +182,7 @@ pub fn is_placeholder_init(weights: &[f32]) -> bool {
 #[derive(Debug, Clone)]
 pub struct RunConfig {
     /// **`conflux-node`'s local listener**, not the server's. That hop is
-    /// plaintext and localhost-only by design (ADR 0004): the node has
+    /// plaintext and localhost-only by design: the node has
     /// already authenticated upstream on this client's behalf.
     pub address: String,
     /// This client's identity.
@@ -219,9 +216,9 @@ impl Default for RunConfig {
 ///
 /// `&mut self` here, unlike `conflux-core`'s `Aggregator`: a client owns
 /// its model exclusively and runs one round at a time, so there is no
-/// shared-access problem to work around. ADR 0012's interior-mutability
-/// rule is about the *server* side, where one aggregator serves every
-/// round behind an `Arc`.
+/// shared-access problem to work around. The interior-mutability rule
+/// is about the *server* side, where one aggregator serves every round
+/// behind an `Arc`.
 pub trait ClientApp {
     /// Train on local data, starting from `weights`.
     ///
@@ -294,7 +291,9 @@ fn build_chunks(
         .collect()
 }
 
-/// Runs `app` for `config.rounds` rounds. Returns how many were accepted.
+/// Runs `app` for `config.rounds` rounds. Returns how many submissions
+/// the node took; whether the server *accepted* each one is reported
+/// through [`ClientApp::on_round_end`].
 pub async fn run<A: ClientApp>(app: &mut A, config: RunConfig) -> Result<usize, ClientError> {
     let mut transport = PullTransport::connect(config.address.clone()).await?;
     transport

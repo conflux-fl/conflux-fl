@@ -1,11 +1,10 @@
-//! Per-field backend selection — the hybrid design from
-//! the Flower-platform design review's follow-up: registry/store/
-//! accounting choices stay fully independent (matching how those traits
-//! have been decoupled), but `mode = production` can never
-//! silently start on a backend that still resolves to its in-memory/
-//! disabled default. `validate_production_backends` is the same
-//! fail-fast shape `allow_stub_client` already uses (spec §7) — a
-//! resolved safety posture that's actually *checked*, not just logged.
+//! Per-field backend selection: registry/store/accounting choices stay
+//! fully independent (matching how those traits are decoupled), but
+//! `mode = production` can never silently start on a backend that still
+//! resolves to its in-memory/disabled default.
+//! `validate_production_backends` is the same fail-fast shape
+//! `allow_stub_client` uses — a resolved safety posture that's actually
+//! *checked*, not just logged.
 
 use conflux_config::Mode;
 

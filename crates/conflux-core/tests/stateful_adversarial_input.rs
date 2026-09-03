@@ -3,10 +3,10 @@
 //!
 //! `tests/adversarial_input.rs` builds a fresh aggregator for every
 //! assertion and hands it exactly one batch. That is the right shape for
-//! the nine stateless methods, and it is blind for the four that are
-//! not: `foolsgold` and `centered_clipping` both carry
-//! state from one round into the next, behind a `Mutex` because
-//! `Aggregator::aggregate` takes `&self` (ADR 0012).
+//! the stateless methods, and it is blind for the ones that are not:
+//! `foolsgold`, `centered_clipping`, `flanders`, and the whole
+//! `optimization` family carry state from one round into the next,
+//! behind a `Mutex` because `Aggregator::aggregate` takes `&self`.
 //!
 //! `decode_and_validate` guards the *inputs*. Nothing re-validates the
 //! state derived from them. So there is a reachable sequence the
@@ -30,9 +30,46 @@ use conflux_core::{Aggregator, AggregatorParams, CenteredClippingAggregator, bui
 use conflux_proto::{ClientDelta, encode_weights};
 
 /// The catalog methods that carry state across rounds. Spelled out
-/// rather than derived, for the same reason `ALL_AGGREGATORS` is: a new
-/// stateful method that is not added here is a visible omission.
-const STATEFUL_CATALOG: &[&str] = &["foolsgold", "centered_clipping"];
+/// rather than derived, because statefulness is not a registry fact: a
+/// new stateful method that is not added here is a visible omission.
+/// (`fltrust`/`zeno` hold only per-round injected state and refuse to
+/// run without it, so they have nothing to carry between rounds.)
+const STATEFUL_CATALOG: &[&str] = &[
+    "foolsgold",
+    "centered_clipping",
+    "flanders",
+    "fedavgm",
+    "fedadagrad",
+    "fedadam",
+    "fedyogi",
+    "qfedavg",
+    "fednova",
+    "scaffold",
+];
+
+/// The stateful methods whose published update rule bounds each round's
+/// step relative to the *previous* model rather than re-centering on the
+/// batch — so after an accepted extreme round they are not expected to
+/// land back near the honest consensus in one clean round, and asserting
+/// that would assert against the method:
+///
+/// - `centered_clipping`: its fidelity note documents that round one's
+///   seed is a plain mean an attacker can drag, and clipping then holds
+///   it — "the defense compounds over rounds rather than arriving fully
+///   formed". What it must still guarantee is tested in
+///   `centered_clipping_movement_stays_bounded_by_the_clip_radius`.
+/// - `fedavgm`: momentum is the method; a huge delta lives in the buffer
+///   for many rounds by design.
+/// - `fedadagrad`/`fedadam`/`fedyogi`: the adaptive step is bounded by
+///   roughly `η` per coordinate per round, so a model dragged to `1e38`
+///   walks back one unit at a time — correct, and slow.
+const BOUNDED_STEP: &[&str] = &[
+    "centered_clipping",
+    "fedavgm",
+    "fedadagrad",
+    "fedadam",
+    "fedyogi",
+];
 
 fn delta(client_id: &str, weights: &[f32], num_samples: u64) -> ClientDelta {
     ClientDelta {
@@ -55,32 +92,22 @@ fn clean_batch() -> Vec<ClientDelta> {
 }
 
 /// The stateful aggregators expected to *recover* — a clean batch after
-/// a hostile one aggregates back near the honest consensus.
-///
-/// `centered_clipping` is deliberately excluded, and the exclusion is a
-/// statement rather than a convenience. Its fidelity note (ADR 0008)
-/// documents that `v` is seeded from round one's *plain mean*, so a
-/// round-one attacker drags the reference and clipping then holds it
-/// there — "the defense compounds over rounds rather than arriving
-/// fully formed in round one". Asserting recovery here would assert
-/// against a documented property of the published method. What it must
-/// still guarantee is tested in
-/// `centered_clipping_movement_stays_bounded_by_the_clip_radius`.
+/// a hostile one aggregates back near the honest consensus. The
+/// bounded-step methods are excluded, and the exclusion is a statement
+/// rather than a convenience — see [`BOUNDED_STEP`].
 fn recovering_aggregators() -> Vec<(String, Box<dyn Aggregator>)> {
     stateful_aggregators()
         .into_iter()
-        .filter(|(name, _)| name != "centered_clipping")
+        .filter(|(name, _)| !BOUNDED_STEP.contains(&name.as_str()))
         .collect()
 }
 
 /// Every stateful aggregator under test, as `(name, instance)`.
 ///
-/// Built by name from the catalog, unlike `adversarial_input.rs`'s
-/// single-round suite, because what is under test here is what survives
-/// *between* rounds. An out-of-tree method that keeps cross-round state
-/// is not visible to a suite that iterates catalog names, and owes
-/// itself the equivalent coverage — see the module docs above for the
-/// four defects this shape of test found.
+/// Built by name from the catalog. An out-of-tree method that keeps
+/// cross-round state is not visible to a suite that iterates catalog
+/// names, and owes itself the equivalent coverage — see the module docs
+/// above for the failure class this shape of test exists for.
 fn stateful_aggregators() -> Vec<(String, Box<dyn Aggregator>)> {
     let all: Vec<(String, Box<dyn Aggregator>)> = STATEFUL_CATALOG
         .iter()

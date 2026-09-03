@@ -47,7 +47,7 @@
 //! .unwrap();
 //!
 //! // cross_silo's topology profile sets a 600s round timeout, and says
-//! // so — this provenance is what ADR 0007 exists for.
+//! // so — the provenance is the point.
 //! assert_eq!(config.round_timeout_secs.value, 600);
 //! assert!(matches!(
 //!     config.round_timeout_secs.source,
@@ -71,7 +71,7 @@
 //! assert!(matches!(config.round_timeout_secs.source, ConfigSource::EnvVar(_)));
 //! ```
 //!
-//! The two axes own disjoint parameter sets (ADR 0001), so layering them
+//! The two axes own disjoint parameter sets, so layering them
 //! never conflicts — topology answers "what kind of participants?", mode
 //! answers "am I iterating, or deployed?":
 //!
@@ -116,14 +116,14 @@ use source::{LoggedValue, log_line};
 ///
 /// Generic over the value's type `T` so the same struct represents a
 /// resolved `bool`, `f64`, or `ConnectionMode` alike — `ResolvedConfig`
-/// below is nineteen fields of `Resolved<SomeType>`, not nineteen
+/// below is dozens of fields of `Resolved<SomeType>`, not dozens of
 /// hand-rolled "value + source" pairs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resolved<T> {
     /// The value that won.
     pub value: T,
     /// Which tier supplied it. Logged at startup, so a surprising value
-    /// can always be traced to the thing that set it (ADR 0007).
+    /// can always be traced to the thing that set it.
     pub source: ConfigSource,
 }
 
@@ -145,8 +145,8 @@ pub struct Resolved<T> {
 /// is to ignore keys it doesn't recognize, which would mean a typo —
 /// `agregator = "krum"` — parses cleanly, resolves to the default
 /// aggregator, and logs its source as a builtin fallback, with nothing
-/// anywhere reporting that the file's instruction was dropped. ADR
-/// 0007's principle is that a config value should always say where it
+/// anywhere reporting that the file's instruction was dropped. The
+/// principle here is that a config value should always say where it
 /// came from; a silently discarded key is the one case that can't. Better
 /// to refuse the file and name the key.
 #[derive(Debug, Default, Clone, serde::Deserialize)]
@@ -283,9 +283,9 @@ pub struct Overrides {
     /// Zeno's regularization weight `ρ` (Xie, Koyejo & Gupta, 2019).
     ///
     /// Builtin fallback `0.0005`, the value the paper's own experiments
-    /// use (§5). Penalizes a candidate's update magnitude in its
-    /// suspicion score, so a huge step cannot buy a good rank by
-    /// happening to help the validation batch. Read only by `zeno`.
+    /// use (Xie et al. 2019, §5). Penalizes a candidate's update
+    /// magnitude in its suspicion score, so a huge step cannot buy a good
+    /// rank by happening to help the validation batch. Read only by `zeno`.
     pub zeno_rho: Option<f32>,
     /// q-FedAvg's Lipschitz estimate `L`.
     ///
@@ -604,14 +604,14 @@ pub fn resolve(
 /// [`resolve`], but the topology and mode arrive as *profiles* — either
 /// [`TopologyProfile::builtin`]/[`ModeProfile::builtin`] (which is all
 /// `resolve` does) or something [`load_topology_profile`] read from a
-/// TOML file and merged down its `inherits` chain (spec §4.1).
+/// TOML file and merged down its `inherits` chain.
 ///
 /// The only observable difference from a builtin run is provenance:
 /// each profile-owned parameter's startup line names the link in the
 /// chain that actually set it — `topology profile "hospital_silo"` for
 /// an override the file made, `topology profile "hospital_silo →
 /// cross_silo"` for a value inherited untouched. The chain is said out
-/// loud (ADR 0007), because "which file decided this" is exactly the
+/// loud, because "which file decided this" is exactly the
 /// question a person debugging a profile is asking.
 pub fn resolve_with_profiles(
     topology: &TopologyProfile,
@@ -742,7 +742,7 @@ pub fn resolve_with_profiles(
     };
 
     // A framework safety bound, so it carries a builtin and is owned by
-    // neither axis — `None` for both topology and mode keeps ADR 0001's
+    // neither axis — `None` for both topology and mode keeps the axes'
     // disjointness intact. 256 MiB.
     let max_update_bytes = layer(
         256 * 1024 * 1024_u64,
@@ -833,7 +833,7 @@ pub fn resolve_with_profiles(
     // of the training problem, not a claim about what kind of
     // participants a deployment has (topology) or whether it is being
     // iterated on (mode) — the same reasoning `clip_radius` and
-    // `max_update_bytes` follow, keeping ADR 0001's disjointness intact.
+    // `max_update_bytes` follow, keeping the axes' disjointness intact.
     let server_learning_rate = layer(
         1.0_f32,
         None,
@@ -1750,7 +1750,7 @@ mod tests {
     }
 
     #[test]
-    fn json_log_line_matches_spec_example_shape() {
+    fn json_log_line_matches_the_documented_shape() {
         let resolved = resolve(
             Topology::CrossDevice,
             Mode::Research,
@@ -1773,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn text_log_line_matches_spec_example_shape() {
+    fn text_log_line_matches_the_documented_shape() {
         let resolved = resolve(
             Topology::CrossSilo,
             Mode::Research,

@@ -1,8 +1,8 @@
 //! `NodeBridge` — the local hop's `RoundDispatcher` implementation.
 //!
-//! Bridges the local loopback hop (Python `ClientApp` ↔ `conflux-node`) to
-//! the real network hop (`conflux-node` ↔ `conflux-server`): the same
-//! `.proto`, reused for both, per ADR 0004.
+//! Bridges the local loopback hop (`ClientApp` ↔ `conflux-node`) to the
+//! real network hop (`conflux-node` ↔ `conflux-server`): the same
+//! `.proto`, reused for both.
 //!
 //! Both of the framework's connection modes are bridged the same way — a
 //! call arriving on the local hop is forwarded upstream and its answer
@@ -67,15 +67,14 @@ enum Upstream {
 
 /// `register`/`heartbeat` on the local hop are answered here without
 /// touching the network — `conflux-node` already registered itself with
-/// the real server at startup (spec §7); the local Python side isn't a
-/// separate lifecycle entity the real server needs to track.
+/// the real server at startup; the local `ClientApp` isn't a separate
+/// lifecycle entity the real server needs to track.
 pub struct NodeBridge {
     upstream: Mutex<Upstream>,
     node_client_id: String,
-    /// local DP applied to this client's own update before it
-    /// leaves the node. `None` — the default — means the update is
-    /// forwarded byte-for-byte as the `ClientApp` produced it, which is
-    /// every pre-Phase-17 deployment's behavior exactly.
+    /// Local DP applied to this client's own update before it leaves
+    /// the node. `None` — the default — means the update is forwarded
+    /// byte-for-byte as the `ClientApp` produced it.
     ///
     /// This does not replace the server-side transform, which still runs
     /// afterwards. The two sit at different trust boundaries: this one
@@ -99,10 +98,9 @@ struct LocalPrivacy {
 }
 
 impl NodeBridge {
-    /// Pull-mode constructor. Keeps its original name (rather than
-    /// becoming `new_pull` for symmetry with [`NodeBridge::new_push`])
-    /// because pull mode's call sites predate push mode entirely and
-    /// renaming them would churn working code to no benefit.
+    /// Pull-mode constructor. `new` rather than `new_pull` (for symmetry
+    /// with [`NodeBridge::new_push`]) because pull mode is the default
+    /// posture for three of the four topologies.
     pub fn new(upstream: PullTransport, node_client_id: String) -> Self {
         Self {
             upstream: Mutex::new(Upstream::Pull(upstream)),
@@ -123,9 +121,8 @@ impl NodeBridge {
     /// Turns on the client-side privacy transform.
     ///
     /// A consuming builder for the same reason `AppState::with_jwt_key`
-    /// is one: both constructors above predate this, every existing call
-    /// site passes exactly two arguments, and an optional stage should
-    /// not become a required parameter everywhere.
+    /// is one: an optional stage should not become a required parameter
+    /// on every constructor.
     ///
     /// `seed` makes the noise sequence reproducible, matching
     /// `conflux-config`'s `seed_mode`/`seed_value` convention for
@@ -326,7 +323,7 @@ async fn relay_pushed_tasks(
             // Surface this rather than stalling silently: a node that has
             // quietly stopped receiving tasks looks identical to an idle
             // one from the outside, which is exactly the failure this
-            // reports out loud instead (ADR 0007).
+            // reports out loud instead.
             tracing::error!(
                 %client_id,
                 attempts = consecutive_failures,

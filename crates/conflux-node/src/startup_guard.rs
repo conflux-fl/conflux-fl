@@ -1,14 +1,12 @@
-//! The production stub-client guard. Closes gap 5 from
-//! the Flower-platform design review / the CLAUDE.md constraint, implemented
-//! where it architecturally belongs: `conflux-node` is the only process
-//! with a local loopback listener (ADR 0004) a Python `ClientApp`
-//! connects to — `conflux-server` never talks to Python at all, despite
-//! the spec's original wording naming it.
+//! The production stub-client guard, implemented where it
+//! architecturally belongs: `conflux-node` is the only process with a
+//! local loopback listener a `ClientApp` connects to — `conflux-server`
+//! never talks to a `ClientApp` at all.
 //!
-//! `conflux-node` has no `conflux-config` dependency (a deliberate scope decision, preserved here) — these
-//! two enums are small, locally-defined stand-ins for the one bit of
-//! `conflux-config::Mode` and one new concept this guard needs, not a
-//! reason to pull the whole crate in.
+//! `conflux-node` calls no `conflux-config` API (a deliberate scope
+//! decision) — these two enums are small, locally-defined stand-ins for
+//! the one bit of `conflux-config::Mode` and one new concept this guard
+//! needs, not a reason to pull the whole crate in.
 
 /// Mirrors `conflux-config::Mode`, but defined locally rather than
 /// depending on that crate for one enum — see the module doc comment.
@@ -23,10 +21,9 @@ pub enum RuntimeMode {
 
 /// What's actually listening on the local loopback port. `conflux-node`
 /// has no protocol-level way to verify this on its own (no handshake
-/// field carries it, and ADR 0005 defers the real Python SDK entirely) —
-/// it's an explicit operator assertion, the same way `require_node_auth`
-/// made a security posture an explicit config value rather
-/// than an implicit assumption.
+/// field carries it) — it's an explicit operator assertion, the same
+/// way `require_node_auth` makes a security posture an explicit config
+/// value rather than an implicit assumption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientAppKind {
     /// `python/conflux_client/stub_client.py` — fixed dummy weights, no
@@ -41,7 +38,7 @@ pub enum ClientAppKind {
 /// Why this node refused to start.
 pub enum StartupGuardError {
     #[error(
-        "mode = production with a stub ClientApp is refused (spec: allow_stub_client = false \
+        "mode = production with a stub ClientApp is refused (allow_stub_client = false \
          in production) — set CONFLUX_CLIENT_APP_KIND=real once a real ClientApp is wired up, \
          or CONFLUX_ALLOW_STUB_CLIENT=true to override for a deliberate production pipeline test"
     )]

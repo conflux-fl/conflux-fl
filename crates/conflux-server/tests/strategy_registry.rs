@@ -1,4 +1,4 @@
-//! proves `config.aggregator.value`/`config.selector.value`
+//! Proves `config.aggregator.value`/`config.selector.value`
 //! actually drive construction through `conflux-config`'s strategy
 //! registry — not just that the builtin defaults happen to still work.
 

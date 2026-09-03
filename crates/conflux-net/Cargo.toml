@@ -9,7 +9,7 @@ edition.workspace = true
 
 [dependencies]
 conflux-proto = { path = "../conflux-proto" }
-# tls-aws-lc, not tls-ring: conflux-store's Phase 7f S3Store (aws-sdk-s3)
+# tls-aws-lc, not tls-ring: conflux-store's S3Store (aws-sdk-s3)
 # pulls in rustls with the aws-lc-rs crypto provider; Cargo's workspace-wide
 # feature unification means a `cargo test --workspace` run would otherwise
 # link both `ring` and `aws-lc-rs` into this crate's own test binaries too,
@@ -21,15 +21,15 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 tokio-stream = { workspace = true, features = ["net"] }
 thiserror.workspace = true
 async-trait.workspace = true
-# Tier 5 (H1): the oversized-update rejection logs the client and the
-# limit it tripped, per the project's "say so, out loud" principle — the
-# same reason conflux-buffer logs quorum-vs-timeout and conflux-reputation
+# The oversized-update rejection logs the client and the limit it
+# tripped, per the project's "say so, out loud" principle — the same
+# reason conflux-buffer logs quorum-vs-timeout and conflux-reputation
 # logs every rejected update.
 tracing.workspace = true
-# Phase 8c: hashing a peer certificate's DER bytes into the fingerprint
+# Hashing a peer certificate's DER bytes into the fingerprint
 # `NodeIdentity::CertFingerprint` compares against.
 sha2.workspace = true
-# Phase 16: RS256/ES256 verification of RegisterRequest.auth_token.
+# RS256/ES256 verification of RegisterRequest.auth_token.
 # Verification only — no signing key ever lives in a Conflux process.
 # `aws_lc_rs`, not `rust_crypto`, for exactly the reason the tonic
 # comment above gives: this workspace already links aws-lc-rs (via
@@ -42,7 +42,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 rcgen.workspace = true
-# Names `Certificate::der()`'s return type in the Phase 8c fingerprint
+# Names `Certificate::der()`'s return type in the peer-fingerprint
 # test — the same `rustls-pki-types` tonic's own `tls-connect-info`
 # feature already pulls in, not a new crate to the dependency tree.
 rustls-pki-types.workspace = true

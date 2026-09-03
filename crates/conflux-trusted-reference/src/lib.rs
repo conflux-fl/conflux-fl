@@ -1,21 +1,22 @@
-//! The optional trusted-reference sidecar (ADR 0011).
+//! The optional trusted-reference sidecar: a separate process that holds
+//! the trusted root dataset FLTrust and Zeno need.
 //!
 //! FLTrust (Cao, Fang, Liu, Jia & Gong, 2021) and Zeno/Zeno++ (Xie,
 //! Koyejo & Gupta, 2019/2020) are the only two methods in Conflux's
 //! tracked landscape whose published algorithm requires the *server* to
-//! hold data and train or evaluate loss on it. ADR 0004 keeps PyTorch
+//! hold data and train or evaluate loss on it. Conflux keeps PyTorch
 //! entirely client-side and `conflux-server` opaque to model
 //! architecture — which is why the wire format is a flat `f32` array,
-//! and why neither method was implementable at all.
+//! and why neither method was implementable inside the server at all.
 //!
-//! ADR 0011 resolves that by moving the capability *out* of the server
-//! rather than into it. This crate is that separate process. The
+//! The resolution is to move the capability *out* of the server rather
+//! than into it. This crate is that separate process. The
 //! consequence worth stating plainly: **`conflux-server` does not depend
 //! on this crate, at any depth, and must not be made to.** The client
 //! the server uses lives in `conflux-net`
 //! (`conflux_net::TrustedReferenceTransport`), so the server can call a
-//! sidecar without ever linking one — the same separation ADR 0010 keeps
-//! between `conflux-server` and `conflux-attacks`.
+//! sidecar without ever linking one — the same separation the workspace
+//! keeps between `conflux-server` and `conflux-attacks`.
 //!
 //! # What this crate does and does not provide
 //!
@@ -32,7 +33,7 @@
 //! can run that architecture — an `ort`/ONNX binding, a `tch` binding,
 //! or a Python sidecar speaking the same gRPC service. That is exactly
 //! the extension this crate exists to make possible, and exactly the
-//! dependency ADR 0011 refused to put in `conflux-server`.
+//! dependency that must never be put in `conflux-server`.
 //!
 //! # Example
 //!
@@ -77,13 +78,12 @@ pub use service::{TrustedReferenceService, serve};
 /// linear implements this against whatever runtime can run it — ONNX,
 /// libtorch, a Python process — and gets FLTrust/Zeno support without
 /// `conflux-server` learning anything about model architecture, which is
-/// the entire point of ADR 0011's option 2.
+/// the entire point of running it as a separate process.
 ///
 /// Both methods take `&self`: one model serves every round, and the
 /// service holds it behind an `Arc`. A model needing to mutate state
-/// across rounds follows the same interior-mutability rule ADR 0012
-/// established for `Aggregator` — a `Mutex` field, not a `&mut self`
-/// signature.
+/// across rounds follows the same interior-mutability rule `Aggregator`
+/// uses — a `Mutex` field, not a `&mut self` signature.
 pub trait TrustedModel: Send + Sync {
     /// Train from `global_weights` on the trusted root dataset and
     /// return the resulting weights.

@@ -45,8 +45,7 @@ async fn main() {
         "\nSame clients, same submissions, one config value different.\n\
          `conflux-server` doesn't know what \"krum\" is — it asks\n\
          `conflux-core` to build whatever `config.aggregator.value`\n\
-         names, which is why adding a method never touches this crate\n\
-         (ADR 0002)."
+         names, which is why adding a method never touches this crate."
     );
 }
 

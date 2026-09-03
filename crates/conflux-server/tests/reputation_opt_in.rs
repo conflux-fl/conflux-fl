@@ -1,8 +1,7 @@
-//! proves reputation filtering is genuinely opt-in (off by
-//! default lets every aggregator behave exactly as its own paper defines
-//! it, with no framework-imposed interference) and that a non-finite
-//! submission is excluded rather than failing the whole round,
-//! regardless of the flag. See
+//! Proves reputation filtering is genuinely opt-in (off by default lets
+//! every aggregator behave exactly as its own paper defines it, with no
+//! framework-imposed interference) and that a non-finite submission is
+//! excluded rather than failing the whole round, regardless of the flag.
 
 use std::sync::Arc;
 
@@ -80,15 +79,15 @@ async fn run_five_client_round(
     state.store.load_latest_weights().await.unwrap()
 }
 
-/// The concrete regression this phase fixes: previously, `krum` +
-/// reputation-at-its-old-default collapsed to the same accuracy as
-/// undefended `fedavg` against a large-magnitude attacker, because
-/// reputation's own pre-aggregation filter rejected every honest client
-/// first (`docs/E2E_TESTING.md`'s finding 1). With reputation now off by
-/// default, Krum's own selection logic runs on the real batch and
-/// defends correctly — with zero special flags needed, unlike before.
+/// The concrete regression this guards: `krum` with a reputation filter
+/// in front of it collapses to the same accuracy as undefended `fedavg`
+/// against a large-magnitude attacker, because the filter's batch-mean
+/// reference is dragged by the attacker and every honest client gets
+/// rejected first. With reputation off by default, Krum's own selection
+/// logic runs on the real batch and defends correctly, with no special
+/// flags needed.
 #[tokio::test]
-async fn krum_defends_against_an_outlier_with_reputation_at_its_new_default() {
+async fn krum_defends_against_an_outlier_with_reputation_at_its_default() {
     let result = run_five_client_round(
         Overrides {
             aggregator: Some("krum".to_string()),
@@ -112,25 +111,21 @@ async fn krum_defends_against_an_outlier_with_reputation_at_its_new_default() {
 }
 
 /// Reputation filtering is still available, and still works, when a
-/// deployer explicitly opts into it — this isn't a removed capability,
-/// just no longer the default. Undefended `fedavg` + an attacker whose
-/// update points in the *opposite* direction from the honest majority
-/// (rather than a large-magnitude outlier — see the note below) +
-/// reputation explicitly on: since 4 of 5 clients are honest, the batch
-/// mean stays dominated by the honest direction, so the attacker's
-/// cosine similarity to it is strongly negative and gets rejected —
-/// same mechanism as before, just requiring an explicit opt-in
-/// now.
+/// deployer explicitly opts into it — it is a capability, just not the
+/// default. Undefended `fedavg` + an attacker whose update points in the
+/// *opposite* direction from the honest majority (rather than a
+/// large-magnitude outlier — see the note below) + reputation
+/// explicitly on: since 4 of 5 clients are honest, the batch mean stays
+/// dominated by the honest direction, so the attacker's cosine
+/// similarity to it is strongly negative and gets rejected.
 ///
 /// Deliberately *not* a large-magnitude attack like the outlier test
 /// above: a large-magnitude attacker dominates the raw batch mean
-/// enough to also drag honest clients' cosine scores down (finding 1,
-/// `docs/E2E_TESTING.md`) — reputation's own known weakness, which
-/// makes *avoidable* (by leaving it off) but doesn't fix for
-/// the case where a deployer explicitly turns it on anyway. This test
-/// picks an attack shape reputation's raw-mean-based filter can actually
-/// handle, to prove the *opt-in path itself* still works correctly, not
-/// to re-relitigate finding 1.
+/// enough to also drag honest clients' cosine scores down — reputation's
+/// own known weakness, which leaving it off avoids but which an explicit
+/// opt-in still carries. This test picks an attack shape the
+/// raw-mean-based filter can actually handle, to prove the *opt-in path
+/// itself* works correctly.
 #[tokio::test]
 async fn reputation_explicitly_enabled_still_filters_by_cosine_score() {
     let result = run_five_client_round(
@@ -157,10 +152,10 @@ async fn reputation_explicitly_enabled_still_filters_by_cosine_score() {
     );
 }
 
-/// Finding 3 (`docs/E2E_TESTING.md`): a single non-finite submission
-/// used to poison the shared reputation reference for *everyone*. Now
-/// it's excluded outright, regardless of the reputation flag, and the
-/// round completes normally with the remaining honest clients.
+/// A single non-finite submission must not poison the shared reputation
+/// reference for *everyone*. It is excluded outright, regardless of the
+/// reputation flag, and the round completes normally with the remaining
+/// honest clients.
 #[tokio::test]
 async fn a_non_finite_submission_is_excluded_not_a_whole_round_failure() {
     let result = run_five_client_round(
@@ -182,5 +177,33 @@ async fn a_non_finite_submission_is_excluded_not_a_whole_round_failure() {
         result,
         vec![1.0, 1.0],
         "the four honest clients should aggregate normally, degenerate client excluded: {result:?}"
+    );
+}
+
+/// The exclusion above shortens the decoded batch. Every client *after*
+/// the excluded one must still be aggregated with its own weights — a
+/// positional pairing of deltas to decoded weights would silently give
+/// each of them the next client's update.
+#[tokio::test]
+async fn an_excluded_submission_does_not_shift_the_weights_of_the_clients_after_it() {
+    let result = run_five_client_round(
+        Overrides {
+            aggregator: Some("fedavg".to_string()),
+            ..Default::default()
+        },
+        [
+            ("degenerate", &[f32::NAN, f32::NAN], 1),
+            ("honest-1", &[1.0, 1.0], 1),
+            ("honest-2", &[2.0, 2.0], 1),
+            ("honest-3", &[3.0, 3.0], 1),
+            ("honest-4", &[4.0, 4.0], 1),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        result,
+        vec![2.5, 2.5],
+        "the mean of the four honest clients, each with its own weights: {result:?}"
     );
 }

@@ -57,8 +57,8 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// <https://github.com/DistributedML/FoolsGold>) rather than from the
 /// paper's prose description alone — the prose leaves the "pardoning"
 /// step's exact loop structure and the logit-clamping edge cases
-/// underspecified enough that a from-scratch reading previously got the
-/// pardoning direction backwards (see git history). Kept as its own
+/// underspecified enough that a from-scratch reading can get the
+/// pardoning direction backwards. Kept as its own
 /// function, separate from `Aggregator::aggregate`, so it can be unit
 /// tested directly against hand-computed values without going through
 /// weight decoding.
@@ -157,7 +157,7 @@ fn foolsgold_weights(histories: &[Vec<f32>]) -> Vec<f32> {
 /// of problem solved for the privacy accountant, not solved
 /// here, and a real follow-up before this is relied on across restarts.
 ///
-/// **Fidelity note (ADR 0008)**: `foolsgold_weights` above is a direct
+/// **Fidelity note**: `foolsgold_weights` above is a direct
 /// translation of the authors' reference implementation
 /// (`deep-fg/fg/foolsgold.py`), not a from-scratch reading of the paper —
 /// verified line-by-line, including the pardoning loop's exact structure
@@ -272,7 +272,7 @@ impl Aggregator for FoolsGoldAggregator {
 /// reference — the cross-round state that puts this in `temporal` rather
 /// than `robust`, despite being a Byzantine-robustness method.
 ///
-/// **Fidelity notes (ADR 0008):**
+/// **Fidelity notes:**
 /// - The combine step is an unweighted `1/n` mean of clipped deviations,
 ///   matching the paper. Like [`FoolsGoldAggregator`], this deliberately
 ///   does *not* follow the codebase's `num_samples`-weighting convention
@@ -289,7 +289,7 @@ impl Aggregator for FoolsGoldAggregator {
 ///   rounds rather than arriving fully formed in round one.
 /// - `τ` is problem-scale dependent — the paper tunes it per experiment,
 ///   and so must a deployment. It is config-resolved (`clip_radius`),
-///   never a hardcoded constant. **Measured (§5.13): at the framework's
+///   never a hardcoded constant. **Measured: at the framework's
 ///   placeholder `τ = 1.0`, this method scored *worse than no defense*
 ///   on a real 50,890-parameter model, and no `τ` in a 1→100 sweep
 ///   reached a selection-based method's accuracy.** `τ` bounds an L2
@@ -361,9 +361,8 @@ impl Aggregator for CenteredClippingAggregator {
                 // once the batch total exceeds `f32::MAX` — four clients
                 // near `f32::MAX` is enough — and `inf / n` is still
                 // infinity, so the reference starts the experiment
-                // already destroyed. This is the same defect that was
-                // fixed in `robust.rs`'s geometric median; the pattern
-                // survived here because it was written separately.
+                // already destroyed. The same discipline `robust.rs`'s
+                // geometric median follows.
                 let mut mean = vec![0.0f32; dim];
                 let share = 1.0 / n as f32;
                 for w in &decoded {

@@ -122,9 +122,8 @@ pub struct FlushResult {
     /// operationally significant, not an implementation detail.
     pub reason: FlushReason,
     /// Everything that arrived before the buffer closed. May be shorter
-    /// than the quorum when `reason` is `Timeout`, and is never empty in
-    /// practice only because the caller decides what to do with an empty
-    /// round.
+    /// than the quorum when `reason` is `Timeout`, and may be empty —
+    /// what to do with an empty round is the caller's decision.
     pub deltas: Vec<ClientDelta>,
 }
 
@@ -189,8 +188,13 @@ impl RoundBuffer {
         }
         // Wake `await_flush` immediately rather than making it wait for
         // its next poll — this is what keeps a quorum-satisfying push from
-        // sitting unnoticed until the timeout fires.
-        self.notify.notify_waiters();
+        // sitting unnoticed until the timeout fires. `notify_one`, not
+        // `notify_waiters`: the latter only wakes a task that is *already*
+        // parked, so a push landing between `await_flush`'s quorum check
+        // and its wait would be missed and the round would sit until the
+        // timeout. `notify_one` stores a permit when nobody is waiting yet,
+        // and the single flusher consumes it on its next `notified()`.
+        self.notify.notify_one();
         Ok(())
     }
 
@@ -224,10 +228,11 @@ impl RoundBuffer {
             }
 
             // A push that lands between the quorum check above and this
-            // wait still wakes us: `notify_waiters` only wakes *current*
-            // waiters, but a push completing first means the quorum check
-            // on our next loop iteration sees it regardless of whether
-            // this particular `notified()` call caught the wakeup.
+            // wait still wakes us: `push` uses `notify_one`, which leaves
+            // a permit behind when no waiter is parked yet, so this
+            // `notified()` completes immediately and the loop re-checks
+            // quorum. A stale permit from a pre-check push costs one
+            // spurious iteration, nothing more.
             let _ = tokio::time::timeout(remaining, self.notify.notified()).await;
         }
     }
@@ -386,9 +391,9 @@ mod tests {
 
     /// Drives the exact race window that matters for this type: a push
     /// racing against the precise moment quorum is met and the snapshot is
-    /// taken. An earlier, simpler design (a plain `AtomicBool` "closed"
-    /// flag checked before locking, rather than folding "closed" into the
-    /// same mutex as the deltas) could let a push in this window land
+    /// taken. A simpler design (a plain `AtomicBool` "closed" flag
+    /// checked before locking, rather than folding "closed" into the
+    /// same mutex as the deltas) would let a push in this window land
     /// after the snapshot was already handed off — the client would be
     /// told its submission was accepted, but it would never be read
     /// again. Running many iterations under a real multi-threaded runtime
@@ -424,6 +429,32 @@ mod tests {
                 b_in_batch || late_result.is_err(),
                 "client b's delta must either be in the flushed batch or have been \
                  explicitly rejected — it must never silently disappear"
+            );
+        }
+    }
+
+    /// A quorum-satisfying push that lands *between* `await_flush`'s
+    /// quorum check and its wait must still wake it promptly. With a
+    /// wakeup that only reaches an already-parked waiter, that push would
+    /// go unnoticed and the round would sit until the timeout — a
+    /// correctness-preserving but latency-destroying stall. Many
+    /// iterations, each with a timeout far longer than the assertion
+    /// allows, so a lost wakeup shows up as a stall rather than by luck.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_push_racing_the_wait_does_not_stall_until_the_timeout() {
+        for _ in 0..100 {
+            let buffer = Arc::new(RoundBuffer::new(1, 1));
+            let flush_buffer = Arc::clone(&buffer);
+            let flush =
+                tokio::spawn(async move { flush_buffer.await_flush(Duration::from_secs(5)).await });
+            buffer.push(delta("a", 1)).ok();
+
+            let started = StdInstant::now();
+            let result = flush.await.unwrap();
+            assert_eq!(result.reason, FlushReason::Quorum);
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "quorum was met, yet the flush waited on the timeout"
             );
         }
     }

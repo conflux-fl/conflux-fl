@@ -1,10 +1,10 @@
-//! Tier 5 (H2): `/health` must report the round loop, not a constant.
+//! `/health` must report the round loop, not a constant.
 //!
-//! The defect these tests exist to prevent: the round loop ran in its own
-//! task and `break`d on any error but `EmptyBatch`, so a single transient
-//! backend failure ended the experiment permanently — while the gRPC and
-//! HTTP servers kept serving and `/health` kept returning a hardcoded
-//! `"ok"`. An orchestrator saw a healthy pod doing no work, indefinitely.
+//! The failure these tests prevent: a round loop that `break`s on any
+//! error but `EmptyBatch`, so a single transient backend failure ends the
+//! experiment permanently — while the gRPC and HTTP servers keep serving
+//! and `/health` keeps returning a hardcoded `"ok"`. An orchestrator
+//! would see a healthy pod doing no work, indefinitely.
 //!
 //! Two rules encoded here:
 //!
@@ -96,7 +96,7 @@ fn aggregation_rejections_are_transient() {
 
 /// The one case where stopping is the *specified* behavior rather than a
 /// failure to handle something. `budget_exhausted_action = halt` means
-/// halt, and no amount of waiting produces more epsilon (ADR 0006).
+/// halt, and no amount of waiting produces more epsilon.
 #[test]
 fn an_exhausted_privacy_budget_is_fatal_in_both_scopes() {
     assert!(
@@ -171,8 +171,8 @@ async fn a_retrying_loop_is_degraded_but_still_healthy() {
     assert_eq!(body["last_error"], "redis: connection refused");
 }
 
-/// The case that was previously invisible, and the whole reason for H2. A
-/// stopped loop must return 503 so an orchestrator acts on it.
+/// The case that would otherwise be invisible. A stopped loop must
+/// return 503 so an orchestrator acts on it.
 #[tokio::test]
 async fn a_stopped_loop_returns_503_and_says_why() {
     let state = state();
@@ -213,10 +213,10 @@ async fn recovery_clears_the_degraded_state() {
     assert_eq!(state.round_loop_health.state(), RoundLoopState::Running);
 }
 
-/// `/health` stays exempt from the admin token (Phase S3's policy) — a
-/// health check that needs a credential is not one an orchestrator can
-/// use. Guarded here because H2 changed the handler's signature, which is
-/// exactly the kind of edit that can silently move a route under a layer.
+/// `/health` stays exempt from the admin token — a health check that
+/// needs a credential is not one an orchestrator can use. Guarded here
+/// because a change to the handler's signature is exactly the kind of
+/// edit that can silently move a route under a layer.
 #[tokio::test]
 async fn health_is_still_reachable_without_the_admin_token() {
     let req = Request::builder()

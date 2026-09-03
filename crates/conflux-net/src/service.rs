@@ -96,8 +96,8 @@ impl<D: RoundDispatcher> FlTransport for FlTransportService<D> {
         let mut received_bytes: u64 = 0;
         while let Some(chunk) = stream.message().await? {
             // Every client-controlled byte in the chunk counts, not just
-            // `data`. ADR 0012 added `control_variate`, which is also an
-            // arbitrary-length client-supplied buffer — counting only
+            // `data`. `control_variate` is also an arbitrary-length
+            // client-supplied buffer — counting only
             // `data` would leave the ceiling intact while relocating the
             // flood one field to the left, which is not a bound at all.
             // Any future payload field belongs in this sum for the same

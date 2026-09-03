@@ -134,8 +134,8 @@ fn l2(weights: &[f32]) -> f32 {
 
 #[tokio::test]
 async fn with_the_transform_off_a_submission_arrives_byte_identical() {
-    // The default path. If this ever fails, every pre-Phase-17
-    // deployment's behavior has silently changed.
+    // The default path. If this ever fails, every deployment without
+    // the transform has silently changed behavior.
     let raw = vec![3.0f32, 4.0, 12.0];
     let (mut client, received) = harness(None).await;
 
