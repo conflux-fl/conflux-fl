@@ -39,3 +39,17 @@ pub fn client_tls_config(
         .ca_certificate(server_ca)
         .identity(identity)
 }
+
+/// Server-authenticated TLS *without* a client certificate: the connection
+/// is encrypted and the server is verified (`server_ca_pem` + `domain`),
+/// but the client presents no identity of its own. Pair it with a
+/// registration token or JWT when the server authenticates callers by
+/// credential rather than by client certificate — here TLS is for
+/// confidentiality, not for the client's identity. Contrast
+/// [`client_tls_config`], which is mutual.
+pub fn client_tls_config_server_auth(server_ca_pem: &[u8], domain: &str) -> ClientTlsConfig {
+    let server_ca = Certificate::from_pem(server_ca_pem);
+    ClientTlsConfig::new()
+        .domain_name(domain)
+        .ca_certificate(server_ca)
+}

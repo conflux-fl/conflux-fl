@@ -28,6 +28,11 @@ use conflux_node::{
 use conflux_privacy::GaussianClippingPrivacy;
 use conflux_proto::fl_transport_server::FlTransportServer;
 use tokio_stream::wrappers::TcpListenerStream;
+// `ClientTlsConfig` is available here without `conflux-node` enabling a
+// tonic TLS feature of its own: `conflux-net` enables `tls-aws-lc`, and
+// Cargo unifies features across the workspace, so the one compiled `tonic`
+// this binary links already has it.
+use tonic::transport::ClientTlsConfig;
 
 #[tokio::main]
 async fn main() {
@@ -105,24 +110,42 @@ async fn main() {
         .ok()
         .map(|v| v.parse().expect("CONFLUX_SEED_VALUE must be an integer"));
 
+    // The credential this node presents at registration. Defaults to the
+    // legacy placeholder so an allow-list-by-id deployment on a trusted
+    // network keeps working unchanged; set it to a real per-client token or
+    // JWT for a server enforcing `require_node_auth` / `auth = "jwt"`.
+    let auth_token =
+        std::env::var("CONFLUX_NODE_AUTH_TOKEN").unwrap_or_else(|_| "node-auth-token".to_string());
+
+    // Optional client-side TLS, resolved from `CONFLUX_TLS_*` env into one
+    // of three postures — plaintext, server-authenticated (CA + domain), or
+    // mutual (all four vars) — see `resolve_client_tls`.
+    let client_tls = resolve_client_tls();
+    let tls_mode = client_tls.label();
+    let custom_auth_token = auth_token != "node-auth-token";
+
     let bridge = match connection_mode {
         ConnectionMode::Pull => {
-            let mut upstream = PullTransport::connect(server_addr)
-                .await
-                .expect("failed to connect to conflux-server");
+            let mut upstream = match client_tls.config() {
+                Some(tls) => PullTransport::connect_with_tls(server_addr, tls).await,
+                None => PullTransport::connect(server_addr).await,
+            }
+            .expect("failed to connect to conflux-server");
             upstream
-                .register(&client_id, "node-auth-token")
+                .register(&client_id, &auth_token)
                 .await
                 .expect("failed to register with conflux-server");
             let bridge = NodeBridge::new(upstream, client_id.clone());
             Arc::new(apply_local_privacy(bridge, local_privacy, privacy_seed))
         }
         ConnectionMode::Push => {
-            let mut upstream = PushTransport::connect(server_addr)
-                .await
-                .expect("failed to connect to conflux-server");
+            let mut upstream = match client_tls.config() {
+                Some(tls) => PushTransport::connect_with_tls(server_addr, tls).await,
+                None => PushTransport::connect(server_addr).await,
+            }
+            .expect("failed to connect to conflux-server");
             upstream
-                .register(&client_id, "node-auth-token")
+                .register(&client_id, &auth_token)
                 .await
                 .expect("failed to register with conflux-server");
             let bridge = NodeBridge::new_push(upstream, client_id.clone());
@@ -132,6 +155,8 @@ async fn main() {
     tracing::info!(
         %client_id,
         connection_mode = connection_mode.as_str(),
+        tls = tls_mode,
+        custom_auth_token,
         client_side_privacy_transform = client_side_privacy,
         "registered with conflux-server"
     );
@@ -210,5 +235,79 @@ fn apply_local_privacy(
             bridge.with_local_privacy(mechanism, seed)
         }
         None => bridge,
+    }
+}
+
+/// The node's client-side TLS posture, resolved from `CONFLUX_TLS_*` env.
+enum ClientTls {
+    /// No TLS — plaintext, for the local loopback or a trusted network.
+    Plaintext,
+    /// Server-authenticated TLS with no client certificate; the node's
+    /// identity travels in its registration token/JWT instead.
+    ServerAuth(ClientTlsConfig),
+    /// Mutual TLS — the node presents its own certificate as identity.
+    Mutual(ClientTlsConfig),
+}
+
+impl ClientTls {
+    /// The tonic config to connect with, or `None` for a plaintext hop.
+    fn config(&self) -> Option<ClientTlsConfig> {
+        match self {
+            ClientTls::Plaintext => None,
+            ClientTls::ServerAuth(c) | ClientTls::Mutual(c) => Some(c.clone()),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            ClientTls::Plaintext => "off",
+            ClientTls::ServerAuth(_) => "server-auth",
+            ClientTls::Mutual(_) => "mutual",
+        }
+    }
+}
+
+/// Resolves the TLS posture from `CONFLUX_TLS_*` env:
+///
+/// - nothing set ⇒ [`ClientTls::Plaintext`];
+/// - `SERVER_CA_PATH` + `DOMAIN` only ⇒ [`ClientTls::ServerAuth`] — encrypted
+///   and the server verified, with the node's identity carried by its
+///   token/JWT rather than a client certificate;
+/// - all four (adding `CLIENT_CERT_PATH` + `CLIENT_KEY_PATH`) ⇒
+///   [`ClientTls::Mutual`] — the node presents its own certificate.
+///
+/// Anything else is a startup panic: a half-set security control must fail
+/// loudly, never silently downgrade to plaintext.
+fn resolve_client_tls() -> ClientTls {
+    let cert = std::env::var("CONFLUX_TLS_CLIENT_CERT_PATH").ok();
+    let key = std::env::var("CONFLUX_TLS_CLIENT_KEY_PATH").ok();
+    let ca = std::env::var("CONFLUX_TLS_SERVER_CA_PATH").ok();
+    let domain = std::env::var("CONFLUX_TLS_DOMAIN").ok();
+
+    let read = |path: &str, what: &str| {
+        std::fs::read(path).unwrap_or_else(|e| panic!("cannot read {what} at {path:?}: {e}"))
+    };
+
+    match (cert, key, ca, domain) {
+        (None, None, None, None) => ClientTls::Plaintext,
+        (None, None, Some(ca), Some(domain)) => {
+            ClientTls::ServerAuth(conflux_net::tls::client_tls_config_server_auth(
+                &read(&ca, "CONFLUX_TLS_SERVER_CA_PATH"),
+                &domain,
+            ))
+        }
+        (Some(cert), Some(key), Some(ca), Some(domain)) => {
+            ClientTls::Mutual(conflux_net::tls::client_tls_config(
+                &read(&cert, "CONFLUX_TLS_CLIENT_CERT_PATH"),
+                &read(&key, "CONFLUX_TLS_CLIENT_KEY_PATH"),
+                &read(&ca, "CONFLUX_TLS_SERVER_CA_PATH"),
+                &domain,
+            ))
+        }
+        _ => panic!(
+            "invalid TLS config. Set either nothing (plaintext); \
+             CONFLUX_TLS_SERVER_CA_PATH + CONFLUX_TLS_DOMAIN (server-authenticated TLS); \
+             or all four, adding CONFLUX_TLS_CLIENT_CERT_PATH + CONFLUX_TLS_CLIENT_KEY_PATH (mTLS)"
+        ),
     }
 }
