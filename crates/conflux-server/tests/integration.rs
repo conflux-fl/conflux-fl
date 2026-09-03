@@ -481,7 +481,14 @@ async fn submit_delta_reassembles_out_of_order_chunks() {
 
 /// `docker run -d --name conflux-dev-postgres -e POSTGRES_PASSWORD=conflux
 /// -e POSTGRES_DB=conflux -p 15432:5432 postgres:16-alpine` — see
-const TEST_POSTGRES_URL: &str = "postgres://postgres:conflux@127.0.0.1:15432/conflux";
+// Read from env (CI points these at its service containers on the standard
+// ports); fall back to the dev container's port. Hardcoding the dev port is
+// what made these tests fail in CI while the store-crate tests — which read
+// the same env vars — passed.
+fn test_postgres_url() -> String {
+    std::env::var("CONFLUX_TEST_POSTGRES_URL")
+        .unwrap_or_else(|_| "postgres://postgres:conflux@127.0.0.1:15432/conflux".to_string())
+}
 
 #[tokio::test]
 async fn restarted_server_replays_privacy_rounds_instead_of_resetting_epsilon() {
@@ -499,7 +506,7 @@ async fn restarted_server_replays_privacy_rounds_instead_of_resetting_epsilon() 
     let state_a = AppState::new_with_persistent_accounting_table(
         deterministic_config(&Overrides::default()),
         vec![0.0],
-        TEST_POSTGRES_URL,
+        &test_postgres_url(),
         &table,
     )
     .await
@@ -541,7 +548,7 @@ async fn restarted_server_replays_privacy_rounds_instead_of_resetting_epsilon() 
     let state_b = AppState::new_with_persistent_accounting_table(
         deterministic_config(&Overrides::default()),
         vec![0.0],
-        TEST_POSTGRES_URL,
+        &test_postgres_url(),
         &table,
     )
     .await
@@ -555,7 +562,10 @@ async fn restarted_server_replays_privacy_rounds_instead_of_resetting_epsilon() 
     assert!(epsilon_after_restart > epsilon_before_any_rounds);
 }
 
-const TEST_REDIS_URL: &str = "redis://127.0.0.1:16379";
+fn test_redis_url() -> String {
+    std::env::var("CONFLUX_TEST_REDIS_URL")
+        .unwrap_or_else(|_| "redis://127.0.0.1:16379".to_string())
+}
 
 #[tokio::test]
 async fn app_state_connect_builds_a_working_state_against_real_redis_and_postgres() {
@@ -576,13 +586,13 @@ async fn app_state_connect_builds_a_working_state_against_real_redis_and_postgre
         vec![1.0, 2.0],
         conflux_server::BackendSelection {
             registry: conflux_server::RegistryBackend::Redis {
-                url: TEST_REDIS_URL.to_string(),
+                url: test_redis_url(),
             },
             store: conflux_server::StoreBackend::Postgres {
-                url: TEST_POSTGRES_URL.to_string(),
+                url: test_postgres_url(),
             },
             accounting: conflux_server::AccountingBackend::Postgres {
-                url: TEST_POSTGRES_URL.to_string(),
+                url: test_postgres_url(),
             },
         },
     )
