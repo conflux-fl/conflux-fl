@@ -29,7 +29,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -39,7 +39,7 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -94,7 +94,7 @@ jobs:
       CONFLUX_TEST_POSTGRES_URL: postgres://postgres:conflux@127.0.0.1:5432/conflux
       CONFLUX_TEST_S3_ENDPOINT: http://127.0.0.1:9000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
@@ -103,7 +103,7 @@ jobs:
     name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       # Only the crates that claim 1.88. `conflux-store` and
@@ -142,7 +142,7 @@ jobs:
     # The gates below run cheapest-first, so a syntax error fails in
     # seconds rather than after a cargo build.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -232,7 +232,7 @@ jobs:
     # is the only gate that notices. Its first local run found five
     # broken links across four crates.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --workspace
@@ -248,7 +248,7 @@ jobs:
     # TLS stack nothing used — this job exists so the fifth is found by
     # a bot instead of a person.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
@@ -257,7 +257,7 @@ jobs:
     name: dependency isolation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Two invariants about `conflux-server`'s dependency graph existed
       # only as prose before this job. An invariant a build does not check
@@ -297,7 +297,7 @@ jobs:
     name: env hygiene
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: install evnx
         # The upstream `install.sh` resolves the latest release via an
         # UNauthenticated api.github.com call, which 403s on the shared

@@ -15,7 +15,7 @@ jobs:
     name: GitHub release from CHANGELOG
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: extract this version's CHANGELOG section
         run: |
           v="${GITHUB_REF_NAME#v}"
