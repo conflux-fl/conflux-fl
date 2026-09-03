@@ -2,24 +2,51 @@
 
 [![CI](https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml/badge.svg)](https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-confluxfl.dev-2b6cb0)](https://confluxfl.dev)
+![Rust](https://img.shields.io/badge/Rust-1.88%2B-dea584?logo=rust&logoColor=white)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+![Version](https://img.shields.io/badge/version-0.1.0-informational)
 
 **A configurable, extensible, Rust-native federated learning framework.**
 
 > 📖 **Documentation, tutorials, and reference live at [confluxfl.dev](https://confluxfl.dev).**
 > This repository holds the framework's code and development files.
 
-Python (PyTorch) stays entirely client-side for model training; Rust
-owns networking, orchestration, aggregation, privacy, and reputation.
-One codebase supports four deployment topologies — cross-silo,
-cross-device, crowdsource, edge — selected by configuration, not by
-forking code. The name captures the core metaphor: many independent,
-heterogeneous client contributions *conflux*-ing into one stronger
-global model.
+Conflux FL puts Rust in charge of everything between the clients and the
+global model — networking, orchestration, client selection,
+Byzantine-robust aggregation, differential privacy, reputation — while
+training stays wherever your model lives: a PyTorch `ClientApp` in
+Python, or a pure-Rust client (optionally on [Burn](https://burn.dev))
+that ships as a single binary. Twenty-two published aggregation methods
+are implemented literally from their papers and selected by name; four
+deployment topologies — cross-silo, cross-device, crowdsource, edge —
+come from one codebase by configuration, not by forking; and the parts
+that usually get faked are real: Redis/Postgres/S3 backends, allow-list /
+JWT / mTLS node authentication, and privacy accounting that survives a
+restart, all tested against real infrastructure. The name is the idea —
+many independent, heterogeneous contributions *conflux*-ing into one
+stronger model.
 
 ```
- client A ─┐
- client B ─┼─▶ Conflux round pipeline ─▶ one global model
- client C ─┘ (select · train · aggregate · repeat)
+   ┌────────────────┐    ┌────────────────┐    ┌────────────────┐
+   │  client A      │    │  client B      │    │  client C      │
+   │  PyTorch or    │    │  PyTorch or    │    │  PyTorch or    │
+   │  Rust ClientApp│    │  Rust ClientApp│    │  Rust ClientApp│
+   └───────┬────────┘    └───────┬────────┘    └───────┬────────┘
+           │ loopback gRPC       │                     │
+   ┌───────▼────────┐    ┌───────▼────────┐    ┌───────▼────────┐
+   │  conflux-node  │    │  conflux-node  │    │  conflux-node  │
+   └───────┬────────┘    └───────┬────────┘    └───────┬────────┘
+           └─────────────────────┼─────────────────────┘
+                                 │  gRPC · pull or push · TLS
+                     ┌───────────▼────────────┐
+                     │     conflux-server     │
+                     │  select · collect      │
+                     │  privacy · reputation  │
+                     │  aggregate · checkpoint│
+                     └───────────┬────────────┘
+                                 ▼
+                         one global model
+                        ⟲ next round, repeat
 ```
 
 ## What it offers
@@ -238,24 +265,6 @@ In this repository: [CHANGELOG.md](CHANGELOG.md) · [CONTRIBUTING.md](CONTRIBUTI
 [SECURITY.md](SECURITY.md) · [`deploy/`](deploy/README.md) · [`baselines/`](baselines/README.md).
 `docs/` keeps only the generated aggregation catalog (a golden-file test artifact).
 
-### A note on `ADR NNNN`
-
-Doc comments throughout the code cite decisions as `ADR 0004`,
-`ADR 0012`, and so on — each a numbered architecture decision, the *why*
-behind something the code cannot explain about itself, usually because a
-reasonable-looking alternative was considered and rejected. (`spec §N`
-is the same convention pointing into the original v1 design
-specification.) The citation is deliberately terse so it does not crowd
-the comment that carries it.
-
-A one-line summary of each decision is on the site under
-[Architecture → Architecture decisions](https://confluxfl.dev/guides/architecture/#architecture-decisions);
-the full records live in the project's engineering log, kept outside this
-repository. Where a decision matters for using or extending Conflux, the
-relevant guide says so in full — [Extending](https://confluxfl.dev/guides/extending/)
-and [API stability](https://confluxfl.dev/reference/api-stability/) in
-particular do not assume you have read anything else.
-
 ## Project status
 
 **536 tests** pass workspace-wide, including a cross-round adversarial
@@ -279,7 +288,7 @@ until then.
 
 Unpublished research built *on* Conflux lives in a separate repository,
 not here — this one ships literal, cited implementations of published
-methods (ADR 0008).
+methods.
 
 ## License
 
