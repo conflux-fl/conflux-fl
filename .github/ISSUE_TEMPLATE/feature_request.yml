@@ -1,0 +1,27 @@
+name: Feature request
+description: A capability the framework should have (for a new aggregation method, use "Method request")
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a **new published aggregation method, selector, or privacy
+        mechanism**, use the *Method request* form instead — it asks for the
+        citation, which is required.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The deployment or experiment this would serve, in a sentence or two.
+    validations: {required: true}
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like the framework to do
+      description: Behavior, not implementation. If you have a sketch of the API or config surface, include it.
+    validations: {required: true}
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
+      description: Workarounds, out-of-tree code, or "nothing — it's blocking".

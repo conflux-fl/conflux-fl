@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://confluxfl.dev
+    about: Guides, tutorials, the aggregation catalog, and crate deep dives — check here first.
+  - name: 💬 Questions and ideas
+    url: https://github.com/conflux-fl/conflux-fl/discussions
+    about: Ask how to do something, or float an idea. Issues are for bugs and concrete requests.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/conflux-fl/conflux-fl/security/advisories/new
+    about: Please use private vulnerability reporting rather than a public issue — see SECURITY.md.

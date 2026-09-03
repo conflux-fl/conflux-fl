@@ -1,15 +1,32 @@
-# Conflux Federated Learning Framework (Conflux-FL)
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Conflux FL" width="120">
+</p>
 
-[![CI](https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml/badge.svg)](https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml)
-[![Docs](https://img.shields.io/badge/docs-confluxfl.dev-2b6cb0)](https://confluxfl.dev)
-![Rust](https://img.shields.io/badge/Rust-1.88%2B-dea584?logo=rust&logoColor=white)
-![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Version](https://img.shields.io/badge/version-0.1.0-informational)
+<h1 align="center">Conflux FL</h1>
 
-**A configurable, extensible, Rust-native federated learning framework.**
+<p align="center">
+  <b>A configurable, extensible, Rust-native federated learning framework.</b><br>
+  <sub>Rust owns the pipeline. Train in PyTorch — or in pure Rust. Four deployment topologies from one codebase.</sub>
+</p>
 
-> 📖 **Documentation, tutorials, and reference live at [confluxfl.dev](https://confluxfl.dev).**
-> This repository holds the framework's code and development files.
+<p align="center">
+  <a href="https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml"><img src="https://github.com/conflux-fl/conflux-fl/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://confluxfl.dev"><img src="https://img.shields.io/badge/docs-confluxfl.dev-2b6cb0" alt="Docs"></a>
+  <img src="https://img.shields.io/badge/Rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="Rust 1.88+">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0">
+  <img src="https://img.shields.io/badge/version-0.1.0-informational" alt="Version 0.1.0">
+</p>
+
+<p align="center">
+  <a href="https://confluxfl.dev/getting-started/"><b>Getting started</b></a> &nbsp;·&nbsp;
+  <a href="https://confluxfl.dev/tutorial/"><b>Tutorials</b></a> &nbsp;·&nbsp;
+  <a href="https://confluxfl.dev/reference/aggregation-catalog/"><b>Catalog</b></a> &nbsp;·&nbsp;
+  <a href="https://confluxfl.dev/guides/baselines/"><b>Baselines</b></a> &nbsp;·&nbsp;
+  <a href="https://confluxfl.dev/guides/deploying-clients/"><b>Deploy</b></a> &nbsp;·&nbsp;
+  <a href="https://confluxfl.dev/crate-deep-dives/"><b>Deep dives</b></a>
+</p>
+
+---
 
 Conflux FL puts Rust in charge of everything between the clients and the
 global model — networking, orchestration, client selection,
@@ -49,62 +66,99 @@ stronger model.
                         ⟲ next round, repeat
 ```
 
-## What it offers
+<table align="center">
+  <tr>
+    <td align="center"><b>22</b><br><sub>aggregation methods</sub></td>
+    <td align="center"><b>5</b><br><sub>method families</sub></td>
+    <td align="center"><b>4</b><br><sub>deployment topologies</sub></td>
+    <td align="center"><b>16</b><br><sub>crates</sub></td>
+    <td align="center"><b>2</b><br><sub>client SDKs</sub></td>
+    <td align="center"><b>536</b><br><sub>tests</sub></td>
+  </tr>
+</table>
 
-- **A faithful, extensible catalog of published aggregation methods** —
-  twenty-two server-side methods across five families (`averaging`,
-  `robust`, `temporal`, `trusted`, `optimization`): FedAvg, Krum,
-  Multi-Krum, Trimmed Mean, Median, Bulyan, FoolsGold, FLTrust, Zeno,
-  SCAFFOLD, FedNova, q-FedAvg, FedAdam/Yogi/Adagrad, and more — each a
-  literal implementation of a specific cited paper, not a
-  framework-modified variant. [Aggregation
-  catalog →](https://confluxfl.dev/reference/aggregation-catalog/)
-- **Baselines that reproduce the papers** — `baselines/` holds
-  reproduction recipes (a manifest naming a cataloged method plus the
-  paper's setup and expected result), each runnable through a **Python
-  (PyTorch)** and/or **Rust (Burn)** client, driven and verified by the
-  `conflux-baselines` runner. [Baselines
-  →](https://confluxfl.dev/guides/baselines/)
-- **Four deployment topologies from one codebase** — `cross_silo`
-  (institutions, push+mTLS), `cross_device` (phones, pull+JWT),
-  `crowdsource` (public participants, stricter reputation), `edge`
-  (IoT) — selected entirely by configuration.
-- **A layered, explainable configuration system** — every parameter
-  resolves through a fixed precedence chain (builtin → topology → mode →
-  experiment file → env var), profiles can `inherit` and extend a
-  builtin, values are validated for ranges *and* combinations before
-  startup, and every resolved value logs which tier it came from.
-  [Configuration →](https://confluxfl.dev/guides/configuration/)
-- **Differential privacy and epsilon accounting** — clip + Gaussian
-  noise (Abadi et al., 2016), RDP composition (Mironov 2017).
-- **Real backends and real auth** — `RedisRegistry`, `PostgresStore`,
-  `S3Store`; node admission by allow-list, per-client token/JWT, or mTLS
-  (the node resolves plaintext / server-authenticated / mutual TLS from
-  its env) — all tested against real Docker-backed infrastructure, not
-  mocks.
-- **Two client SDKs** — a Python `ClientApp` for PyTorch, and a
-  Rust-native `ClientApp` (`conflux-client`) that trains with no Python
-  in the loop, including an opt-in [Burn](https://burn.dev) example.
-- **A dev-only attack simulation crate** (`conflux-attacks`) — cited
-  implementations of known FL attacks and attack-vs-defense tests,
-  structurally incapable of shipping in the production server binary.
-- **Extensibility as a first-class design goal** — a new aggregation
-  method, selector, or privacy mechanism is typically a ~10–30 line
-  trait implementation plus one registry line; the server never
-  changes. [Extending →](https://confluxfl.dev/guides/extending/)
+## ✨ Why Conflux FL
 
-## Quick start
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Cited, not approximated.</b><br>
+      Twenty-two server-side aggregation methods across five families —
+      FedAvg, Krum, Multi-Krum, Trimmed Mean, Median, Bulyan, FoolsGold,
+      FLTrust, Zeno, SCAFFOLD, FedNova, q-FedAvg, FedAdam/Yogi/Adagrad, and
+      more — each a literal implementation of a specific paper.
+      <a href="https://confluxfl.dev/reference/aggregation-catalog/">Catalog →</a>
+    </td>
+    <td width="50%" valign="top">
+      <b>Reproduce the papers.</b><br>
+      <code>baselines/</code> holds reproduction recipes — a manifest naming a
+      cataloged method plus the paper's setup and expected result — each
+      runnable through a Python or a Rust client and verified by the
+      <code>conflux-baselines</code> runner.
+      <a href="https://confluxfl.dev/guides/baselines/">Baselines →</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Four topologies, one codebase.</b><br>
+      <code>cross_silo</code> (institutions, push + mTLS), <code>cross_device</code>
+      (phones, pull + JWT), <code>crowdsource</code> (public participants, stricter
+      reputation), <code>edge</code> (IoT) — selected entirely by configuration.
+    </td>
+    <td width="50%" valign="top">
+      <b>Configuration you can explain.</b><br>
+      Every value resolves through a fixed precedence chain, profiles can
+      <code>inherit</code> a builtin, ranges <i>and</i> combinations are validated
+      before startup, and every resolved value logs which tier set it.
+      <a href="https://confluxfl.dev/guides/configuration/">Configuration →</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Real backends, real auth.</b><br>
+      <code>RedisRegistry</code>, <code>PostgresStore</code>, <code>S3Store</code>;
+      node admission by allow-list, per-client token/JWT, or mTLS — the node
+      resolves plaintext / server-authenticated / mutual TLS from its env.
+      All tested against real Docker-backed infrastructure, not mocks.
+    </td>
+    <td width="50%" valign="top">
+      <b>Two client SDKs.</b><br>
+      A Python <code>ClientApp</code> for PyTorch, and a Rust-native
+      <code>ClientApp</code> (<code>conflux-client</code>) that trains with no
+      Python in the loop — including an opt-in <a href="https://burn.dev">Burn</a>
+      example. Same contract, field for field.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Privacy with accounting.</b><br>
+      Clip + Gaussian noise (Abadi et al., 2016) and Rényi-DP epsilon
+      composition (Mironov, 2017) that survives a server restart. A dev-only
+      <code>conflux-attacks</code> crate runs cited attacks against every method
+      and is structurally incapable of shipping in the server.
+    </td>
+    <td width="50%" valign="top">
+      <b>Extensible by design.</b><br>
+      A new aggregation method, selector, or privacy mechanism is typically a
+      10–30 line trait implementation plus one registry line. The server never
+      changes.
+      <a href="https://confluxfl.dev/guides/extending/">Extending →</a>
+    </td>
+  </tr>
+</table>
+
+## 🚀 Quick start
 
 ```bash
 cargo build --workspace
 cargo test --workspace
 ```
 
-Then run the full pipeline locally (a real `conflux-server`, a real
-`conflux-node`, and a client, all over real gRPC): **[Getting
-started →](https://confluxfl.dev/getting-started/)**.
+Then run the full pipeline locally — a real `conflux-server`, a real
+`conflux-node`, and a client, all over real gRPC:
+**[Getting started →](https://confluxfl.dev/getting-started/)**
 
-## Train a real model with it
+## 🧪 Train a real model
 
 Four end-to-end harnesses train real models across simulated clients
 through the real pipeline — NumPy logistic regression, PyTorch MNIST,
@@ -129,32 +183,35 @@ round=2  held_out_accuracy=0.7210
 round=15 held_out_accuracy=0.9050
 ```
 
-A real PyTorch MLP on real MNIST, federated across 5 clients, matching a
-centralized baseline within a couple of points — **despite a
-large-magnitude attacker submitting every round**, because `krum` does
+A real PyTorch MLP on real MNIST, federated across five clients, matching
+a centralized baseline within a couple of points — **despite a
+large-magnitude attacker submitting every round** — because `krum` does
 what Blanchard et al. (2017) says it should.
 
-- **[Tutorial: train a real model →](https://confluxfl.dev/tutorial/)**
-- **[The harnesses, and the bugs they surfaced →](https://confluxfl.dev/guides/e2e-harnesses/)**
-- **[Reproduce a paper as a baseline →](https://confluxfl.dev/guides/baselines-add/)**
+<p>
+  <a href="https://confluxfl.dev/tutorial/"><b>Tutorial: train a real model →</b></a><br>
+  <a href="https://confluxfl.dev/guides/e2e-harnesses/"><b>The harnesses, and the bugs they surfaced →</b></a><br>
+  <a href="https://confluxfl.dev/guides/baselines-add/"><b>Reproduce a paper as a baseline →</b></a>
+</p>
 
-## Deploy it
+## 🌐 Deploy it
 
 `deploy/run_client.sh` launches a participant (node + trainer) on any
 machine; `deploy/allowlist.sh` admits clients to a running server. The
 realistic paths to 10–20 real clients — trusted-network, token/JWT, or
-mTLS — are in **[Deploying 10–20 real
-clients →](https://confluxfl.dev/guides/deploying-clients/)**, with the
-server side in [Deployment](https://confluxfl.dev/guides/deployment/) and
-[Durable backends, the sidecar, and
-mTLS](https://confluxfl.dev/guides/backends-and-sidecar/).
+mTLS — are in **[Deploying 10–20 real clients →](https://confluxfl.dev/guides/deploying-clients/)**,
+with the server side in [Deployment](https://confluxfl.dev/guides/deployment/)
+and [Durable backends, the sidecar, and mTLS](https://confluxfl.dev/guides/backends-and-sidecar/).
 
-## The crates
+## 📦 The crates
 
-Sixteen crates; the dependency graph is acyclic. Crate-by-crate
-reference: **[Crates →](https://confluxfl.dev/reference/crates/)**; how
-they fit: **[Architecture →](https://confluxfl.dev/guides/architecture/)**;
-a lesson per crate: **[Crate deep dives →](https://confluxfl.dev/crate-deep-dives/)**.
+Sixteen crates; the dependency graph is acyclic.
+**[Crates →](https://confluxfl.dev/reference/crates/)** ·
+**[Architecture →](https://confluxfl.dev/guides/architecture/)** ·
+**[Crate deep dives →](https://confluxfl.dev/crate-deep-dives/)**
+
+<details>
+<summary><b>Dependency graph and one line per crate</b></summary>
 
 ```mermaid
 graph LR
@@ -214,11 +271,18 @@ graph LR
 | [`conflux-node`](crates/conflux-node) | *(binary)* Thin client-side bridge to the local `ClientApp` (Python or Rust) |
 | [`conflux-client`](crates/conflux-client) | Rust-native `ClientApp` SDK — train in Rust, no Python in the loop |
 
-## Extending Conflux
+</details>
+
+## 🧩 Extending
 
 Adding a new aggregation method — the most common extension — is a new
 trait impl plus one registry line, with **zero changes to
-`conflux-server`**:
+`conflux-server`**. Full guide, including which of four aggregation
+"shapes" to pick and the citation discipline every shipped method
+follows: **[Extending →](https://confluxfl.dev/guides/extending/)**
+
+<details>
+<summary><b>What that looks like</b></summary>
 
 ```rust
 // crates/conflux-core/src/robust.rs
@@ -240,13 +304,12 @@ inventory::submit! {
 
 `aggregator = "my_method"` in any experiment's config now resolves and
 constructs it. The same pattern adds a selector or privacy mechanism.
-Full guide, including which of four aggregation "shapes" to pick and the
-citation discipline every shipped method follows:
-**[Extending →](https://confluxfl.dev/guides/extending/)**.
 
-## Documentation
+</details>
 
-Everything user-facing is on **[confluxfl.dev](https://confluxfl.dev)**:
+## 📚 Documentation
+
+Everything user-facing is on **[confluxfl.dev](https://confluxfl.dev)**.
 
 | | |
 |---|---|
@@ -261,41 +324,28 @@ Everything user-facing is on **[confluxfl.dev](https://confluxfl.dev)**:
 | [Web-app integration](https://confluxfl.dev/guides/web-app-integration/) · [API stability](https://confluxfl.dev/reference/api-stability/) | The HTTP admin surface; what is promised before 1.0 |
 | [Crate deep dives](https://confluxfl.dev/crate-deep-dives/) · [Blog](https://confluxfl.dev/blog/) | A Rust lesson per crate; concepts in plain terms |
 
-In this repository: [CHANGELOG.md](CHANGELOG.md) · [CONTRIBUTING.md](CONTRIBUTING.md) ·
-[SECURITY.md](SECURITY.md) · [`deploy/`](deploy/README.md) · [`baselines/`](baselines/README.md).
-`docs/` keeps only the generated aggregation catalog (a golden-file test artifact).
+In this repository: [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) ·
+[SECURITY](SECURITY.md) · [`deploy/`](deploy/README.md) · [`baselines/`](baselines/README.md).
+`docs/` keeps only the generated aggregation catalog, a golden-file test artifact.
 
-## Project status
+## 📊 Project status
 
-**536 tests** pass workspace-wide, including a cross-round adversarial
-suite that holds every aggregation method to "never panic, never return
-a non-finite aggregate". `cargo fmt --check` and
-`cargo clippy --workspace --all-targets` are clean, the latter under
-`-D warnings`; `cargo deny` gates advisories and licenses.
-
-Twenty-two server-side aggregation methods across five families, plus
-FedProx client-side. Both client SDKs (Python and Rust) ship, with four
-paper reproductions in `baselines/` verified through the Rust edge.
-Durable Redis / Postgres / S3 backends, allow-list / token-JWT / mTLS
-node authentication, and differential privacy with epsilon accounting
-that survives a restart.
-
-Version `0.1.0`. The `0.x` is deliberate and
-[documented](https://confluxfl.dev/reference/api-stability/): the public
-API is still moving, and a `1.0` would be a compatibility promise this
-codebase is not ready to make. Breaking changes land in minor versions
-until then.
+| | |
+|---|---|
+| **Tests** | 536 pass workspace-wide, including a cross-round adversarial suite that holds every method to "never panic, never return a non-finite aggregate" |
+| **Lints** | `cargo fmt --check` and `cargo clippy --workspace --all-targets` clean under `-D warnings`; `cargo deny` gates advisories and licenses |
+| **Catalog** | 22 server-side methods across 5 families, plus FedProx client-side |
+| **Clients** | Python and Rust SDKs ship; four paper reproductions in `baselines/` verified through the Rust edge |
+| **Operations** | Redis / Postgres / S3, allow-list / JWT / mTLS auth, DP accounting across restarts |
+| **Version** | `0.1.0` — the `0.x` is deliberate and [documented](https://confluxfl.dev/reference/api-stability/): the public API is still moving, and breaking changes land in minor versions until `1.0` is a promise this codebase can keep |
 
 Unpublished research built *on* Conflux lives in a separate repository,
 not here — this one ships literal, cited implementations of published
 methods.
 
-## License
+## 📄 License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
-
-Copyright the Conflux FL authors.
-
-Unless you explicitly state otherwise, any contribution intentionally
-submitted for inclusion in this work shall be licensed as above, without
-any additional terms or conditions.
+Licensed under the [Apache License, Version 2.0](LICENSE). Copyright the
+Conflux FL authors. Unless you explicitly state otherwise, any
+contribution intentionally submitted for inclusion in this work shall be
+licensed as above, without any additional terms or conditions.
