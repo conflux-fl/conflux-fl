@@ -32,7 +32,7 @@
 //! open for the remaining `Overrides` fields.
 //!
 //! `CONFLUX_GRPC_ADDR`/`CONFLUX_HTTP_ADDR` (below) close a gap
-//! `docs/WEB_APP_INTEGRATION.md` surfaced: both listeners were hardcoded
+//! `https://confluxfl.dev/guides/web-app-integration/` surfaced: both listeners were hardcoded
 //! to `127.0.0.1`, which is unreachable from a separate container (e.g. a
 //! FastAPI/Django backend calling the HTTP admin API from its own
 //! container) unless it shares this process's network namespace. Defaults

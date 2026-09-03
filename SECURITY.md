@@ -69,7 +69,7 @@ defended, and reporting them will get you this section back:
 
 ## Hardening a deployment
 
-See [docs/USAGE.md](docs/USAGE.md) for the full list. The short version:
+See [the configuration catalog](https://confluxfl.dev/reference/configuration-catalog/) for the full list. The short version:
 run in production mode, set `CONFLUX_ADMIN_TOKEN`, enable node auth,
 bind the admin API to loopback, and set `max_update_bytes` to something
 your models actually need.

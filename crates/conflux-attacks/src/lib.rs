@@ -6,7 +6,7 @@
 //! (`tests/attack_vs_defense.rs`).
 //!
 //!  for the full source
-//! list, and `docs/EXTENDING.md`'s "Adding a new attack" section for how
+//! list, and `https://confluxfl.dev/guides/extending/`'s "Adding a new attack" section for how
 //! to add another one.
 //!
 //! # Example

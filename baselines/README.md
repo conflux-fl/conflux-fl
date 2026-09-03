@@ -9,7 +9,7 @@ cataloged method plus the paper's setup and expected results, reproducible
 by **two client edges** — Python (PyTorch) and Rust (Burn) — and driven and
 verified by the `conflux-baselines` runner.
 
-Design + manifest schema: `conflux-fl-internal/docs/BASELINES.md`.
+Design + manifest schema: the [Baselines guide](https://confluxfl.dev/guides/baselines/) and [Add a baseline](https://confluxfl.dev/guides/baselines-add/).
 
 ## Reproduced papers
 

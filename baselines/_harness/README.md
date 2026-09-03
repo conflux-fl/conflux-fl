@@ -5,7 +5,7 @@ Today every baseline points `[harness].example` at an existing
 that example's proven `run_demo.sh`. That works now and reuses code that
 already reproduces real numbers.
 
-**Phase 4** (see `conflux-fl-internal/docs/BASELINES.md`) refactors the
+**Phase 4** (see `https://confluxfl.dev/guides/baselines/`) refactors the
 duplicated `e2e_*` code — the CIFAR trainer/eval/centralized files are
 literally "copied over unchanged from MNIST" — into one reusable library
 here:

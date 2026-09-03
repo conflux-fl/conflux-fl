@@ -4,7 +4,7 @@ All notable changes to Conflux FL are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the `0.` major deliberately load-bearing — see
-[`docs/API_STABILITY.md`](docs/API_STABILITY.md) for what is and is not
+[API stability](https://confluxfl.dev/reference/api-stability/) for what is and is not
 promised before `1.0`.
 
 > **`0.1.0` is the first release.** Conflux FL was built phase by phase
@@ -18,6 +18,32 @@ promised before `1.0`.
 ## [Unreleased]
 
 ### Added
+
+- **Baselines** — `baselines/` reproduces published papers as
+  manifests (`baseline.toml`: a cataloged method + the paper's setup +
+  the expected result) and a `conflux-baselines` runner (`list`,
+  `run <name> --client python|rust`, `verify`). Four reproductions ship —
+  FedAvg, Krum, Trimmed Mean, Bulyan — each with a Python (PyTorch) and/or
+  Rust (Burn) client edge; the method is validated against the strategy
+  registry before anything runs, and `verify` asserts every Rust edge
+  against its committed number.
+- **Rust-native Burn client** — `conflux-client`'s `burn_mlp` example:
+  a real Burn MLP `ClientApp` (ndarray CPU backend) that drives the
+  *real* catalog aggregators in-process; strictly opt-in behind the
+  `burn` feature so the default build never compiles it.
+- **Node credentials and TLS** — `conflux-node` now presents a
+  per-client `CONFLUX_NODE_AUTH_TOKEN` (token/JWT) at registration and
+  resolves a three-way TLS posture from `CONFLUX_TLS_*` — plaintext,
+  server-authenticated (`SERVER_CA_PATH` + `DOMAIN`), or mutual (all
+  four) — failing loudly on any other subset. `conflux_net::tls` gained
+  `client_tls_config_server_auth`.
+- **`deploy/`** — `run_client.sh` (a per-machine node + trainer
+  launcher) and `allowlist.sh` (batch admission by id, token, or cert
+  fingerprint).
+- **Documentation moved to confluxfl.dev** — manuals, guides, and
+  tutorials now live on the documentation site; this repository keeps
+  code and development files. `docs/` retains only the generated
+  aggregation catalog, a golden-file test artifact.
 
 - **Registry-driven catalog generation** — a `catalog` example
   (`cargo run -p conflux-core --example catalog`, Markdown or `--format
@@ -166,12 +192,24 @@ promised before `1.0`.
   **Behavior change** for `edge` deployments relying on the old
   mirrored values; a profile with `inherits = "edge"` overriding them
   restores any of the old numbers.
-- `docs/AGGREGATION_LANDSCAPE.md` records **Zeno++ as declined with a
+- The aggregation-landscape design notes (engineering log) record **Zeno++ as declined with a
   reason**: it is fully *asynchronous* SGD — an execution model, not an
   aggregation rule — and cannot be expressed through
   `Aggregator::aggregate(batch)` without inventing a batched variant
   the paper never defined (ADR 0008). It becomes the first candidate if
   an async pipeline mode ever exists.
+
+### Fixed
+
+- CI: `cargo deny` gained scoped ignores for two *unmaintained* advisories
+  riding in only via the optional `burn` tree (`paste`, `bincode`) and an
+  allowance for MPL-2.0 (`option-ext`, same path); Rust 1.98's new
+  `clippy::chunks_exact_to_as_chunks` lint is satisfied with `as_chunks`
+  on the f32 decode paths; the MinIO service container moved to
+  `bitnamilegacy/minio` after Bitnami emptied `bitnami/minio`; evnx is
+  installed via `gh release download` and gated on high/medium-confidence
+  findings; the Redis/Postgres integration tests now read the
+  `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
 ## [0.1.0]
 
@@ -213,7 +251,7 @@ round pipeline that runs end to end across the language boundary.
 - **`conflux-node`** — the client-side bridge, with retry and backoff.
 - A stub Python `ClientApp`, verified with a real three-process,
   cross-language smoke test.
-- The first ADRs, phase briefs, and `docs/spec/conflux-spec-v1.md`.
+- The first architecture decision records, phase briefs, and the v1 specification — the engineering log, kept outside this repository.
 
 ### Durability, security, and the algorithm catalog
 
@@ -261,7 +299,7 @@ input".
   `e2e_pytorch_shakespeare`.
 - **Releasability**: Apache-2.0, workspace-inherited metadata, declared
   MSRVs, a compose file, env-file management, and CI.
-- `docs/API_STABILITY.md`, and the ADR series.
+- [API stability](https://confluxfl.dev/reference/api-stability/), and the ADR series.
 
 #### Fixed
 
@@ -367,14 +405,14 @@ three of those methods depend on had never reached an aggregator.
 
 #### Removed
 
-- **Deviation Stability Scoring and the research line it belongs to.**
-  `DssAggregator` and `ClientDssDiagnostic` are gone from
+- **A research aggregator moved out of the framework.**
+  An unvalidated research aggregator and its diagnostic type are gone from
   `conflux-core`, along with their tests and the three experiment
   runners in `conflux-attacks/examples/`. They moved to the separate
   `conflux-research` repository, which depends on these crates through
   their public API exactly as any third party would.
 
-  This is a **breaking change** for anyone constructing `DssAggregator`
+  This is a **breaking change** for anyone constructing that aggregator
   directly. It was never in `build_aggregator`'s catalog, so no
   configuration could select it and no deployment is affected.
 
@@ -397,7 +435,7 @@ three of those methods depend on had never reached an aggregator.
 - Minimum supported Rust version is **1.88** (was a declared-but-untrue
   1.85). `conflux-store` and `conflux-server` remain at 1.94.1 for
   `aws-sdk-s3`.
-- `docs/AGGREGATION_LANDSCAPE.md` and ADR 0012 corrected: FedNova does
+- The aggregation-landscape design notes and ADR 0012 corrected: FedNova does
   **not** fit `AveragingWeighting`. Its update leaves an `x_t` term that
   vanishes only when every local step count is equal — which is exactly
   when FedNova degenerates to FedAvg. It is stateful.

@@ -19,8 +19,7 @@ python3 -m venv .venv
 ```
 
 `conflux-node` must already be running and have registered with a running
-`conflux-server` (see its phase brief for the full
-three-process smoke test this was verified against).
+`conflux-server` (the repo's three-process smoke test verifies this).
 
 ## Poison mode (testing the `robust` aggregation family)
 
@@ -39,5 +38,5 @@ Run alongside one or more honest `stub_client.py` instances against a
 submission's influence bounded, over the real network hop — see
 [`docs/E2E_TESTING.md`](../../docs/E2E_TESTING.md) for the full harness
 this is meant to plug into, and
-its phase brief
+the [aggregation catalog](https://confluxfl.dev/reference/aggregation-catalog/)
 for the aggregation methods themselves.

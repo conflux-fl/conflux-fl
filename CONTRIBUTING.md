@@ -48,7 +48,7 @@ ships literal implementations, not variants). This is a catalog
 researchers compare against, so "our improved variant of Krum" is a
 different project — build it against the public API from your own
 repository, which
-[docs/EXTENDING.md](docs/EXTENDING.md) explains how to do. It joins the
+[https://confluxfl.dev/guides/extending/](https://confluxfl.dev/guides/extending/) explains how to do. It joins the
 catalog when it is published.
 
 **4. A demonstration that cannot fail is not evidence.** Before
@@ -59,7 +59,7 @@ number looked excellent and meant nothing.
 
 ## Adding an aggregation method
 
-[docs/EXTENDING.md](docs/EXTENDING.md) has the steps. The short version:
+[https://confluxfl.dev/guides/extending/](https://confluxfl.dev/guides/extending/) has the steps. The short version:
 implement the small trait your method's family varies (not the whole
 `Aggregator`), register it with `inventory::submit!`, and add it to
 `build_aggregator`. A new averaging variant is usually a ten-line trait
@@ -103,3 +103,26 @@ once.
 
 Ordinary bugs: open an issue. Security vulnerabilities: **do not** open
 a public issue — see [SECURITY.md](SECURITY.md).
+
+## Development workflow
+
+```bash
+cargo fmt --all # apply formatting
+cargo clippy --workspace --all-targets # lint everything, including tests
+```
+
+Before starting any new work, read the sections above — they cover what
+CI enforces and the four things this project is opinionated about. The
+[Architecture guide](https://confluxfl.dev/guides/architecture/) explains
+how the pieces fit and why.
+
+## Load / concurrency testing
+
+`crates/conflux-server/tests/load.rs` spins up 30 concurrent simulated
+clients across 3 rounds against a real running server and reports timing:
+
+```bash
+cargo test -p conflux-server --test load -- --nocapture
+```
+
+

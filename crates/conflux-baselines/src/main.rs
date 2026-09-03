@@ -1,6 +1,6 @@
 //! `conflux-baselines` — run and verify Conflux FL's published-paper
 //! reproductions. Design + manifest schema:
-//! `conflux-fl-internal/docs/BASELINES.md`.
+//! `https://confluxfl.dev/guides/baselines/`.
 //!
 //! A baseline is a *recipe*, not an implementation: `baseline.toml` names a
 //! cataloged method plus the paper's setup and expected result, and one or

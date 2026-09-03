@@ -3,7 +3,7 @@
 //! (ADR 0011).
 //!
 //! Every other family in this crate reads only the batch. That is a real
-//! ceiling, and `docs/AGGREGATION_LANDSCAPE.md`'s Category 2 analysis
+//! ceiling, and the aggregation-landscape design notes' Category 2 analysis
 //! names it: a colluding majority *is* the batch's consensus, so a method
 //! whose only evidence is the batch has nothing left to appeal to. The
 //! `trusted` family is the structural answer — it compares each client

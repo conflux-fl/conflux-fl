@@ -10,7 +10,7 @@
 //! authentication on one port was gated by an unauthenticated write on
 //! the other.
 //!
-//! `docs/WEB_APP_INTEGRATION.md` already described the mitigation —
+//! `https://confluxfl.dev/guides/web-app-integration/` already described the mitigation —
 //! never expose the admin port, treat your own backend as the trust
 //! boundary — and that remains good advice. It is not a control the
 //! framework enforces, though, and "acceptable as long as it stays

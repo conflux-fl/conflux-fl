@@ -1,5 +1,5 @@
 # Trimmed Mean (Yin et al. 2018) — coordinate-wise Byzantine-robust aggregation.
-# Schema: ../../../conflux-fl-internal/docs/BASELINES.md (design doc).
+# Schema + walkthrough: https://confluxfl.dev/guides/baselines/ and https://confluxfl.dev/guides/baselines-add/
 
 [paper]
 title   = "Byzantine-Robust Distributed Learning: Towards Optimal Statistical Rates"

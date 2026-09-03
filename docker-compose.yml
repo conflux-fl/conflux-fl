@@ -1,6 +1,6 @@
 # The backend services conflux-fl's integration tests need.
 #
-# Ports deliberately match what `docs/USAGE.md`'s `docker run` commands
+# Ports deliberately match what the backends guide's `docker run` commands (https://confluxfl.dev/guides/backends-and-sidecar/)
 # already used (16379 / 15432 / 19000) rather than the services' standard
 # ones, for two reasons: a developer with the old containers running is
 # unaffected, and non-standard ports don't collide with a Redis or

@@ -8,7 +8,7 @@ body:
         Conflux FL ships literal, cited implementations of **published**
         methods. An unpublished or novel method is welcome as an
         out-of-tree crate built against the public API — see
-        [docs/EXTENDING.md](../blob/main/docs/EXTENDING.md) — and can
+        [Extending](https://confluxfl.dev/guides/extending/) — and can
         join the catalog once published.
   - type: input
     id: paper
