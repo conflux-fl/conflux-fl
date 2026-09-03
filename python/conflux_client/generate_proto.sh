@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerates fl_transport_pb2.py / fl_transport_pb2_grpc.py from
-# conflux-proto's .proto — the same schema the Rust side uses (ADR 0004).
+# conflux-proto's .proto — the same schema the Rust side uses.
 # Generated files aren't committed (same reasoning as not committing
 # target/); run this before running stub_client.py.
 set -euo pipefail

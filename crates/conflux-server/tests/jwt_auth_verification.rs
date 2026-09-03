@@ -288,7 +288,7 @@ async fn being_on_the_allowlist_does_not_excuse_a_bad_token() {
 
 #[tokio::test]
 async fn research_mode_without_a_key_still_registers_anyone() {
-    // Today's behavior before this phase, preserved: research mode with
+    // Preserved on purpose: research mode with
     // `auth = jwt` and no key configured verifies nothing. Asserted
     // rather than assumed, because this is the permissive path — the one
     // where a regression is silent.

@@ -39,8 +39,8 @@ def flatten(model: nn.Module) -> list[float]:
 
 def is_placeholder_init(flat: list[float]) -> bool:
     """True for Conflux's generic all-zero initial checkpoint
-    (`conflux-server`'s `main.rs` has no idea what architecture it's
-    serving — ADR 0004 — so it can only ever hand out zeros as a
+    (`conflux-server` has no idea what architecture it's serving, so it
+    can only ever hand out zeros as a
     placeholder). Zero-initializing every weight is fine for a model
     with no hidden layers (Option A's logistic regression), but it's a
     textbook symmetry-breaking failure for a network with ReLU hidden
@@ -69,8 +69,8 @@ def unflatten(model: nn.Module, flat: list[float]) -> None:
 def unflatten_like(model: nn.Module, flat: list[float]) -> list[torch.Tensor]:
     """Splits a flat vector into tensors shaped like `model`'s parameters,
     without touching the model. SCAFFOLD needs this: its correction and
-    control variates travel flat (the wire format is architecture-free,
-    ADR 0004) but apply per-parameter during local steps."""
+    control variates travel flat (the wire format is architecture-free)
+    but apply per-parameter during local steps."""
     flat_t = torch.tensor(flat, dtype=torch.float32)
     out, offset = [], 0
     for prm in model.parameters():
@@ -105,7 +105,7 @@ def train_steps(
     its own local optimum during a long round.
 
     FedProx is entirely client-side — the server sees an ordinary weight
-    vector and cannot tell it was used (ADR 0004). That is why there is
+    vector and cannot tell it was used. That is why there is
     no `aggregator = "fedprox"`: its server half *is* FedAvg, and
     `build_aggregator` says so explicitly if you try.
 

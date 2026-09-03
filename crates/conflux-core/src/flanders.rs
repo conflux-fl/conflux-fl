@@ -273,8 +273,8 @@ impl FlandersAggregator {
 
     /// The most recent round's per-client scores and keep/drop decisions.
     ///
-    /// Read-only, for experiment runners and tests; `aggregate` never
-    /// consults it. A stable, per-client row shape, so a run's decisions
+    /// Read-only, for callers that want to inspect a round's decisions
+    /// and for tests; `aggregate` never consults it. A stable, per-client row shape, so a run's decisions
     /// can be compared against another method's.
     pub fn last_diagnostics(&self) -> Vec<ClientFlandersDiagnostic> {
         self.last_diagnostics

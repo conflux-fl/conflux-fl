@@ -5,8 +5,7 @@ capturing every round's real held-out accuracy/loss — plus the
 centralized baseline each combination is compared against — into one
 JSONL file.
 
-The real-data equivalent of an out-of-tree Rust-only sweep
-infrastructure: each combination is one real `./run_demo.sh` invocation
+A real-data sweep: each combination is one real `./run_demo.sh` invocation
 (real training, real gRPC, real aggregation), not a synthetic vector.
 
 Usage:

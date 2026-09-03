@@ -38,13 +38,13 @@ wearing a return type.
 
 **2. Comments say *why*, not *what*.** The code already says what it
 does. What is expensive to reconstruct six months later is why the
-obvious alternative was rejected. Comments cite architecture decisions
-as `ADR NNNN`; the citation exists so a comment can name a decision
-without restating it.
+obvious alternative was rejected. A comment that names the rejected
+alternative and the reason is worth more than one that narrates the
+code.
 
 **3. A new aggregation method must be a literal implementation of a
-published paper**, cited in its doc comment (ADR 0008 — the framework
-ships literal implementations, not variants). This is a catalog
+published paper**, cited in its doc comment (the framework ships literal
+implementations, not variants). This is a catalog
 researchers compare against, so "our improved variant of Krum" is a
 different project — build it against the public API from your own
 repository, which

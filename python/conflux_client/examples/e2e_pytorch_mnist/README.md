@@ -71,8 +71,8 @@ round=15 held_out_accuracy=0.9050
 
 ## A real finding specific to Option B: zero-init breaks a ReLU network
 
-`conflux-server`'s `main.rs` has no idea what model it's serving (ADR
-0004 — Conflux only ever sees a flat `f32` vector) — its placeholder
+`conflux-server`'s `main.rs` has no idea what model it's serving (Conflux
+only ever sees a flat `f32` vector) — its placeholder
 initial checkpoint is all zeros (`CONFLUX_INITIAL_WEIGHTS_DIM` zeros).
 For Option A's logistic regression (no hidden layer), that's harmless.
 For this MLP, it's a textbook symmetry-breaking failure: with every
@@ -97,7 +97,8 @@ initial model" FL invariant is preserved, it's just derived client-side
 rather than trusted from the server's placeholder. This is the
 architecturally correct fix, not a workaround: Conflux's server
 genuinely cannot know the right initialization for an arbitrary model
-(ADR 0004's whole point), so a real client has to own this decision.
+(the server is opaque to model architecture by design), so a real
+client has to own this decision.
 
 ## Files
 

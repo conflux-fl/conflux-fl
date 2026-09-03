@@ -289,10 +289,10 @@ impl Aggregator for FoolsGoldAggregator {
 ///   rounds rather than arriving fully formed in round one.
 /// - `τ` is problem-scale dependent — the paper tunes it per experiment,
 ///   and so must a deployment. It is config-resolved (`clip_radius`),
-///   never a hardcoded constant. **Measured: at the framework's
-///   placeholder `τ = 1.0`, this method scored *worse than no defense*
-///   on a real 50,890-parameter model, and no `τ` in a 1→100 sweep
-///   reached a selection-based method's accuracy.** `τ` bounds an L2
+///   never a hardcoded constant. **In the MNIST harness (a
+///   50,890-parameter MLP), the placeholder `τ = 1.0` scored *worse than
+///   no defense*, and no `τ` between 1 and 100 reached a selection-based
+///   method's accuracy.** `τ` bounds an L2
 ///   norm in parameter space, so what it buys per round depends on how
 ///   many parameters that norm is spread across; an optimum found at
 ///   `dim = 3` does not transfer to `dim = 50,890`. Treat an untuned

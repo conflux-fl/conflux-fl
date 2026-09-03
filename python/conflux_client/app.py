@@ -1,4 +1,4 @@
-"""The Conflux `ClientApp` SDK — ADR 0005's question (3), resolved.
+"""The Conflux `ClientApp` SDK.
 
 Everything a federated client does *except* training is identical across
 deployments: connect to `conflux-node`'s local loopback hop, register,
@@ -21,20 +21,19 @@ one method to write:
 
 ## What this deliberately does not solve
 
-ADR 0005 separates three questions, and this module answers only the
+Three questions are separable here, and this module answers only the
 third:
 
 1. **How does a client learn what model to train?** Not here. You import
-   your own model, exactly as the existing harnesses do. The ADR's
-   recommendation is that the experiment config carry a Python import
+   your own model, exactly as the existing harnesses do. A natural
+   extension is for the experiment config to carry a Python import
    path; nothing in this module presumes that, and nothing blocks it.
 2. **How does a participant *get* this code?** Not here, and explicitly
    outside this repository's boundary. `cross_silo` deployments install
    it out of band, which is already how every existing harness works.
    `crowdsource` and `edge` need a distribution story that is a product
-   decision — see `docs/phases/phase-23-client-app-sdk.md`, which also
-   records why a Rust-native client is a serious alternative answer to
-   exactly that question.
+   decision; the Rust-native client (`crates/conflux-client`) is a
+   serious alternative answer to exactly that question.
 3. **What does the SDK wrap?** This module. It is pure technical design,
    answerable from this codebase alone, and it is what unblocks
    `cross_silo` without waiting on (1) or (2).
@@ -42,10 +41,9 @@ third:
 ## Why the optional fields are here
 
 `TrainResult` carries `local_steps`, `local_loss` and `control_variate`
-alongside the weights. Those are the ADR 0012 wire fields, and they are
-the reason FedNova, SCAFFOLD and q-FedAvg are shipped-but-inert: the
-server can receive them and no client has ever been able to send one.
-This is the place that changes. A subclass that returns a `local_loss`
+alongside the weights. Those are the optional per-method wire fields;
+without a client that sends them, FedNova, SCAFFOLD and q-FedAvg fall
+back to plain averaging. This is the place that sends them. A subclass that returns a `local_loss`
 makes `qfedavg` do something other than fall back to FedAvg.
 """
 
@@ -94,7 +92,7 @@ def encode_weights(weights: Sequence[float]) -> bytes:
 def is_placeholder_init(weights: Sequence[float]) -> bool:
     """True for the server's generic all-zero starting checkpoint.
 
-    `conflux-server` is opaque to model architecture (ADR 0004), so the
+    `conflux-server` is opaque to model architecture, so the
     only initialization it can offer a model it knows nothing about is
     zeros. That is harmless for a model with no hidden layers and a
     **textbook symmetry-breaking failure** for anything with ReLU hidden
@@ -237,8 +235,8 @@ def run(
     """Runs `app` for `rounds` rounds. Returns how many were accepted.
 
     `address` is **`conflux-node`'s local loopback listener**, not the
-    server's. That hop is plaintext and localhost-only by design (ADR
-    0004): the node has already authenticated upstream on this client's
+    server's. That hop is plaintext and localhost-only by design: the
+    node has already authenticated upstream on this client's
     behalf, so `auth_token` here is not a credential and is ignored.
     """
 

@@ -82,7 +82,7 @@ you conclude a robust aggregator "isn't working":
 ```
 
 This isn't Krum failing. `conflux-reputation`'s cosine-similarity filter
-runs **before** aggregation (spec §8's pipeline order), scoring every
+runs **before** aggregation (the round pipeline's order), scoring every
 update against the batch's raw mean. In round 1 — when every client
 starts from the same (typically zero) initial checkpoint — a single
 large-magnitude attacker can skew that mean so far that **every honest

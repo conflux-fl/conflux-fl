@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """Stub Python ClientApp — fixed dummy weights, no PyTorch dependency.
 
-Stands in for the real ClientApp SDK (still deferred, ADR 0005) so the
-local gRPC handoff between conflux-node and a Python ClientApp (spec §7)
-can be exercised end-to-end, across the language boundary, not just within
+Stands in for a real training client so the local gRPC handoff between
+conflux-node and a Python ClientApp can be exercised end-to-end, across the language boundary, not just within
 Rust. Permitted only in research mode (`allow_stub_client`).
 
-Connects to conflux-node's local gRPC server (loopback, no TLS — spec §7),
+Connects to conflux-node's local gRPC server (loopback, no TLS),
 registers, fetches one task, "trains" by adding a fixed offset to every
 weight, and submits the result back.
 
 Requires the generated stubs from generate_proto.sh (not committed — see
 that script's comment).
 
-Phase 11c: `--poison` turns this into a Byzantine test client instead —
-submits a large-magnitude offset instead of the honest one, standing in
-for an adversarial ClientApp so the `robust` aggregation family
-(docs/phases/phase-11a-robust-aggregation.md) can be exercised
-end-to-end, over the real network hop, not just against synthetic
-`ClientDelta`s in Rust unit tests. See docs/E2E_TESTING.md. This is still
-a test fixture, not ADR 0005's deferred real SDK.
+`--poison` turns this into a Byzantine test client instead — submits a
+large-magnitude offset instead of the honest one, standing in for an
+adversarial ClientApp so the `robust` aggregation family can be
+exercised end-to-end, over the real network hop, not just against
+synthetic `ClientDelta`s in Rust unit tests. This is a test fixture, not
+the `ClientApp` SDK (`conflux_client.app`).
 """
 
 import argparse
@@ -105,8 +103,7 @@ if __name__ == "__main__":
         action="store_true",
         help=(
             "submit adversarial weights instead of honest training, for "
-            "testing the robust aggregation family (Phase 11a) — see "
-            "docs/E2E_TESTING.md"
+            "testing the robust aggregation family end to end"
         ),
     )
     parser.add_argument(

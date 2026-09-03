@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Converts benchmark.py's JSONL output into a flat CSV (every round)
 and a summary CSV (final-round accuracy per aggregator x split) — no
-dependencies beyond the standard library, matching
-the convention out-of-tree experiment scripts use for the Rust-side
-experiments.
+dependencies beyond the standard library.
 
 Usage:
     python3 summarize_benchmark.py results.jsonl

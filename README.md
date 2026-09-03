@@ -343,9 +343,9 @@ In this repository: [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md)
 | **Operations** | Redis / Postgres / S3, allow-list / JWT / mTLS auth, DP accounting across restarts |
 | **Version** | `0.1.0` — the `0.x` is deliberate and [documented](https://confluxfl.dev/reference/api-stability/): the public API is still moving, and breaking changes land in minor versions until `1.0` is a promise this codebase can keep |
 
-Unpublished research built *on* Conflux lives in a separate repository,
-not here — this one ships literal, cited implementations of published
-methods.
+Conflux ships literal, cited implementations of published methods; a
+method joins the catalog when it is published and can be implemented
+against its citation.
 
 ## 📄 License
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Real-training test-harness client (docs/E2E_TESTING.md, Option B).
+"""Real-training test-harness client (the PyTorch MNIST harness).
 
-Rewritten onto the `ClientApp` SDK (ADR 0005 question 3). Everything this
-file used to carry — its own f32 codec, register, the round-polling loop,
-chunking, submit-with-retry — now lives in `conflux_client.app`. What is
-left is the part that is actually about MNIST.
+Built on the `ClientApp` SDK: the f32 codec, registration, the
+round-polling loop, chunking, and submit-with-retry all live in
+`conflux_client.app`. What is here is the part that is actually about
+MNIST.
 
-It also now reports `local_steps` and `local_loss`, which no client could
+It also reports `local_steps` and `local_loss`, which no client could
 before: those wire fields existed and nothing populated them, which is
 why FedNova and q-FedAvg were shipped-but-inert.
 """

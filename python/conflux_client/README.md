@@ -1,13 +1,13 @@
 # conflux_client
 
-Python `ClientApp` SDK (PyTorch-side training). Design deferred — see
-the v1 specification §7 and Open Item 3 in §11.
+The Python `ClientApp` SDK (`app.py`): subclass `ClientApp`, implement
+`train`, and `run` it against `conflux-node`'s local loopback listener.
+The four `examples/e2e_*` harnesses are real-model clients built on it.
 
-Until the real SDK is designed, `stub_client.py` — fixed dummy weights, no
-PyTorch dependency — stands in for end-to-end pipeline testing, permitted
-only in research mode (`allow_stub_client`). It connects to `conflux-node`'s
-local gRPC server over loopback, the same `.proto` used for the network hop
-(ADR 0004).
+`stub_client.py` — fixed dummy weights, no PyTorch dependency — is a test
+fixture for end-to-end pipeline testing, permitted only in research mode
+(`allow_stub_client`). It connects to `conflux-node`'s local gRPC server
+over loopback, the same `.proto` used for the network hop.
 
 ## Running the stub client
 

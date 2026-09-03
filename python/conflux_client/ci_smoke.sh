@@ -5,8 +5,8 @@
 # imports, unit tests. Those catch a lot, and they all pass for a client
 # that connects, registers, and then silently sends nothing the server
 # can use — which is exactly the failure this project has already
-# shipped twice (stubs generated before ADR 0012's fields existed, and a
-# server-side rebuild that dropped them again). Neither was visible
+# shipped twice (stubs generated before the optional fields existed, and
+# a server-side rebuild that dropped them again). Neither was visible
 # without running the loop.
 #
 # So this runs the loop: a real conflux-server, a real conflux-node, and

@@ -7,13 +7,10 @@ with the `0.` major deliberately load-bearing — see
 [API stability](https://confluxfl.dev/reference/api-stability/) for what is and is not
 promised before `1.0`.
 
-> **`0.1.0` is the first release.** Conflux FL was built phase by phase
-> without a changelog and without tags, so everything below is a single
-> entry rather than a reconstruction of what shipped on which day.
-> A dated, narrative engineering log of how the project got here —
-> including the decisions that were reversed — is kept outside this
-> repository. From the next release on, this file is maintained as changes
-> land.
+> **`0.1.0` is the first release.** Everything below is a single entry:
+> what the release contains, grouped by area, and the defects fixed on
+> the way to it. From the next release on, this file is maintained as
+> changes land.
 
 ## [Unreleased]
 
@@ -24,8 +21,8 @@ Nothing yet — `0.1.0` is the current release.
 The first release of Conflux FL — a Rust-native federated learning
 framework with a closed, cited aggregation catalog, two client SDKs,
 durable backends, real authentication, and the tooling to reproduce the
-papers it implements. It all shipped as one release; the phase-by-phase
-story, with every bug the process found, is under **Details**.
+papers it implements. It all shipped as one release; the fuller account,
+including every defect found on the way, is under **Details**.
 
 ### At a glance
 
@@ -108,18 +105,17 @@ story, with every bug the process found, is under **Details**.
 
 ### The foundation
 
-The skeleton: every crate in the spec's dependency graph, wired into one
+The skeleton: every crate in the dependency graph, wired into one
 round pipeline that runs end to end across the language boundary.
 
 #### Added
 
-- Cargo workspace (edition 2024) with the crates spec §2 defines, in an
+- Cargo workspace (edition 2024) with the framework crates in an
   acyclic dependency graph.
 - **`conflux-proto`** — one protobuf schema serving both the
-  server↔node network hop and the node↔client local hop (ADR 0004).
+  server↔node network hop and the node↔client local hop.
 - **`conflux-config`** — layered resolution across topology and mode
-  profiles, with every resolved parameter logging its source (ADR 0001,
-  ADR 0007).
+  profiles, with every resolved parameter logging its source.
 - **`conflux-registry`** — client lifecycle: register, heartbeat, evict.
 - **`conflux-store`** — model checkpoint and experiment persistence.
 - **`conflux-selector`** — client sampling (`UniformRandomSelector`,
@@ -129,18 +125,17 @@ round pipeline that runs end to end across the language boundary.
 - **`conflux-privacy`** — local DP clip-and-noise, epsilon accounting.
 - **`conflux-reputation`** — opt-in cosine-similarity contribution
   scoring.
-- **`conflux-core`** — the aggregation catalog and the family pattern
-  (ADR 0002), with FedAvg as its first member.
+- **`conflux-core`** — the aggregation catalog and the family pattern,
+  with FedAvg as its first member.
 - **`conflux-server`** — the full round pipeline and HTTP admin surface.
 - **`conflux-node`** — the client-side bridge, with retry and backoff.
 - A stub Python `ClientApp`, verified with a real three-process,
   cross-language smoke test.
-- The first architecture decision records, phase briefs, and the v1 specification — the engineering log, kept outside this repository.
 
 ### Durability, security, and the algorithm catalog
 
 Durable backends, the robust and optimization families, security, and
-six tiers of stabilization. This is where Conflux FL went from "the
+six rounds of hardening. This is where Conflux FL went from "the
 pipeline runs" to "the pipeline survives contact with adversarial
 input".
 
@@ -158,10 +153,10 @@ input".
 - **FLANDERS** and **FLTrust**, the `temporal` and `trusted` families.
 - **`conflux-trusted-reference`** — an optional sidecar process, so
   FLTrust's server-side training requirement does not put a training
-  runtime inside `conflux-server` (ADR 0011).
+  runtime inside `conflux-server`.
 - **`conflux-attacks`** — cited FL attacks, run against every shipped
   aggregator. Dev/test-only, `publish = false`, with a CI job enforcing
-  that `conflux-server` never depends on it (ADR 0010).
+  that `conflux-server` never depends on it.
 - **Security**: mTLS for push mode, JWT verification (RS256/ES256, `sub`
   bound to the registering client), a node allow-list, and an
   authenticated HTTP admin API.
@@ -169,13 +164,13 @@ input".
   that survives restart, per-client accounting scope, and a client-side
   privacy transform applied by `conflux-node`.
 - **Push mode** in `conflux-node`, `cross_silo`'s own default posture.
-- **ADR 0012's optional wire fields** — `local_steps`, `local_loss`,
+- **Optional per-method wire fields** — `local_steps`, `local_loss`,
   `control_variate` — reassembled from chunks and proven
   backward-compatible at byte level.
 - **Observability**: every operational decision point emits structured
   `tracing` events — buffer flush reason, reputation rejection,
   cumulative epsilon, node retry and backoff.
-- **Config**: the strategy registry wired for all three spec §5 families,
+- **Config**: the strategy registry wired for all three strategy families,
   experiment-file parsing, and provenance logging for every resolved
   parameter.
 - **Four end-to-end harnesses** on real models and datasets —
@@ -183,7 +178,7 @@ input".
   `e2e_pytorch_shakespeare`.
 - **Releasability**: Apache-2.0, workspace-inherited metadata, declared
   MSRVs, a compose file, env-file management, and CI.
-- [API stability](https://confluxfl.dev/reference/api-stability/), and the ADR series.
+- The [API stability](https://confluxfl.dev/reference/api-stability/) policy.
 
 #### Fixed
 
@@ -206,9 +201,9 @@ input".
 
 #### Changed
 
-- `conflux-node` gained a dependency on `conflux-privacy`, a deliberate
-  deviation from spec §2 — spec §8's own sequence diagram requires the
-  node to apply the mechanism.
+- `conflux-node` gained a dependency on `conflux-privacy`: the round
+  sequence requires the node to apply the client-side mechanism, and it
+  cannot without reaching it.
 - SIMD aggregation was built, benchmarked, and **rejected**: slower than
   the plain loop at every realistic model dimension, because the work is
   memory-bandwidth-bound and LLVM already auto-vectorizes it.
@@ -264,7 +259,7 @@ three of those methods depend on had never reached an aggregator.
 
 #### Fixed
 
-- **ADR 0012's optional fields never reached any aggregator.**
+- **The optional per-method fields never reached any aggregator.**
   `reencode_passing_deltas` rebuilt each `ClientDelta` ending in
   `..Default::default()`, resetting `local_steps`, `local_loss` and
   `control_variate` to `None` on the last hop before `aggregate`.
@@ -284,28 +279,26 @@ three of those methods depend on had never reached an aggregator.
   `CONFLUX_ADMIN_PORT`.
 - The unknown-aggregator error hardcoded twelve names while twenty-one
   were registered. It is now generated from the strategy registry.
-- Stale generated Python protobuf stubs, which had predated the ADR 0012
-  fields entirely. Now regenerated and guarded by CI.
+- Stale generated Python protobuf stubs, which had predated the optional
+  per-method fields entirely. Now regenerated and guarded by CI.
 
 #### Removed
 
-- **A research aggregator moved out of the framework.**
-  An unvalidated research aggregator and its diagnostic type are gone from
-  `conflux-core`, along with their tests and the three experiment
-  runners in `conflux-attacks/examples/`. They moved to the separate
-  `conflux-research` repository, which depends on these crates through
-  their public API exactly as any third party would.
+- **An uncited aggregator removed from the framework.** An unpublished
+  aggregator and its diagnostic type are gone from `conflux-core`, along
+  with their tests and the three experiment runners in
+  `conflux-attacks/examples/`.
 
   This is a **breaking change** for anyone constructing that aggregator
   directly. It was never in `build_aggregator`'s catalog, so no
   configuration could select it and no deployment is affected.
 
-  The reason is the same one ADR 0008 states: this project ships
-  literal, cited implementations of published methods. An unvalidated
-  hypothesis has no citation to be faithful to, and while it sat in the
-  catalog every document listing the catalog had to explain why one
-  entry was different. It rejoins the `temporal` family when it is
-  published, with its citation.
+  The reason is the project's own rule: it ships literal, cited
+  implementations of published methods. An unpublished method has no
+  citation to be faithful to, and while it sat in the catalog every
+  document listing the catalog had to explain why one entry was
+  different. It can rejoin the `temporal` family once it is published,
+  with its citation.
 
 #### Changed
 
@@ -314,13 +307,12 @@ three of those methods depend on had never reached an aggregator.
   decode a batch and reject non-finite weights before touching it, and
   reimplementing that is how a new method acquires the `NaN`-handling
   defects this catalog already fixed. Exporting the chokepoint is
-  cheaper than watching it be copied badly — and separating the research
-  line is what proved an out-of-tree aggregator needs it.
+  cheaper than watching it be copied badly; the first aggregator built
+  outside this crate is what proved it needs to be public.
 - Minimum supported Rust version is **1.88** (was a declared-but-untrue
   1.85). `conflux-store` and `conflux-server` remain at 1.94.1 for
   `aws-sdk-s3`.
-- The aggregation-landscape design notes and ADR 0012 corrected: FedNova does
-  **not** fit `AveragingWeighting`. Its update leaves an `x_t` term that
+- A design correction: FedNova does **not** fit `AveragingWeighting`. Its update leaves an `x_t` term that
   vanishes only when every local step count is equal — which is exactly
   when FedNova degenerates to FedAvg. It is stateful.
 
@@ -364,14 +356,14 @@ credentials, and the move of the documentation to its own site.
   citation, parameters) straight from the strategy registry, and a
   golden-file test fails CI if the committed
   `docs/AGGREGATION_CATALOG.generated.md` drifts from it. This is what
-  #4's `StrategyEntry` metadata was for: the count and citations that
+  the `StrategyEntry` metadata was for: the count and citations that
   went stale in the docs repeatedly can no longer do so silently.
 
 - **Registry metadata**: `StrategyEntry` now carries `citation`,
   `family`, and `params` for every registered aggregator, selector, and
   privacy mechanism, plus a `conflux_config::entries()` reader. A test
-  makes ADR 0008 a build-time fact — a method registered without a
-  citation naming authors and a year fails CI — and the metadata is the
+  makes the cite-the-paper rule a build-time fact — a method registered
+  without a citation naming authors and a year fails CI — and the metadata is the
   no-drift source a generated catalog or a CLI `describe` would read.
 - **The three remaining PyTorch/numpy harnesses migrated onto the
   `ClientApp` SDK** (numpy-logreg, CIFAR-10, Shakespeare). Each drops
@@ -384,7 +376,7 @@ credentials, and the move of the documentation to its own site.
 - **`--trainer-seed`** on the three PyTorch trainers: reseeds torch's
   RNG *after* the shared deterministic model init, so a multi-seed
   sweep varies real SGD sampling instead of replaying one trajectory
-  per shard (r4's second half). `run_fairness_comparison.sh` derives a
+  per shard. `run_fairness_comparison.sh` derives a
   per-client seed from `(sweep seed, client index)` and its
   known-limitation note is retired.
 
@@ -433,8 +425,8 @@ credentials, and the move of the documentation to its own site.
   and paper-stated requirements only, never taste.
 
 - **Custom profiles with `inherits`** — topology and mode profiles
-  defined in TOML, extending a base and overriding only what differs
-  (the spec's last open config item). `CONFLUX_TOPOLOGY=hospital_silo`
+  defined in TOML, extending a base and overriding only what differs.
+  `CONFLUX_TOPOLOGY=hospital_silo`
   loads `profiles/hospital_silo.toml`; chains may pass through other
   profiles and must end at a builtin. Provenance credits the chain link
   that actually set each value (`topology profile "hospital_silo →
@@ -452,8 +444,8 @@ credentials, and the move of the documentation to its own site.
   the second member of the `trusted` family. Ranks each candidate by a
   suspicion score (the sidecar's held-out improvement minus
   `ρ·‖update‖²`), drops the `b` lowest, averages the rest unweighted.
-  Consumes the sidecar's `ScoreUpdates` RPC, which had been shipped and
-  unused since ADR 0011; the server calls it after the buffer flushes,
+  Consumes the sidecar's `ScoreUpdates` RPC, which had shipped with the
+  sidecar and gone unused; the server calls it after the buffer flushes,
   because Zeno's scores — unlike FLTrust's reference — can only exist
   once the batch does. Scores are consumed on use, so a round that was
   never scored fails loudly instead of ranking this batch with the
@@ -505,11 +497,10 @@ credentials, and the move of the documentation to its own site.
   **Behavior change** for `edge` deployments relying on the old
   mirrored values; a profile with `inherits = "edge"` overriding them
   restores any of the old numbers.
-- The aggregation-landscape design notes (engineering log) record **Zeno++ as declined with a
-  reason**: it is fully *asynchronous* SGD — an execution model, not an
-  aggregation rule — and cannot be expressed through
-  `Aggregator::aggregate(batch)` without inventing a batched variant
-  the paper never defined (ADR 0008). It becomes the first candidate if
+- **Zeno++ declined, with a reason**: it is fully *asynchronous* SGD —
+  an execution model, not an aggregation rule — and cannot be expressed
+  through `Aggregator::aggregate(batch)` without inventing a batched
+  variant the paper never defined. It becomes the first candidate if
   an async pipeline mode ever exists.
 
 #### Fixed — CI and supply chain

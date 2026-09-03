@@ -82,8 +82,8 @@ def is_placeholder_init(flat: list[float]) -> bool:
     Same reasoning as the MNIST harness's version, and it matters more
     here: a GRU started from all zeros has zero gates as well as zero
     weights, so it cannot break symmetry *or* propagate a hidden state.
-    `conflux-server` has no idea what architecture it is serving (ADR
-    0004) and can only hand out zeros, so a real client recognizes the
+    `conflux-server` has no idea what architecture it is serving and can
+    only hand out zeros, so a real client recognizes the
     placeholder and substitutes its own deterministic initialization.
     """
     return not any(w != 0.0 for w in flat)

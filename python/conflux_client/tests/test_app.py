@@ -1,4 +1,4 @@
-"""Tests for the ClientApp SDK (ADR 0005 question 3).
+"""Tests for the ClientApp SDK.
 
 Run: python3 -m pytest python/conflux_client/tests/ -q
      (or: python3 python/conflux_client/tests/test_app.py)
@@ -47,8 +47,8 @@ def test_placeholder_detection():
 
 
 def test_control_variate_length_is_checked_client_side():
-    # The server cannot check this — it is opaque to model architecture
-    # (ADR 0004) — so a mismatch would travel all the way to an
+    # The server cannot check this — it is opaque to model architecture —
+    # so a mismatch would travel all the way to an
     # aggregator before failing. Catch it where the shape is known.
     try:
         TrainResult(weights=[1.0, 2.0], num_samples=1, control_variate=[1.0])
@@ -103,7 +103,7 @@ def test_absent_optional_fields_are_absent_not_zero():
     assert absent.local_loss == zero.local_loss == 0.0, "both *read* as 0.0"
     assert len(absent.SerializeToString()) < len(zero.SerializeToString()), (
         "an absent optional emits no bytes at all — which is what keeps a "
-        "pre-ADR-0012 client byte-compatible"
+        "an older client byte-compatible"
     )
 
 

@@ -243,8 +243,8 @@ pub trait Aggregator: Send + Sync {
 // `build_aggregator`.
 //
 // An unregistered `Aggregator` is still constructible directly by
-// whoever wants to run it — which is how an out-of-tree method (a
-// research prototype, say) composes with this catalog without being
+// whoever wants to run it — which is how a method from your own crate
+// composes with this catalog without being
 // selectable from a config string.
 inventory::submit! {
     StrategyEntry {

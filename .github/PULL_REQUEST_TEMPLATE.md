@@ -18,7 +18,7 @@
 - [ ] Fallible public functions return a `thiserror` enum, not a `String`
 - [ ] Comments explain *why*, not *what*
 - [ ] New aggregation method? It cites its paper, and the implementation
-      is literal (ADR 0008)
+      is literal
 - [ ] Keeps cross-round state? It has cross-round tests
 - [ ] Numeric code accumulates in `f64` and normalizes before summing
 - [ ] Touches `conflux-proto`? Say so — it reaches every deployed client
