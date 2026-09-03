@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
       # Only the crates that claim 1.88. `conflux-store` and
       # `conflux-server` declare 1.94.1 because `aws-sdk-s3` requires it
