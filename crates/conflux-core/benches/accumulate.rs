@@ -55,6 +55,11 @@ fn simd_accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
 /// `copy_from_slice` into stack arrays. Same math, fewer moves — used to
 /// tell "SIMD doesn't help here" apart from "that particular SIMD
 /// implementation was doing redundant copying."
+// Deliberately `chunks_exact`, not `as_chunks`: the iterator shape (with
+// `by_ref`/`into_remainder`) is exactly what this variant exists to measure,
+// and this is a bench, not shipped code. (clippy::chunks_exact_to_as_chunks,
+// new in 1.98.)
+#[allow(clippy::chunks_exact_to_as_chunks)]
 fn simd_chunked_accumulate_weighted(acc: &mut [f32], src: &[f32], weight: f32) {
     let splat = wide::f32x8::splat(weight);
     let mut a_chunks = acc.chunks_exact_mut(LANES);

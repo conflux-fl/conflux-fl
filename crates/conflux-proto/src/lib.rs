@@ -138,9 +138,15 @@ pub fn decode_weights(bytes: &[u8]) -> Result<Vec<f32>, WeightsCodecError> {
     if !bytes.len().is_multiple_of(4) {
         return Err(WeightsCodecError::Malformed { len: bytes.len() });
     }
+    // `as_chunks::<4>()` over `chunks_exact(4)`: the length is already a
+    // multiple of 4 (checked above), so the remainder `.1` is empty, and
+    // each chunk is a `&[u8; 4]` that drops straight into `from_le_bytes`
+    // without re-indexing. (clippy::chunks_exact_to_as_chunks, new in 1.98.)
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect())
 }
 
