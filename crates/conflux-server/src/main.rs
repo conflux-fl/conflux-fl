@@ -35,7 +35,7 @@ use conflux_net::jwt::JwtKeyMaterial;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use conflux_config::{Mode, Overrides, Topology};
+use conflux_config::Overrides;
 use conflux_net::FlTransportService;
 use conflux_proto::fl_transport_server::FlTransportServer;
 use conflux_server::{
@@ -59,22 +59,13 @@ async fn main() {
         std::env::var("CONFLUX_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
     let profile_dir = std::path::Path::new(&profile_dir);
 
-    let topology_profile = match std::env::var("CONFLUX_TOPOLOGY").ok() {
-        None => conflux_config::TopologyProfile::builtin(Topology::CrossDevice),
-        Some(name) => match Topology::ALL.iter().find(|t| t.label() == name) {
-            Some(t) => conflux_config::TopologyProfile::builtin(*t),
-            None => conflux_config::load_topology_profile(profile_dir, &name)
-                .unwrap_or_else(|e| panic!("{e}")),
-        },
-    };
-    let mode_profile = match std::env::var("CONFLUX_MODE").ok() {
-        None => conflux_config::ModeProfile::builtin(Mode::Research),
-        Some(name) => match Mode::ALL.iter().find(|m| m.label() == name) {
-            Some(m) => conflux_config::ModeProfile::builtin(*m),
-            None => conflux_config::load_mode_profile(profile_dir, &name)
-                .unwrap_or_else(|e| panic!("{e}")),
-        },
-    };
+    let topology_name = std::env::var("CONFLUX_TOPOLOGY").ok();
+    let topology_profile =
+        conflux_config::topology_profile_named(profile_dir, topology_name.as_deref())
+            .unwrap_or_else(|e| panic!("{e}"));
+    let mode_name = std::env::var("CONFLUX_MODE").ok();
+    let mode_profile = conflux_config::mode_profile_named(profile_dir, mode_name.as_deref())
+        .unwrap_or_else(|e| panic!("{e}"));
     // Say the chains out loud once, before the per-parameter lines do.
     if topology_profile.chain.len() > 1 {
         tracing::info!(
@@ -114,11 +105,15 @@ async fn main() {
         _ => None,
     };
 
+    // The per-parameter CONFLUX_* variables — the same mapping `cflux
+    // config check` reads, so a pre-flight and a real start cannot
+    // disagree about what a variable means.
+    let env_overrides = conflux_config::overrides_from_env().unwrap_or_else(|e| panic!("{e}"));
     let config = conflux_config::resolve_with_profiles(
         &topology_profile,
         &mode_profile,
         file_tier,
-        &overrides_from_env(),
+        &env_overrides,
         &Overrides::default(),
     )
     .expect("config resolution failed");
@@ -453,43 +448,6 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => tracing::info!("received Ctrl-C; shutting down"),
         _ = terminate => tracing::info!("received SIGTERM; shutting down"),
-    }
-}
-
-/// Reads a handful of `conflux-config` `Overrides` fields from their own
-/// `CONFLUX_*` env vars — see this module's doc comment for exactly
-/// which fields and why these specifically. Every field is optional;
-/// missing means "let the topology/mode profile or builtin fallback
-/// decide," same as every other tier `conflux_config::resolve` layers.
-fn overrides_from_env() -> Overrides {
-    fn var<T: std::str::FromStr>(name: &str) -> Option<T> {
-        std::env::var(name).ok().map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| panic!("{name}={v:?} is not a valid value"))
-        })
-    }
-
-    Overrides {
-        aggregator: std::env::var("CONFLUX_AGGREGATOR").ok(),
-        selector: std::env::var("CONFLUX_SELECTOR").ok(),
-        privacy_mechanism: std::env::var("CONFLUX_PRIVACY_MECHANISM").ok(),
-        robust_byzantine_fraction: var("CONFLUX_ROBUST_BYZANTINE_FRACTION"),
-        clip_radius: var("CONFLUX_CLIP_RADIUS"),
-        server_learning_rate: var("CONFLUX_SERVER_LEARNING_RATE"),
-        server_tau: var("CONFLUX_SERVER_TAU"),
-        server_momentum: var("CONFLUX_SERVER_MOMENTUM"),
-        fairness_q: var("CONFLUX_FAIRNESS_Q"),
-        scaffold_num_clients: var("CONFLUX_SCAFFOLD_NUM_CLIENTS"),
-        zeno_rho: var("CONFLUX_ZENO_RHO"),
-        server_lipschitz: var("CONFLUX_SERVER_LIPSCHITZ"),
-        min_reputation_score: var("CONFLUX_MIN_REPUTATION_SCORE"),
-        reputation_filter_enabled: var("CONFLUX_REPUTATION_FILTER_ENABLED"),
-        quorum: var("CONFLUX_QUORUM"),
-        max_update_bytes: var("CONFLUX_MAX_UPDATE_BYTES"),
-        round_timeout_secs: var("CONFLUX_ROUND_TIMEOUT_SECS"),
-        clip_norm: var("CONFLUX_CLIP_NORM"),
-        noise_multiplier: var("CONFLUX_NOISE_MULTIPLIER"),
-        ..Default::default()
     }
 }
 

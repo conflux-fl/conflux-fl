@@ -289,6 +289,14 @@ jobs:
             exit 1
           fi
           echo "ok: no attack code in the server's dependency graph"
+      - name: cflux must not depend on conflux-attacks
+        run: |
+          if cargo tree -p cflux -e normal | grep -q conflux-attacks; then
+            echo "::error::cflux depends on conflux-attacks — the CLI must never link attack code"
+            cargo tree -p cflux -e normal -i conflux-attacks || true
+            exit 1
+          fi
+          echo "ok: no attack code in cflux's dependency graph"
       - name: conflux-server must not depend on conflux-trusted-reference
         run: |
           if cargo tree -p conflux-server -e normal | grep -q conflux-trusted-reference; then

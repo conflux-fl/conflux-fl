@@ -17,6 +17,7 @@ members = [
     "crates/conflux-trusted-reference",
     "crates/conflux-client",
     "crates/conflux-baselines",
+    "crates/cflux",
 ]
 
 # Shared metadata. Every crate inherits these with `field.workspace =
@@ -54,6 +55,8 @@ readme = "README.md"
 # would compile capabilities into crates that have no use for them and
 # hide which crate actually depends on what.
 [workspace.dependencies]
+# The `cflux` command line: derive-style argument parsing.
+clap = { version = "4.5", features = ["derive"] }
 async-trait = "0.1"
 aws-config = "1"
 aws-credential-types = "1"

@@ -91,6 +91,7 @@
 
 #![warn(missing_docs)]
 
+mod env;
 mod file;
 mod profile;
 mod registry;
@@ -98,6 +99,13 @@ mod source;
 mod types;
 mod validate;
 
+pub use env::{
+    EnvError, mode_profile_named, overrides_from_env, overrides_from_vars, topology_profile_named,
+};
+
+/// The framework's version — every workspace crate shares it. A binary
+/// that embeds the framework (`cflux`) reports it next to its own.
+pub const FRAMEWORK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use file::{ConfigFileError, load_experiment_file};
 pub use profile::{
     ModeProfile, ProfileError, TopologyProfile, load_mode_profile, load_topology_profile,
