@@ -14,6 +14,9 @@ inventory.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# The `catalog` example reads baselines/*/baseline.toml to say which
+# baselines reproduce each method.
+toml.workspace = true
 criterion.workspace = true
 # `benches/accumulate.rs` keeps explicit-SIMD variants of the combine
 # loop purely as the standing evidence for why the shipped code is
