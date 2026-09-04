@@ -1,0 +1,17 @@
+[package]
+name = "conflux-config"
+description = "Layered configuration for Conflux FL: topology/mode profiles, provenance-tracked resolution, and the compile-time strategy registry."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+inventory.workspace = true
+# Experiment-level config files and TOML profiles. `Overrides`' fields
+# are all `Option<T>` — exactly what a partial TOML file needs — so this
+# is a derive plus a reader, not a change to how resolution works.
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true

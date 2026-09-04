@@ -1,0 +1,51 @@
+[package]
+name = "conflux-server"
+description = "Conflux FL server binary — the full round pipeline over gRPC, with an authenticated HTTP admin surface."
+license.workspace = true
+repository.workspace = true
+# Overrides the workspace 1.88. `aws-sdk-s3` declares rust-version
+# 1.94.1, and a declared MSRV that the dependency graph cannot
+# actually satisfy is worse than none — it would build here and
+# fail for anyone taking the claim at face value. Verified with
+# `cargo metadata`, not assumed.
+rust-version = "1.94.1"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+conflux-config = { path = "../conflux-config" }
+conflux-registry = { path = "../conflux-registry" }
+conflux-store = { path = "../conflux-store" }
+conflux-selector = { path = "../conflux-selector" }
+conflux-net = { path = "../conflux-net" }
+conflux-buffer = { path = "../conflux-buffer" }
+conflux-privacy = { path = "../conflux-privacy" }
+conflux-reputation = { path = "../conflux-reputation" }
+conflux-core = { path = "../conflux-core" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tokio-stream = { workspace = true, features = ["net", "sync"] }
+# tls-aws-lc, not tls-ring: matches conflux-net/conflux-store's existing
+# crypto-provider choice (see conflux-net/Cargo.toml's comment) — needed
+# here too because this crate's tests spin up a real mTLS server directly.
+tonic = { workspace = true, features = ["tls-aws-lc"] }
+axum.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+rand.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+# Seeding the client-side transform in the composition test.
+rand.workspace = true
+tower = { workspace = true, features = ["util"] }
+http-body-util.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
+# Signing real JWTs in tests. The server itself only ever verifies — an
+# `EncodingKey` exists nowhere outside these tests.
+jsonwebtoken = { workspace = true, features = ["use_pem", "aws_lc_rs"] }
+serde = { workspace = true, features = ["derive"] }

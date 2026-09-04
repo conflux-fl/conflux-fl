@@ -1,0 +1,35 @@
+name: Aggregation method request
+description: Ask for a published method to be added to the catalog
+labels: [enhancement, aggregation-method]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Conflux FL ships literal, cited implementations of **published**
+        methods. An unpublished or novel method is welcome as an
+        out-of-tree crate built against the public API — see
+        [Extending](https://confluxfl.dev/guides/extending/) — and can
+        join the catalog once published.
+  - type: input
+    id: paper
+    attributes:
+      label: Paper
+      description: Full citation, and a link if it is open access.
+    validations: {required: true}
+  - type: textarea
+    id: fit
+    attributes:
+      label: Which family does it belong to?
+      description: >
+        averaging, robust, temporal, trusted, or optimization — and what
+        it varies within that family. If it fits none, say so; that is
+        useful information about the family pattern.
+    validations: {required: true}
+  - type: textarea
+    id: needs
+    attributes:
+      label: Does it need anything the framework does not have?
+      description: >
+        Cross-round state, a new wire field, server-side data, or
+        something a client must report. Answering this early usually
+        determines how large the change is.

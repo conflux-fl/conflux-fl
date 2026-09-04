@@ -1,0 +1,33 @@
+# FedAvg (McMahan et al. 2017) — the reference baseline.
+# Schema + walkthrough: https://confluxfl.dev/guides/baselines/ and https://confluxfl.dev/guides/baselines-add/
+
+[paper]
+title   = "Communication-Efficient Learning of Deep Networks from Decentralized Data"
+authors = "McMahan, Moore, Ramage, Hampson, Agüera y Arcas"
+venue   = "AISTATS 2017"
+url     = "https://arxiv.org/abs/1602.05629"
+
+[method]
+# Validated against the strategy registry (conflux_config::lookup) before
+# a run starts — a method the catalog doesn't ship fails fast.
+aggregator = "fedavg"
+selector   = "uniform_random" # McMahan's C-fraction client sampling
+
+[experiment]
+dataset   = "mnist" # the Python edge; the Rust edge uses a synthetic non-IID problem
+model     = "mlp"
+partition = "iid"
+
+# Two training edges reproduce this paper: Python (PyTorch) and Rust (Burn).
+[clients.python]
+harness   = "e2e_pytorch_mnist"
+expected  = 0.90 # measured on the e2e_pytorch_mnist harness: 0.905 held-out @ round 15
+tolerance = 0.06
+smoke     = { clients = 5, rounds = 15 }
+full      = { clients = 100, rounds = 500 }
+
+[clients.rust]
+harness   = "burn_mlp" # crates/conflux-client/examples/burn_mlp.rs
+expected  = 0.95 # Burn MLP on the synthetic non-IID problem, deterministic (seed 0)
+tolerance = 0.05
+smoke     = { clients = 5, rounds = 8 }

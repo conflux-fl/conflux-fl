@@ -1,0 +1,49 @@
+[package]
+name = "conflux-client"
+description = "Rust-native ClientApp SDK for Conflux FL — train in Rust, with no Python hop."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# The local hop to `conflux-node` speaks the same `FlTransport` schema as
+# every other hop, so this needs no transport of its own —
+# `PullTransport` is already exactly the client half.
+conflux-net = { path = "../conflux-net" }
+conflux-proto = { path = "../conflux-proto" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+# Burn is pre-1.0 and self-describes as having breaking changes, and it
+# pulls a large dependency subtree. Keep it STRICTLY opt-in so the default
+# `conflux-client` build stays lean and stable — the same blast-radius
+# containment the optional trusted-reference sidecar uses. Nothing but
+# the `burn_mlp` example (which requires this feature) touches it.
+# CPU-only: the `ndarray` backend + `autodiff`, no GPU/CUDA/LibTorch.
+burn = { version = "0.18", optional = true, default-features = false, features = [
+    "ndarray",
+    "autodiff",
+    "std",
+] }
+
+[features]
+# Enable with `--features burn`; gates the `burn_mlp` example below.
+burn = ["dep:burn"]
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+# Example-only (the `burn_mlp` robust-aggregation demo): the real cited
+# aggregators. A dev-dependency, so it never enters the shipped SDK — and
+# `cargo build -p conflux-client` (no examples) still doesn't compile it.
+conflux-core = { path = "../conflux-core" }
+
+# A real Burn MLP `ClientApp` — the deep-learning-in-Rust evaluation the
+# `logreg` spike deliberately isolated itself from. Opt-in only.
+[[example]]
+name = "burn_mlp"
+required-features = ["burn"]

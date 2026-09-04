@@ -1,0 +1,99 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/conflux-proto",
+    "crates/conflux-config",
+    "crates/conflux-registry",
+    "crates/conflux-store",
+    "crates/conflux-selector",
+    "crates/conflux-net",
+    "crates/conflux-buffer",
+    "crates/conflux-privacy",
+    "crates/conflux-reputation",
+    "crates/conflux-core",
+    "crates/conflux-server",
+    "crates/conflux-node",
+    "crates/conflux-attacks",
+    "crates/conflux-trusted-reference",
+    "crates/conflux-client",
+    "crates/conflux-baselines",
+]
+
+# Shared metadata. Every crate inherits these with `field.workspace =
+# true`, so a version bump or a license change is one edit here rather
+# than thirteen — and cannot be applied to twelve crates by accident.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# **Set by the dependencies, not by our own source.** `edition = "2024"`
+# stabilized in 1.85 and nothing this workspace *writes* needs anything
+# newer — but `tonic` 0.14, `jsonwebtoken` 11 and `time` 0.3.55 each
+# declare 1.88, and every crate above `conflux-proto` pulls at least one
+# of them. A 1.85 claim was carried here until a real 1.85 toolchain was
+# finally run against it and refused to resolve eight of the twelve
+# crates that made the promise.
+#
+# `clippy::incompatible_msrv` does not catch this: it checks whether the
+# *std APIs we call* exist at the declared version, not whether our
+# dependencies will build there. Only a real toolchain does.
+#
+# Two crates override this upward — see `conflux-store` and
+# `conflux-server`.
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/conflux-fl/conflux-fl"
+readme = "README.md"
+
+# Third-party dependency versions, declared once.
+#
+# Only *versions* live here. Features stay on each crate's own line
+# (`tokio = { workspace = true, features = ["net"] }`), because they are
+# genuinely per-crate: `conflux-store` needs tokio's `rt` for
+# `spawn_blocking` and nothing else, while `conflux-node` needs `net`,
+# `sync`, and `time`. Hoisting the union of every crate's features here
+# would compile capabilities into crates that have no use for them and
+# hide which crate actually depends on what.
+[workspace.dependencies]
+async-trait = "0.1"
+aws-config = "1"
+aws-credential-types = "1"
+# `default-features = false` to shed the `rustls` feature, which drags
+# in the LEGACY rustls-0.21/h2-0.3 stack alongside the modern one the
+# `default-https-client` feature already provides — the old stack is
+# where RUSTSEC-2026-0098/0099/0104 (rustls-webpki 0.101) and
+# RUSTSEC-2026-0258 (h2 0.3) live, and nothing here uses it. The other
+# defaults are re-added explicitly.
+aws-sdk-s3 = { version = "1", default-features = false, features = [
+  "sigv4a",
+  "http-1x",
+  "default-https-client",
+  "rt-tokio",
+] }
+axum = "0.8"
+criterion = "0.8"
+http-body-util = "0.1"
+inventory = "0.3"
+jsonwebtoken = { version = "11", default-features = false }
+prost = "0.14"
+protoc-bin-vendored = "3"
+rand = "0.10"
+rand_distr = "0.6"
+rcgen = "0.14"
+redis = "1.6"
+rustls-pki-types = "1"
+serde = "1"
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = "1"
+tokio-postgres = "0.7"
+tokio-stream = "0.1"
+toml = "0.9"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-test = "0.2"
+wide = "1.7"

@@ -1,0 +1,18 @@
+# Pins the toolchain so a local build, a CI run, and a contributor's
+# machine all compile the same source with the same compiler.
+#
+# `stable` rather than a fixed version: this project has no reason to
+# hold back, and pinning an exact number means someone has to remember to
+# bump it. What must not drift is the *channel* and the components — a
+# contributor on nightly would get different lints from `clippy`, and CI
+# would then disagree with them for reasons neither could see.
+#
+# The MSRV is a separate, stricter claim, declared per crate via
+# `rust-version` (1.88 for most, 1.94.1 for the two that pull the AWS
+# SDK). This file says what we build with; that says what we promise to
+# build on — and the second claim is only worth anything if something
+# actually compiles at that version, which is what CI's `msrv` job is
+# for.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

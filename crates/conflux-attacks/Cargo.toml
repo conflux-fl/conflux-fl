@@ -1,0 +1,22 @@
+[package]
+name = "conflux-attacks"
+description = "Known federated-learning attacks for testing Conflux FL's defenses. Test/dev only — never a dependency of conflux-server."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# Test/dev-only. Publishing it would invite exactly the dependency edge
+# (conflux-server -> attack code) the workspace forbids and CI checks.
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+rand.workspace = true
+rand_distr.workspace = true
+
+[dev-dependencies]
+# Dev-only: this crate's own tests and example run each attack against a
+# real Aggregator. Never a normal dependency — conflux-server's build
+# must never pull in attack code, even transitively.
+conflux-core = { path = "../conflux-core" }

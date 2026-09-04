@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package conflux.v1;
+
+// The server <-> trusted-reference-sidecar hop.
+//
+// FLTrust (Cao, Fang, Liu, Jia & Gong, 2021) and Zeno/Zeno++ (Xie,
+// Koyejo & Gupta, 2019/2020) are the only two methods in Conflux's
+// catalog whose published algorithm requires the *server* to hold data
+// and train or evaluate loss on it. Conflux keeps model code entirely
+// client-side and `conflux-server` opaque to model architecture, which
+// is why the wire format is a flat f32 array — so neither method is
+// implementable inside the server binary as it stands.
+//
+// The resolution: the capability moves to a separate, optional process
+// rather than into `conflux-server`. This file is the contract between
+// them. It is the third reuse of the "one schema, multiple hops" idea,
+// after server<->node and node<->ClientApp, and it deliberately keeps
+// the same flat-f32 shape: the sidecar knows what the model is, the
+// server still does not.
+//
+// A deployer who has not configured `aggregator = "fltrust"` or
+// `"zeno"` never runs a sidecar and never opens this connection.
+service TrustedReference {
+  // FLTrust: train the server's own reference update for this round on
+  // the trusted root dataset, starting from the current global weights.
+  //
+  // The returned vector is what FLTrust scores every client update
+  // against — the thing that makes it structurally immune to a
+  // colluding majority, since it is derived from data no client
+  // controls rather than from the batch itself.
+  rpc GetReferenceUpdate (ReferenceRequest) returns (ReferenceUpdate);
+
+  // Zeno: score each candidate update by how much it improves loss on a
+  // held-out, server-side validation set.
+  //
+  // Separate from GetReferenceUpdate rather than folded into it: FLTrust
+  // needs one vector and does not care about individual clients, while
+  // Zeno needs a number per client and no reference vector at all.
+  // Collapsing them would force each method to send or ignore a field
+  // that means nothing to it.
+  rpc ScoreUpdates (ScoreRequest) returns (ScoreResponse);
+
+  // Liveness, and a statement of what this sidecar can actually do.
+  //
+  // Called once at server startup rather than per round. A deployer who
+  // configures `fltrust` against a sidecar that only implements scoring
+  // should learn that at startup — the same fail-fast posture
+  // `validate_production_backends` and `allow_stub_client` already take
+  // — rather than in round one, after clients have connected.
+  rpc Describe (DescribeRequest) returns (DescribeResponse);
+}
+
+// Asks the sidecar to produce this round's trusted reference update.
+message ReferenceRequest {
+  // Which round this is for. Echoed back, so a stale response from a
+  // slow sidecar is detectable rather than silently applied to the
+  // wrong round.
+  uint64 round = 1;
+  // The current global model, little-endian packed f32 — the same
+  // encoding and the same buffer the server would hand a client in a
+  // TaskResponse. The sidecar trains *from* these weights, exactly as a
+  // client does, so its reference is comparable to what clients return.
+  bytes global_weights = 2;
+}
+
+// The sidecar's self-trained reference update.
+message ReferenceUpdate {
+  // The round this was computed for, echoed from the request.
+  uint64 round = 1;
+  // The reference update, little-endian packed f32, the same length as
+  // the `global_weights` it was trained from.
+  bytes weights = 2;
+  // How many local steps the sidecar took producing it, if it wants to
+  // say. Informational: it lets an operator see whether the sidecar's
+  // effort is comparable to a client's, which is an assumption FLTrust
+  // makes and does not check.
+  optional uint32 local_steps = 3;
+}
+
+// Asks the sidecar to score a batch of client updates.
+message ScoreRequest {
+  // Which round these belong to.
+  uint64 round = 1;
+  // The current global model, as in ReferenceRequest — the baseline the
+  // sidecar measures each candidate's loss improvement against.
+  bytes global_weights = 2;
+  // The updates to score. Sent as candidates rather than as
+  // ClientDeltas so the sidecar receives exactly what it needs to score
+  // and nothing else: no sample counts, no control variates, no round
+  // numbers per item.
+  repeated ScoreCandidate candidates = 3;
+}
+
+// One update to be scored.
+message ScoreCandidate {
+  // Who submitted it. Returned with the score so the server can map
+  // scores back without relying on ordering.
+  string client_id = 1;
+  // The candidate update, little-endian packed f32.
+  bytes weights = 2;
+}
+
+// The sidecar's per-client scores.
+message ScoreResponse {
+  // The round these scores are for, echoed from the request.
+  uint64 round = 1;
+  // One entry per candidate. A sidecar that cannot score a particular
+  // candidate omits it rather than inventing a number — the server
+  // treats a missing score as "no opinion", which is different from a
+  // low one.
+  repeated ClientScore scores = 2;
+}
+
+// One client's score.
+message ClientScore {
+  // Which client, matched against ScoreCandidate.client_id rather than
+  // by position.
+  string client_id = 1;
+  // Higher is better. Zeno's own score is a loss *decrease*, so a
+  // negative value means this update made the held-out loss worse.
+  float score = 2;
+}
+
+// Startup handshake.
+message DescribeRequest {}
+
+// What this sidecar supports.
+message DescribeResponse {
+  // Whether GetReferenceUpdate is implemented. False means this sidecar
+  // cannot serve FLTrust.
+  bool supports_reference_update = 1;
+  // Whether ScoreUpdates is implemented. False means it cannot serve
+  // Zeno.
+  bool supports_scoring = 2;
+  // How many weights the sidecar's model has, if it knows before seeing
+  // a request. Lets the server refuse a sidecar configured for a
+  // different model than the experiment is training, at startup rather
+  // than mid-round.
+  optional uint64 model_dim = 3;
+  // Free-text description for logs — what dataset, what model. Never
+  // parsed.
+  string description = 4;
+}

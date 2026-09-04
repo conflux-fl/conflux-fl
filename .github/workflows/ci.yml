@@ -1,0 +1,358 @@
+# Every guarantee this repository makes about itself, checked on every
+# push and pull request.
+#
+# The adversarial suite in `conflux-core/tests/adversarial_input.rs` is
+# the clearest example of why this exists: it is a regression guard for
+# three remotely-triggerable defects, and a regression guard nobody runs
+# guards nothing.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run's answer obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Warnings are failures here. They are not in a local `cargo build`,
+  # deliberately — an experiment in progress should not be blocked by an
+  # unused import, but nothing should merge with one.
+  RUSTFLAGS: -D warnings
+
+# The workflow only reads the repository; a fork's pull request gets the
+# same read-only token. Jobs that need more declare it themselves
+# (release.yml does).
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `--all-targets` so tests, benches, and examples are linted too.
+      # Most of this repository's example code is documentation that has
+      # to keep compiling.
+      - run: cargo clippy --workspace --all-targets
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    # The backend tests are not optional extras — RedisRegistry,
+    # PostgresStore, and S3Store are three of the four Store/Registry
+    # implementations. Running CI without them would leave the majority
+    # of the persistence layer unverified.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: conflux
+          POSTGRES_DB: conflux
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d conflux"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      minio:
+        # Bitnami emptied `bitnami/minio` on Docker Hub in its Aug-2025
+        # image-policy change (`:latest` no longer resolves); the images
+        # moved to the `bitnamilegacy/` archive. Pinned to a specific tag
+        # for reproducibility — it still ships `mc` for the healthcheck and
+        # auto-starts the server from MINIO_ROOT_USER/PASSWORD.
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+        env:
+          MINIO_ROOT_USER: confluxadmin
+          MINIO_ROOT_PASSWORD: confluxsecret
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "mc ready local"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Service containers use standard ports; the code's defaults point
+      # at docker-compose.yml's non-standard ones. This override is the
+      # reason those URLs stopped being hardcoded constants.
+      CONFLUX_TEST_REDIS_URL: redis://127.0.0.1:6379
+      CONFLUX_TEST_POSTGRES_URL: postgres://postgres:conflux@127.0.0.1:5432/conflux
+      CONFLUX_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  msrv:
+    name: minimum supported Rust (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      # Only the crates that claim 1.88. `conflux-store` and
+      # `conflux-server` declare 1.94.1 because `aws-sdk-s3` requires it
+      # — checking them here would test the claim we did not make.
+      # 1.88 rather than edition 2024's own 1.85 floor: `tonic`,
+      # `jsonwebtoken` and `time` each declare 1.88, so nothing above
+      # `conflux-proto` can honestly promise less. See the workspace
+      # `Cargo.toml`.
+      # `--all-targets` is omitted: dev-dependencies (criterion, rcgen)
+      # carry their own, higher MSRVs, and an MSRV is a promise about
+      # building the library, not about running its test suite.
+      - run: >
+          cargo check
+          -p conflux-proto -p conflux-config -p conflux-registry
+          -p conflux-selector -p conflux-net -p conflux-buffer
+          -p conflux-privacy -p conflux-reputation -p conflux-core
+          -p conflux-node -p conflux-trusted-reference -p conflux-client
+
+  python-client:
+    name: python client
+    runs-on: ubuntu-latest
+    # The Python client is half of the wire contract and, until this job
+    # existed, the half nothing checked. The Rust side is compiler-
+    # enforced: adding a field to the `.proto` breaks every exhaustive
+    # struct literal, loudly, on the commit that did it. Python has no
+    # equivalent — the generated stubs are not committed, so a schema
+    # change produces no diff, no build error, and no failing test. It
+    # produces a client that silently stops sending a field.
+    #
+    # That has already happened twice. `fl_transport_pb2.py` sat one
+    # schema version behind for the whole life of the optional fields, and
+    # nothing noticed. The failure mode is the bad one: nothing crashes,
+    # the run converges, and the configured method never ran.
+    #
+    # The gates below run cheapest-first, so a syntax error fails in
+    # seconds rather than after a cargo build.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install client dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # grpcio-tools regenerates the stubs; ruff is the static gate.
+          # Deliberately no torch/numpy: the SDK and the stub client
+          # depend on neither, and the gates that need them are the
+          # end-to-end harnesses, which are not CI's job to run.
+          pip install grpcio grpcio-tools protobuf ruff
+
+      # Gate 1 — the schema. Regenerating from the current .proto is what
+      # makes every later gate a check against *today's* contract rather
+      # than whatever was generated last.
+      - name: regenerate protobuf stubs from the current schema
+        run: ./generate_proto.sh
+        working-directory: python/conflux_client
+
+      # Gate 2 — syntax, across every file, including the four harnesses
+      # this job deliberately does not import (they need torch).
+      - name: byte-compile every Python file
+        run: python -m compileall -q . -x '\.venv'
+        working-directory: python/conflux_client
+
+      # Gate 3 — the static bug classes that matter for a client someone
+      # else will run: undefined names, unused imports, broken f-strings.
+      # E9 is syntax/IO errors; F is pyflakes.
+      - name: lint
+        run: ruff check --select E9,F --exclude .venv --exclude '*_pb2*' .
+        working-directory: python/conflux_client
+
+      # Gate 4 — the demo scripts are shipped client-side too, and a
+      # shell syntax error in one is exactly as broken as a Python one.
+      - name: check the demo scripts parse
+        run: |
+          set -e
+          for script in generate_proto.sh ci_smoke.sh examples/*/run_demo.sh; do
+            bash -n "$script" && echo "  ok  $script"
+          done
+        working-directory: python/conflux_client
+
+      # Gate 5 — the SDK and stub client must import against the stubs
+      # generated in gate 1, and still expose their public names. This is
+      # what would have caught the stale-stub drift.
+      - name: import the SDK against freshly generated stubs
+        run: |
+          python -c "
+          import app, stub_client
+          required = ('ClientApp', 'TrainResult', 'run', 'main',
+                      'encode_weights', 'decode_weights', 'is_placeholder_init')
+          missing = [n for n in required if not hasattr(app, n)]
+          assert not missing, f'app.py no longer exports: {missing}'
+          import fl_transport_pb2 as pb
+          # Every optional field an aggregator reads must exist on the
+          # generated types. A stub generated before one of these landed
+          # imports fine and silently omits it, which is the whole reason
+          # this gate exists.
+          for field in ('local_steps', 'local_loss', 'control_variate'):
+              assert hasattr(pb.DeltaChunk(), field), f'DeltaChunk lacks {field}'
+              assert hasattr(pb.ClientDelta(), field), f'ClientDelta lacks {field}'
+          assert hasattr(pb.TaskResponse(), 'control_variate'), 'TaskResponse lacks control_variate'
+          print('SDK imports, and the wire contract has every field the aggregators read')
+          "
+        working-directory: python/conflux_client
+
+      # Gate 6 — the contract tests, including absent-vs-zero on both
+      # directions of the wire.
+      - name: SDK tests
+        run: python tests/test_app.py
+        working-directory: python/conflux_client
+
+      # Gate 7 — the one that cannot be satisfied by a client that merely
+      # loads. Real server, real node, real gRPC, and the server's own
+      # round counter as the witness.
+      - name: end-to-end smoke over the real local hop
+        run: ./ci_smoke.sh 2
+        working-directory: python/conflux_client
+
+  docs:
+    name: rustdoc, warnings denied
+    runs-on: ubuntu-latest
+    # Intra-doc links break silently: the code still compiles, the docs
+    # still render, and the link is just dead. Denying rustdoc warnings
+    # is the only gate that notices. Its first local run found five
+    # broken links across four crates.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  deny:
+    name: advisories + licenses
+    runs-on: ubuntu-latest
+    # `cargo deny check` against deny.toml: RustSec advisories, yanked
+    # crates, license allow-list, and registry provenance. Its first
+    # local run found four real vulnerabilities riding in on a legacy
+    # TLS stack nothing used — this job exists so the fifth is found by
+    # a bot instead of a person.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  isolation:
+    name: dependency isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Two invariants about `conflux-server`'s dependency graph existed
+      # only as prose before this job. An invariant a build does not check
+      # is a comment: the edge either crate forbids would be added by an
+      # ordinary-looking `Cargo.toml` line, compile cleanly, pass every
+      # test, and be noticed by nobody.
+      #
+      #   `conflux-attacks` is test/dev-only. The production server binary
+      #   must never link attack code, at any depth.
+      #   `conflux-trusted-reference` is the optional sidecar. The server
+      #   calls one over gRPC; it must never *be* one, or the model-runtime
+      #   dependency the server deliberately lacks comes back in through
+      #   the side door.
+      #
+      # `-e normal` excludes dev-dependencies deliberately: both crates
+      # legitimately dev-depend on workspace crates for their own tests.
+      # What must not exist is an edge in what the binary actually ships.
+      - name: conflux-server must not depend on conflux-attacks
+        run: |
+          if cargo tree -p conflux-server -e normal | grep -q conflux-attacks; then
+            echo "::error::conflux-server depends on conflux-attacks — the server must never link attack code"
+            cargo tree -p conflux-server -e normal -i conflux-attacks || true
+            exit 1
+          fi
+          echo "ok: no attack code in the server's dependency graph"
+      - name: conflux-server must not depend on conflux-trusted-reference
+        run: |
+          if cargo tree -p conflux-server -e normal | grep -q conflux-trusted-reference; then
+            echo "::error::conflux-server depends on conflux-trusted-reference — the \
+            sidecar is a separate process; the server talks to one over gRPC"
+            cargo tree -p conflux-server -e normal -i conflux-trusted-reference || true
+            exit 1
+          fi
+          echo "ok: the sidecar stays out of the server's dependency graph"
+
+  env-files:
+    name: env hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install evnx
+        # The upstream `install.sh` resolves the latest release via an
+        # UNauthenticated api.github.com call, which 403s on the shared
+        # runner IP's rate limit. `gh release download` uses the workflow
+        # token, so it isn't rate-limited. (evnx lives at urwithajit9/evnx;
+        # gh is preinstalled on the runner.)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo urwithajit9/evnx \
+            --pattern 'evnx-x86_64-unknown-linux-gnu.tar.gz' --output /tmp/evnx.tar.gz
+          tar xzf /tmp/evnx.tar.gz -C /tmp
+          sudo mv /tmp/evnx-x86_64-unknown-linux-gnu /usr/local/bin/evnx
+          sudo chmod +x /usr/local/bin/evnx
+          evnx --version
+      # Scans the whole checkout, which is the point: it catches a `.env`
+      # committed by accident, or a credential pasted into any tracked
+      # file.
+      #
+      # `evnx scan` has no confidence threshold and exits non-zero on ANY
+      # finding — including low-confidence *entropy heuristics* that fire on
+      # ordinary code (a long `client.foo(...).await.unwrap()` chain reads
+      # as "high-entropy string"). The intent is to catch *real* secrets, so
+      # key off the JSON confidence counts: fail on high or medium, treat
+      # low as noise. `jq` is preinstalled on the runner.
+      - name: scan the checkout for secrets
+        run: |
+          evnx scan . --exit-zero --format json > /tmp/evnx-scan.json
+          high=$(jq '.high_confidence' /tmp/evnx-scan.json)
+          med=$(jq '.medium_confidence' /tmp/evnx-scan.json)
+          low=$(jq '.low_confidence' /tmp/evnx-scan.json)
+          if [ "$high" -gt 0 ] || [ "$med" -gt 0 ]; then
+            echo "::error::evnx found $high high- and $med medium-confidence secret(s)"
+            evnx scan . --exit-zero   # print the human-readable report
+            exit 1
+          fi
+          echo "no high/medium-confidence secrets ($low low-confidence heuristic hits ignored)"
+      # A belt-and-braces check on top of the scan. `.env` holds real
+      # values by construction, so it must never be tracked — and
+      # `git ls-files` answers that directly rather than inferring it
+      # from a gitignore rule someone could later reorder.
+      - name: refuse a tracked .env
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked in git — it holds real values and must not be"
+            exit 1
+          fi
+          echo ".env is not tracked"
+      # The template must stay parseable and free of placeholder-looking
+      # values, since it is what every developer copies from.
+      - name: validate the template
+        run: evnx validate --env .env.example --example .env.example

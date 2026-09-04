@@ -1,0 +1,54 @@
+# The backend services conflux-fl's integration tests need.
+#
+# Ports deliberately match what the backends guide's `docker run` commands (https://confluxfl.dev/guides/backends-and-sidecar/)
+# already used (16379 / 15432 / 19000) rather than the services' standard
+# ones, for two reasons: a developer with the old containers running is
+# unaffected, and non-standard ports don't collide with a Redis or
+# Postgres already on the machine for something else.
+#
+#   docker compose up -d      # start
+#   cargo test --workspace    # the backend tests now have somewhere to go
+#   docker compose down -v    # stop and discard the data
+#
+# CI overrides the URLs via the environment instead of using this file —
+# see `.env.example` and `.github/workflows/ci.yml`.
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: conflux-dev-redis
+    ports: ["16379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: conflux-dev-postgres
+    environment:
+      POSTGRES_PASSWORD: conflux
+      POSTGRES_DB: conflux
+    ports: ["15432:5432"]
+    healthcheck:
+      # `-d conflux` matters: without it pg_isready checks the default
+      # database, which reports ready before ours exists, so tests race
+      # the schema into a database that isn't there yet.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d conflux"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  minio:
+    image: minio/minio
+    container_name: conflux-dev-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: confluxadmin
+      MINIO_ROOT_PASSWORD: confluxsecret
+    ports: ["19000:9000", "19001:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

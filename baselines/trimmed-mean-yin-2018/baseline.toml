@@ -1,0 +1,33 @@
+# Trimmed Mean (Yin et al. 2018) — coordinate-wise Byzantine-robust aggregation.
+# Schema + walkthrough: https://confluxfl.dev/guides/baselines/ and https://confluxfl.dev/guides/baselines-add/
+
+[paper]
+title   = "Byzantine-Robust Distributed Learning: Towards Optimal Statistical Rates"
+authors = "Yin, Chen, Ramchandran, Bartlett"
+venue   = "ICML 2018"
+url     = "https://proceedings.mlr.press/v80/yin18a.html"
+
+[method]
+aggregator = "trimmed_mean"
+selector   = "uniform_random"
+
+[experiment]
+dataset   = "mnist"
+model     = "mlp"
+partition = "iid"
+
+[scenario]
+attackers      = 1
+no_reputation  = true
+
+[clients.python]
+harness   = "e2e_pytorch_mnist"
+expected  = 0.86 # provisional — confirm with a measured run
+tolerance = 0.10
+smoke     = { clients = 5, rounds = 15 }
+
+[clients.rust]
+harness   = "burn_mlp"
+expected  = 0.98 # Burn synthetic non-IID + 1 poisoned client, deterministic (seed 0)
+tolerance = 0.05
+smoke     = { clients = 5, rounds = 8 }

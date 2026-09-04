@@ -1,0 +1,34 @@
+[package]
+name = "conflux-trusted-reference"
+description = "Optional trusted-reference sidecar for Conflux FL — the server-side training/scoring capability FLTrust and Zeno need, kept out of conflux-server as a separate process."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+# The gRPC server half of the sidecar hop. `conflux-net` is deliberately
+# NOT a dependency: that crate holds the *client* the server uses, and
+# depending on it here would couple the two halves of a boundary whose
+# entire purpose is that they stay separable.
+tonic.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net"] }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tokio-stream.workspace = true
+# Dev-only, and the direction matters. This crate's own integration test
+# drives the full hop — a real sidecar, the real `conflux-net` client the
+# server uses, and a real `FlTrustAggregator` consuming the result.
+#
+# The test lives here rather than in `conflux-server` deliberately:
+# `conflux-server` must never depend on this crate at any depth, not
+# even through a dev-dependency (the same rule that keeps it away from
+# `conflux-attacks`). Putting the end-to-end test on this side of the
+# boundary proves the hop works while leaving that graph untouched.
+conflux-net = { path = "../conflux-net" }
+conflux-core = { path = "../conflux-core" }

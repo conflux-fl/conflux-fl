@@ -1,0 +1,18 @@
+[package]
+name = "conflux-proto"
+description = "Shared protobuf schema for Conflux FL — one FlTransport service for both the server-node network hop and the node-ClientApp loopback hop."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+protoc-bin-vendored.workspace = true

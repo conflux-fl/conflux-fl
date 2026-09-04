@@ -1,0 +1,48 @@
+[package]
+name = "conflux-net"
+description = "Dual-mode (push/pull) gRPC transport for Conflux FL, with mTLS and JWT authentication."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+# tls-aws-lc, not tls-ring: conflux-store's S3Store (aws-sdk-s3)
+# pulls in rustls with the aws-lc-rs crypto provider; Cargo's workspace-wide
+# feature unification means a `cargo test --workspace` run would otherwise
+# link both `ring` and `aws-lc-rs` into this crate's own test binaries too,
+# and rustls panics at runtime with no way to pick a default automatically.
+# Matching the AWS SDK's provider avoids the conflict outright.
+tonic = { workspace = true, features = ["tls-aws-lc", "tls-connect-info"] }
+tonic-prost.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
+tokio-stream = { workspace = true, features = ["net"] }
+thiserror.workspace = true
+async-trait.workspace = true
+# The oversized-update rejection logs the client and the limit it
+# tripped, per the project's "say so, out loud" principle — the same
+# reason conflux-buffer logs quorum-vs-timeout and conflux-reputation
+# logs every rejected update.
+tracing.workspace = true
+# Hashing a peer certificate's DER bytes into the fingerprint
+# `NodeIdentity::CertFingerprint` compares against.
+sha2.workspace = true
+# RS256/ES256 verification of RegisterRequest.auth_token.
+# Verification only — no signing key ever lives in a Conflux process.
+# `aws_lc_rs`, not `rust_crypto`, for exactly the reason the tonic
+# comment above gives: this workspace already links aws-lc-rs (via
+# aws-sdk-s3 -> rustls), and jsonwebtoken 11 requires exactly one crypto
+# provider feature. Picking the same one keeps a single crypto stack in
+# the binary rather than a second, parallel implementation of the same
+# primitives.
+jsonwebtoken = { workspace = true, features = ["use_pem", "aws_lc_rs"] }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+rcgen.workspace = true
+# Names `Certificate::der()`'s return type in the peer-fingerprint
+# test — the same `rustls-pki-types` tonic's own `tls-connect-info`
+# feature already pulls in, not a new crate to the dependency tree.
+rustls-pki-types.workspace = true

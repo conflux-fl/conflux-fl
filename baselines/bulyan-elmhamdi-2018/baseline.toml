@@ -1,0 +1,34 @@
+# Bulyan (El Mhamdi, Guerraoui, Rouault 2018) — Byzantine-robust aggregation.
+# This is the worked example in the "Add a baseline" guide: a manifest-only
+# reproduction — no new client code, because the Burn `burn_mlp` example
+# already drives any cataloged aggregator by name.
+
+[paper]
+title   = "The Hidden Vulnerability of Distributed Learning in Byzantium"
+authors = "El Mhamdi, Guerraoui, Rouault"
+venue   = "ICML 2018"
+url     = "https://proceedings.mlr.press/v80/mhamdi18a.html"
+
+[method]
+aggregator = "bulyan"
+selector   = "uniform_random"
+
+[experiment]
+dataset   = "synthetic" # rust edge only (see below)
+model     = "mlp"
+partition = "non-iid"
+
+[scenario]
+attackers     = 1
+no_reputation = true
+
+# Rust edge only. Bulyan requires n ≥ 4f+3, so with 1 Byzantine client
+# (f=1) it needs at least 7 participants — hence clients = 8. The Python
+# edge is omitted here: run_demo.sh pins byzantine_fraction = 0.3, which at
+# 8 clients demands n ≥ 11 and would fail fast (a good illustration of a
+# method's own preconditions — see the guide).
+[clients.rust]
+harness   = "burn_mlp"
+expected  = 0.91 # Burn synthetic non-IID + 1 poisoned client, deterministic (seed 0)
+tolerance = 0.05
+smoke     = { clients = 8, rounds = 8 }

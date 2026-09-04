@@ -1,0 +1,27 @@
+[package]
+name = "conflux-core"
+description = "Aggregation algorithms for Conflux FL — twenty-two cited methods across five families (averaging, robust, temporal, trusted, optimization), built on a shared family pattern."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conflux-config = { path = "../conflux-config" }
+conflux-proto = { path = "../conflux-proto" }
+inventory.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+# `benches/accumulate.rs` keeps explicit-SIMD variants of the combine
+# loop purely as the standing evidence for why the shipped code is
+# scalar. Nothing in `src/` uses this.
+wide.workspace = true
+
+# The evidence behind the scalar combine loop. A SIMD change nobody
+# measured is an unverified claim, and this project measures.
+[[bench]]
+name = "accumulate"
+harness = false

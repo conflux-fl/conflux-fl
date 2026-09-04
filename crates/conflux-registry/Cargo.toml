@@ -1,0 +1,17 @@
+[package]
+name = "conflux-registry"
+description = "Client lifecycle for Conflux FL — registration, heartbeats, eviction, and the node allow-list."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+redis = { workspace = true, features = ["aio", "tokio-comp", "connection-manager"] }
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

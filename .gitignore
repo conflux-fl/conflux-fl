@@ -1,0 +1,23 @@
+/target
+**/target
+*.pyc
+__pycache__/
+.venv/
+python/conflux_client/*_pb2.py
+python/conflux_client/*_pb2_grpc.py
+python/conflux_client/examples/results_*.jsonl
+python/conflux_client/examples/results_*.csv
+python/conflux_client/examples/results_*.png
+python/conflux_client/examples/benchmark_*.log
+.claude/
+CLAUDE.md
+
+# Real environment values. `.env.example` is the tracked template —
+# keep them in sync with `evnx sync`, and let `evnx scan` catch a secret
+# before it reaches a commit.
+.env
+.env.*
+!.env.example
+conflux-fl-workspace.code-workspace
+# multi-seed sweep output (python/conflux_client/examples/*/run_fairness_comparison.sh)
+fairness_results/

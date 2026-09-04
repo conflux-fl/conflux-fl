@@ -1,0 +1,17 @@
+[package]
+name = "conflux-buffer"
+description = "Async round staging for Conflux FL — quorum and timeout flush."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conflux-proto = { path = "../conflux-proto" }
+tokio = { workspace = true, features = ["sync", "time", "rt-multi-thread", "macros"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-test.workspace = true
