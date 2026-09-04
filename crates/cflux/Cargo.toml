@@ -1,0 +1,24 @@
+[package]
+# The one package not named `conflux-*`: its name is the install command
+# and the word a user types, so `cargo install cflux` runs `cflux`.
+name = "cflux"
+description = "The Conflux FL command line: inspect the method catalog and pre-flight a configuration — every resolved value, its source, every validation finding — without starting anything."
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Resolution, validation, provenance, and the strategy registry.
+conflux-config = { path = "../conflux-config" }
+# Linked so their `inventory::submit!` registrations populate the
+# registry; the CLI calls nothing else in them. Never `conflux-attacks`:
+# the CLI is for the framework only, and CI's isolation job checks the
+# edge is absent.
+conflux-core = { path = "../conflux-core" }
+conflux-selector = { path = "../conflux-selector" }
+conflux-privacy = { path = "../conflux-privacy" }
+clap.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

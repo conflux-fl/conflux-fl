@@ -16,6 +16,21 @@ promised before `1.0`.
 
 ### Added
 
+- **`cflux`**, the Conflux FL command line (`crates/cflux`), first slice:
+  `catalog list` / `catalog describe <name>` (registry-backed: family,
+  paper, parameters read, whether a method needs the trusted-reference
+  sidecar) and `config resolve` / `config check` (every resolved
+  parameter with its source tier, then validation; `check` exits 1 on an
+  error finding, nothing is started). Every command takes
+  `--format pretty|json`, ends its `--help` with a guide link, and uses
+  stable exit codes (`0` ok, `1` negative answer, `2` could not run).
+  CI's isolation job now also asserts `cflux` never links
+  `conflux-attacks`.
+- `conflux_config::overrides_from_env` / `topology_profile_named` /
+  `mode_profile_named` — the `CONFLUX_*` and profile-name reading that
+  lived inside the server binary, now a library surface `conflux-server`
+  and `cflux` share (a malformed variable is an error naming it, as
+  before).
 - `conflux-baselines table` — the "Reproduced papers" table in
   `baselines/README.md` is generated from the manifests (`table --write`
   fills the fenced region; `table --check` exits non-zero when it is
