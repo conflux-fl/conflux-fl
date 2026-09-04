@@ -124,6 +124,7 @@ fn main() {
         Some("list") => cmd_list(),
         Some("run") => cmd_run(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
+        Some("table") => cmd_table(&args[1..]),
         Some("-h") | Some("--help") | None => usage(),
         Some(other) => {
             eprintln!("unknown command: {other}\n");
@@ -139,10 +140,13 @@ fn usage() {
          USAGE:\n\
          \x20 list                                    every discovered baseline\n\
          \x20 run <name> [--client python|rust] [--full] [--plan]\n\
-         \x20 verify [--ci] [--plan]                  run every baseline's Rust edge\n\n\
+         \x20 verify [--ci] [--plan]                  run every baseline's Rust edge\n\
+         \x20 table [--write] [--check]               the \"Reproduced papers\" table from the manifests\n\n\
          Edges: python drives the e2e_* PyTorch harness; rust drives the Burn\n\
          `conflux-client` example. --plan validates + prints the plan without running.\n\
-         `verify` uses the Rust edge — fast, deterministic, no Python needed."
+         `verify` uses the Rust edge — fast, deterministic, no Python needed.\n\
+         `table` prints the table; --write puts it into baselines/README.md between\n\
+         its markers; --check exits 1 when that README is stale."
     );
 }
 
@@ -520,6 +524,157 @@ fn cmd_verify(args: &[String]) {
 }
 
 // ---------------------------------------------------------------------------
+// table — the "Reproduced papers" table, generated from the manifests
+// ---------------------------------------------------------------------------
+
+/// The markers in `baselines/README.md` that fence the generated table.
+/// Everything between them is owned by `table --write`; the prose around
+/// them stays hand-written. A test regenerates the table and fails when
+/// the README disagrees, so the rows cannot drift from the manifests.
+const TABLE_BEGIN: &str = "<!-- reproduced-papers:begin -->";
+const TABLE_END: &str = "<!-- reproduced-papers:end -->";
+
+fn cmd_table(args: &[String]) {
+    let mut write = false;
+    let mut check = false;
+    for a in args {
+        match a.as_str() {
+            "--write" => write = true,
+            "--check" => check = true,
+            s => {
+                eprintln!("unknown flag: {s}");
+                exit(EXIT_FAIL);
+            }
+        }
+    }
+    let all = discover();
+    // A row for a method the catalog does not ship would be a claim the
+    // table repeats forever; refuse the same way `run` does.
+    for (name, m) in &all {
+        if let Err(err) = validate_methods(&m.method) {
+            eprintln!("✗ {name}: {err}");
+            exit(EXIT_UNKNOWN_METHOD);
+        }
+    }
+    let table = render_table(&all);
+    if !write && !check {
+        print!("{table}");
+        return;
+    }
+    let readme = baselines_dir().join("README.md");
+    let text = std::fs::read_to_string(&readme).unwrap_or_else(|e| {
+        eprintln!("cannot read {}: {e}", readme.display());
+        exit(EXIT_FAIL);
+    });
+    let Some((before, current, after)) = split_marked_region(&text) else {
+        eprintln!(
+            "{} has no `{TABLE_BEGIN}` … `{TABLE_END}` markers to fill",
+            readme.display()
+        );
+        exit(EXIT_FAIL);
+    };
+    if check {
+        if current == table {
+            println!("✓ {} table is up to date", readme.display());
+        } else {
+            eprintln!(
+                "✗ {} table is stale — regenerate with `cargo run -p conflux-baselines -- table --write`",
+                readme.display()
+            );
+            exit(EXIT_FAIL);
+        }
+        return;
+    }
+    let updated = format!("{before}{TABLE_BEGIN}{table}{TABLE_END}{after}");
+    if updated == text {
+        println!("{} table already up to date", readme.display());
+    } else {
+        std::fs::write(&readme, updated).unwrap_or_else(|e| {
+            eprintln!("cannot write {}: {e}", readme.display());
+            exit(EXIT_FAIL);
+        });
+        println!("wrote the table into {}", readme.display());
+    }
+}
+
+/// Splits `text` into (before the begin marker, the fenced region, after
+/// the end marker). `None` when either marker is missing or they are out
+/// of order.
+fn split_marked_region(text: &str) -> Option<(&str, &str, &str)> {
+    let begin = text.find(TABLE_BEGIN)?;
+    let region_start = begin + TABLE_BEGIN.len();
+    let end = region_start + text[region_start..].find(TABLE_END)?;
+    Some((
+        &text[..begin],
+        &text[region_start..end],
+        &text[end + TABLE_END.len()..],
+    ))
+}
+
+/// The fenced region: starts and ends with a newline so the markers keep
+/// their own lines. Every cell is a manifest fact — links, the paper's
+/// short form, the method, the edges, the scenario, and what the runner
+/// asserts per edge. Prose about *why* a number matters stays outside.
+fn render_table(all: &[(String, Manifest)]) -> String {
+    let mut out = String::from(
+        "\n<!-- Generated by `cargo run -p conflux-baselines -- table --write` from\n     baselines/*/baseline.toml; regenerate, do not hand-edit. -->\n\n",
+    );
+    out.push_str(
+        "| Baseline | Paper | Method | Edges | Scenario | Expected `held_out_accuracy` |\n",
+    );
+    out.push_str("|---|---|---|---|---|---|\n");
+    for (name, m) in all {
+        let kinds = edges(m);
+        let edge_list = kinds
+            .iter()
+            .map(|k| k.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let scenario = if m.scenario.attackers == 0 {
+            "clean".to_string()
+        } else {
+            let mut s = format!("{} attacker(s)", m.scenario.attackers);
+            if m.scenario.no_reputation {
+                s.push_str(", reputation filter off");
+            }
+            s
+        };
+        let expected = kinds
+            .iter()
+            .filter_map(|k| {
+                edge(m, *k).map(|e| format!("{} {:.2} ± {:.2}", k.label(), e.expected, e.tolerance))
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        out.push_str(&format!(
+            "| [`{name}`]({name}/) | [{}]({}) | `{}` | {edge_list} | {scenario} | {expected} |\n",
+            paper_short_form(&m.paper),
+            m.paper.url,
+            m.method.aggregator
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// `Blanchard et al. (NeurIPS 2017)`: the first surname from the
+/// manifest's author list, "et al." when there is more than one, and the
+/// venue in parentheses, since the venue already carries the year.
+fn paper_short_form(p: &Paper) -> String {
+    let mut authors = p
+        .authors
+        .split(',')
+        .map(str::trim)
+        .filter(|a| !a.is_empty());
+    let first = authors.next().unwrap_or("Unknown");
+    if authors.next().is_some() {
+        format!("{first} et al. ({})", p.venue)
+    } else {
+        format!("{first} ({})", p.venue)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Harness orchestration
 // ---------------------------------------------------------------------------
 
@@ -789,5 +944,50 @@ mod registry_contract {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    fn paper(authors: &str, venue: &str) -> Paper {
+        Paper {
+            title: "t".into(),
+            authors: authors.into(),
+            venue: venue.into(),
+            url: "u".into(),
+        }
+    }
+
+    #[test]
+    fn the_short_form_is_first_surname_et_al_and_venue() {
+        assert_eq!(
+            paper_short_form(&paper(
+                "Blanchard, El Mhamdi, Guerraoui, Stainer",
+                "NeurIPS 2017"
+            )),
+            "Blanchard et al. (NeurIPS 2017)"
+        );
+        assert_eq!(
+            paper_short_form(&paper("El Mhamdi, Guerraoui, Rouault", "ICML 2018")),
+            "El Mhamdi et al. (ICML 2018)"
+        );
+        assert_eq!(
+            paper_short_form(&paper("Solo", "Venue 2020")),
+            "Solo (Venue 2020)"
+        );
+    }
+
+    #[test]
+    fn the_marked_region_is_found_and_the_prose_around_it_kept() {
+        let text = format!("intro\n{TABLE_BEGIN}\nold\n{TABLE_END}\noutro\n");
+        let (before, region, after) = split_marked_region(&text).unwrap();
+        assert_eq!(before, "intro\n");
+        assert_eq!(region, "\nold\n");
+        assert_eq!(after, "\noutro\n");
+        assert!(split_marked_region("no markers here").is_none());
+        // An end marker before the begin marker is not a region either.
+        assert!(split_marked_region(&format!("{TABLE_END} x {TABLE_BEGIN}")).is_none());
     }
 }

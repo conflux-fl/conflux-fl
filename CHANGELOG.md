@@ -14,7 +14,15 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-Nothing yet — `0.1.0` is the current release.
+### Added
+
+- `conflux-baselines table` — the "Reproduced papers" table in
+  `baselines/README.md` is generated from the manifests (`table --write`
+  fills the fenced region; `table --check` exits non-zero when it is
+  stale), and a golden-file test fails CI on drift, the same guarantee
+  the aggregation catalog has. The catalog gained a **Reproduced by**
+  column (and a `baselines` field in its JSON) linking each method to
+  the baselines that reproduce it.
 
 ## [0.1.0] — 2026-09-03
 
