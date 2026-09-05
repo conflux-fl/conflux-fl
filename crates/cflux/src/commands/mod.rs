@@ -2,6 +2,8 @@
 
 pub mod catalog;
 pub mod config;
+pub mod doctor;
+pub mod init;
 
 use crate::format::Report;
 
@@ -13,9 +15,9 @@ use crate::format::Report;
 pub fn version() -> Report {
     let cflux = env!("CARGO_PKG_VERSION");
     let framework = conflux_config::FRAMEWORK_VERSION;
-    Report {
-        text: format!("cflux {cflux} (framework crates {framework})\n"),
-        json: serde_json::json!({ "cflux": cflux, "framework": framework }),
-        exit_code: 0,
-    }
+    Report::plain(
+        format!("cflux {cflux} (framework crates {framework})\n"),
+        serde_json::json!({ "cflux": cflux, "framework": framework }),
+        0,
+    )
 }

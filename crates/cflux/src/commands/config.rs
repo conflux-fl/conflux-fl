@@ -37,7 +37,7 @@ enum Command {
 /// What selects a configuration — the same inputs the server reads from
 /// its environment, exposed as flags.
 #[derive(ClapArgs)]
-struct Selection {
+pub struct Selection {
     /// Topology: a builtin (cross_silo, cross_device, crowdsource, edge)
     /// or a profile file name under the profile directory. Defaults to
     /// $CONFLUX_TOPOLOGY, then cross_device.
@@ -58,13 +58,13 @@ struct Selection {
 }
 
 /// A configuration plus the chains that produced it.
-struct Resolution {
-    config: ResolvedConfig,
-    topology_chain: Vec<String>,
-    mode_chain: Vec<String>,
+pub struct Resolution {
+    pub config: ResolvedConfig,
+    pub topology_chain: Vec<String>,
+    pub mode_chain: Vec<String>,
 }
 
-fn resolve(sel: &Selection) -> Result<Resolution, CliError> {
+pub fn resolve(sel: &Selection) -> Result<Resolution, CliError> {
     let profile_dir = sel
         .profile_dir
         .clone()
@@ -115,7 +115,7 @@ fn parameters_json(config: &ResolvedConfig) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn header(r: &Resolution) -> String {
+pub fn header(r: &Resolution) -> String {
     let mut s = format!(
         "topology: {} ({})\nmode:     {} ({})\n\n",
         r.config.topology.label(),
@@ -130,7 +130,7 @@ fn header(r: &Resolution) -> String {
     s
 }
 
-fn base_json(r: &Resolution) -> serde_json::Map<String, serde_json::Value> {
+pub fn base_json(r: &Resolution) -> serde_json::Map<String, serde_json::Value> {
     let mut m = serde_json::Map::new();
     m.insert("topology".into(), json!(r.config.topology.label()));
     m.insert("mode".into(), json!(r.config.mode.label()));
@@ -142,7 +142,7 @@ fn base_json(r: &Resolution) -> serde_json::Map<String, serde_json::Value> {
     m
 }
 
-fn findings_json(v: &Validation) -> Vec<serde_json::Value> {
+pub fn findings_json(v: &Validation) -> Vec<serde_json::Value> {
     v.errors
         .iter()
         .chain(v.warnings.iter())
@@ -165,6 +165,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
             Ok(Report {
                 text: header(&r),
                 json: serde_json::Value::Object(base_json(&r)),
+                annotations: Vec::new(),
                 exit_code: 0,
             })
         }
@@ -198,6 +199,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
             Ok(Report {
                 text,
                 json: serde_json::Value::Object(json),
+                annotations: Vec::new(),
                 exit_code: if ok { 0 } else { EXIT_NEGATIVE },
             })
         }

@@ -16,6 +16,24 @@ promised before `1.0`.
 
 ### Added
 
+- **`cflux init`** — scaffolds a deployment: a topology profile and a
+  mode profile, each extending a builtin with every key that axis owns
+  present but commented at its inherited value, plus (with `--docker`) a
+  compose file for the durable backends. Refuses to shadow a builtin
+  name or overwrite without `--force`, and changes no behavior until a
+  line is uncommented.
+- **`cflux doctor`** — every check the server fail-fasts on, run at once
+  and reported as one list: configuration validation, backend selection
+  against the mode, TCP reachability of each configured backend, TLS
+  material and the posture it produces, the JWT key requirement, and the
+  trusted-reference sidecar's `Describe` handshake for the methods
+  defined in terms of one. Suggestions are printed, never applied.
+  `--format github-actions` emits the findings as CI annotations.
+- `conflux_server::{backend_selection_from_env, tls_material_from_env,
+  jwt_key_from_env, tls_paths_present, trusted_reference_addr}` — the
+  deployment-material env readers, lifted out of the server binary so
+  `doctor` checks the same deployment that starts. Fallible now rather
+  than panicking, with the binary still failing fast on any error.
 - **`cflux`**, the Conflux FL command line (`crates/cflux`), first slice:
   `catalog list` / `catalog describe <name>` (registry-backed: family,
   paper, parameters read, whether a method needs the trusted-reference

@@ -51,6 +51,7 @@ mod app_state;
 mod auth_enforcement;
 mod backend_selection;
 mod dispatcher;
+mod env;
 mod error;
 mod http;
 mod round;
@@ -65,6 +66,10 @@ pub use auth_enforcement::{
 pub use backend_selection::{
     AccountingBackend, BackendSelection, BackendSelectionError, RegistryBackend, StoreBackend,
     validate_production_backends,
+};
+pub use env::{
+    EnvError, backend_selection_from_env, backend_selection_from_vars, jwt_key_from_env,
+    tls_material_from_env, tls_material_from_vars, tls_paths_present, trusted_reference_addr,
 };
 pub use error::ServerError;
 pub use http::router;

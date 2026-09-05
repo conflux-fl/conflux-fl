@@ -5,7 +5,11 @@ name = "cflux"
 description = "The Conflux FL command line: inspect the method catalog and pre-flight a configuration — every resolved value, its source, every validation finding — without starting anything."
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# Not the workspace's 1.88: `doctor` reuses `conflux-server`'s own
+# startup checks, and that crate declares 1.94.1 for `aws-sdk-s3`. A
+# CLI that ran the checks itself could promise 1.88 and be wrong about
+# what the server does, which is the one thing a pre-flight must not be.
+rust-version = "1.94.1"
 version.workspace = true
 edition.workspace = true
 
@@ -19,6 +23,16 @@ conflux-config = { path = "../conflux-config" }
 conflux-core = { path = "../conflux-core" }
 conflux-selector = { path = "../conflux-selector" }
 conflux-privacy = { path = "../conflux-privacy" }
+# `doctor` runs the server's own startup checks rather than its own
+# imitation of them: backend selection vs mode, the TLS posture, the JWT
+# key requirement, and the deployment-material env readers behind them.
+conflux-server = { path = "../conflux-server" }
+# The sidecar capability handshake — the same `Describe` call the server
+# makes at startup, so a mismatch is found before any client connects.
+conflux-net = { path = "../conflux-net" }
+# One async call (that handshake) needs a runtime; a current-thread one
+# is enough, so the CLI never spawns a thread pool to ask one question.
+tokio = { workspace = true, features = ["rt", "net", "time"] }
 clap.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

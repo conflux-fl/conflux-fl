@@ -120,6 +120,7 @@ fn list(kind: Kind) -> Report {
     Report {
         text,
         json: serde_json::Value::Object(groups),
+        annotations: Vec::new(),
         exit_code: 0,
     }
 }
@@ -141,6 +142,7 @@ fn describe(name: &str) -> Report {
                 known.join(", ")
             ),
             json: json!({ "ok": false, "name": name, "known": known }),
+            annotations: Vec::new(),
             exit_code: EXIT_NEGATIVE,
         };
     };
@@ -164,6 +166,7 @@ fn describe(name: &str) -> Report {
             needs
         ),
         json: entry_json(entry),
+        annotations: Vec::new(),
         exit_code: 0,
     }
 }

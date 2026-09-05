@@ -1256,10 +1256,13 @@ dependencies = [
  "clap",
  "conflux-config",
  "conflux-core",
+ "conflux-net",
  "conflux-privacy",
  "conflux-selector",
+ "conflux-server",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
