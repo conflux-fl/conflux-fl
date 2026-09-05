@@ -51,6 +51,19 @@ pub(crate) enum CliError {
     /// Resolution itself failed.
     #[error("{0}")]
     Resolve(#[from] conflux_config::ConfigError),
+    /// A deployment-material variable names something unusable — a
+    /// backend selected without its connection string, an unreadable
+    /// certificate, a key that is not a key.
+    #[error("{0}")]
+    ServerEnv(conflux_server::EnvError),
+    /// A file the command was asked to write could not be written.
+    #[error("could not write {path}: {source}")]
+    Write {
+        /// The file.
+        path: String,
+        /// Why the write failed.
+        source: std::io::Error,
+    },
 }
 
 #[derive(Parser)]
@@ -74,6 +87,12 @@ enum Command {
     Catalog(commands::catalog::Args),
     /// Resolve and validate a configuration without starting anything.
     Config(commands::config::Args),
+    /// Scaffold a deployment: a topology profile, a mode profile, and
+    /// optionally a compose file for its durable backends.
+    Init(commands::init::Args),
+    /// Run every startup check at once — config, backends, TLS, JWT, and
+    /// the sidecar — without starting anything.
+    Doctor(commands::doctor::Args),
     /// Print this binary's version and the framework version it embeds.
     Version,
 }
@@ -90,6 +109,8 @@ fn main() {
     let result: Result<Report, CliError> = match cli.command {
         Command::Catalog(args) => commands::catalog::run(args),
         Command::Config(args) => commands::config::run(args),
+        Command::Init(args) => commands::init::run(args),
+        Command::Doctor(args) => commands::doctor::run(args),
         Command::Version => Ok(commands::version()),
     };
     match result {
@@ -100,7 +121,7 @@ fn main() {
         Err(err) => {
             match cli.format {
                 Format::Pretty => eprintln!("error: {err}"),
-                Format::Json => println!(
+                Format::Json | Format::GithubActions => println!(
                     "{}",
                     serde_json::json!({ "ok": false, "error": err.to_string() })
                 ),

@@ -31,17 +31,13 @@
 //! own behavior. `CONFLUX_MIN_REPUTATION_SCORE` controls the threshold
 //! used *when* it is turned on.
 
-use conflux_net::jwt::JwtKeyMaterial;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use conflux_config::Overrides;
 use conflux_net::FlTransportService;
 use conflux_proto::fl_transport_server::FlTransportServer;
-use conflux_server::{
-    AccountingBackend, AppState, BackendSelection, RegistryBackend, StoreBackend, TlsMaterial,
-    resolve_server_tls, run_round, validate_jwt_startup,
-};
+use conflux_server::{AppState, resolve_server_tls, run_round, validate_jwt_startup};
 
 #[tokio::main]
 async fn main() {
@@ -149,7 +145,7 @@ async fn main() {
     // start here (`resolve_server_tls`'s own fail-fast), rather than
     // silently binding a plaintext gRPC server for a topology whose
     // profile says it should require mTLS.
-    let tls_material = tls_material_from_env();
+    let tls_material = conflux_server::tls_material_from_env().unwrap_or_else(|e| panic!("{e}"));
     let tls_config =
         resolve_server_tls(mode, config.auth.value, tls_material).expect("auth enforcement failed");
     if tls_config.is_none() && config.auth.value == conflux_config::AuthMode::Mtls {
@@ -177,7 +173,7 @@ async fn main() {
     // deployment with no key to verify against never starts — the same
     // fail-fast discipline, for the other three topologies' default
     // auth mode.
-    let jwt_key = jwt_key_from_env();
+    let jwt_key = conflux_server::jwt_key_from_env().unwrap_or_else(|e| panic!("{e}"));
     validate_jwt_startup(mode, config.auth.value, jwt_key.as_ref())
         .expect("auth enforcement failed");
     match (&jwt_key, config.auth.value) {
@@ -224,7 +220,7 @@ async fn main() {
     }
 
     let initial_weights = vec![0.0f32; initial_weights_dim];
-    let backends = backend_selection_from_env();
+    let backends = conflux_server::backend_selection_from_env().unwrap_or_else(|e| panic!("{e}"));
     let mut state = AppState::connect(config, mode, initial_weights, backends)
         .await
         .expect("backend connection failed")
@@ -449,96 +445,6 @@ async fn shutdown_signal() {
         _ = ctrl_c => tracing::info!("received Ctrl-C; shutting down"),
         _ = terminate => tracing::info!("received SIGTERM; shutting down"),
     }
-}
-
-/// Reads `CONFLUX_REGISTRY_BACKEND`/`CONFLUX_REDIS_URL`,
-/// `CONFLUX_STORE_BACKEND`/`CONFLUX_POSTGRES_URL`/`CONFLUX_S3_*`, and
-/// `CONFLUX_ACCOUNTING_PERSISTENCE` (which reuses `CONFLUX_POSTGRES_URL`)
-/// into a `BackendSelection`. Missing/unset means "memory"/"disabled" —
-/// `AppState::connect`'s own `validate_production_backends` is what turns
-/// that into a startup failure when `mode = production`, so this function
-/// doesn't need to know about `mode` at all.
-fn backend_selection_from_env() -> BackendSelection {
-    let registry = match std::env::var("CONFLUX_REGISTRY_BACKEND").as_deref() {
-        Ok("redis") => RegistryBackend::Redis {
-            url: std::env::var("CONFLUX_REDIS_URL")
-                .expect("CONFLUX_REGISTRY_BACKEND=redis requires CONFLUX_REDIS_URL"),
-        },
-        _ => RegistryBackend::Memory,
-    };
-
-    let store = match std::env::var("CONFLUX_STORE_BACKEND").as_deref() {
-        Ok("postgres") => StoreBackend::Postgres {
-            url: std::env::var("CONFLUX_POSTGRES_URL")
-                .expect("CONFLUX_STORE_BACKEND=postgres requires CONFLUX_POSTGRES_URL"),
-        },
-        Ok("s3") => StoreBackend::S3 {
-            endpoint: std::env::var("CONFLUX_S3_ENDPOINT")
-                .expect("CONFLUX_STORE_BACKEND=s3 requires CONFLUX_S3_ENDPOINT"),
-            bucket: std::env::var("CONFLUX_S3_BUCKET")
-                .expect("CONFLUX_STORE_BACKEND=s3 requires CONFLUX_S3_BUCKET"),
-            access_key: std::env::var("CONFLUX_S3_ACCESS_KEY")
-                .expect("CONFLUX_STORE_BACKEND=s3 requires CONFLUX_S3_ACCESS_KEY"),
-            secret_key: std::env::var("CONFLUX_S3_SECRET_KEY")
-                .expect("CONFLUX_STORE_BACKEND=s3 requires CONFLUX_S3_SECRET_KEY"),
-        },
-        _ => StoreBackend::Memory,
-    };
-
-    let accounting = match std::env::var("CONFLUX_ACCOUNTING_PERSISTENCE").as_deref() {
-        Ok("true") => AccountingBackend::Postgres {
-            url: std::env::var("CONFLUX_POSTGRES_URL")
-                .expect("CONFLUX_ACCOUNTING_PERSISTENCE=true requires CONFLUX_POSTGRES_URL"),
-        },
-        _ => AccountingBackend::Disabled,
-    };
-
-    BackendSelection {
-        registry,
-        store,
-        accounting,
-    }
-}
-
-/// Reads `CONFLUX_TLS_CERT_PATH`/`CONFLUX_TLS_KEY_PATH`/
-/// `CONFLUX_TLS_CLIENT_CA_PATH` (PEM file paths) into a `TlsMaterial`.
-/// `None` when any of the three is unset — `resolve_server_tls` is what
-/// turns that into a startup failure when it matters (`auth = mtls` and
-/// `mode = production`), so this function doesn't need to know either.
-fn tls_material_from_env() -> Option<TlsMaterial> {
-    let cert_path = std::env::var("CONFLUX_TLS_CERT_PATH").ok()?;
-    let key_path = std::env::var("CONFLUX_TLS_KEY_PATH").ok()?;
-    let client_ca_path = std::env::var("CONFLUX_TLS_CLIENT_CA_PATH").ok()?;
-
-    Some(TlsMaterial {
-        cert_pem: std::fs::read(&cert_path)
-            .unwrap_or_else(|e| panic!("failed to read CONFLUX_TLS_CERT_PATH ({cert_path}): {e}")),
-        key_pem: std::fs::read(&key_path)
-            .unwrap_or_else(|e| panic!("failed to read CONFLUX_TLS_KEY_PATH ({key_path}): {e}")),
-        client_ca_pem: std::fs::read(&client_ca_path).unwrap_or_else(|e| {
-            panic!("failed to read CONFLUX_TLS_CLIENT_CA_PATH ({client_ca_path}): {e}")
-        }),
-    })
-}
-
-/// Reads `CONFLUX_JWT_PUBLIC_KEY_PATH` (a PEM public key) into
-/// `JwtKeyMaterial`. `None` when unset — `validate_jwt_startup` is what
-/// turns that into a startup failure when it matters (`auth = jwt` and
-/// `mode = production`), the same division of labor
-/// `tls_material_from_env` has with `resolve_server_tls`.
-///
-/// A path that is set but unreadable, or readable but not a usable key,
-/// panics here rather than degrading to `None`: an operator who named a
-/// key file meant it, and silently continuing unauthenticated is the one
-/// outcome nobody wants from a misconfigured auth setting.
-fn jwt_key_from_env() -> Option<JwtKeyMaterial> {
-    let path = std::env::var("CONFLUX_JWT_PUBLIC_KEY_PATH").ok()?;
-    let pem = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("failed to read CONFLUX_JWT_PUBLIC_KEY_PATH ({path}): {e}"));
-    Some(
-        JwtKeyMaterial::from_public_key_pem(&pem)
-            .unwrap_or_else(|e| panic!("CONFLUX_JWT_PUBLIC_KEY_PATH ({path}) is unusable: {e}")),
-    )
 }
 
 /// Connects to the trusted-reference sidecar and verifies it can serve
