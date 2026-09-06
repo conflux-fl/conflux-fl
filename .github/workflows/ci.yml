@@ -184,12 +184,12 @@ jobs:
         run: ruff check --select E9,F --exclude .venv --exclude '*_pb2*' .
         working-directory: python/conflux_client
 
-      # Gate 4 — the demo scripts are shipped client-side too, and a
+      # Gate 4 — these two scripts are shipped client-side too, and a
       # shell syntax error in one is exactly as broken as a Python one.
-      - name: check the demo scripts parse
+      - name: check the client scripts parse
         run: |
           set -e
-          for script in generate_proto.sh ci_smoke.sh examples/*/run_demo.sh; do
+          for script in generate_proto.sh ci_smoke.sh; do
             bash -n "$script" && echo "  ok  $script"
           done
         working-directory: python/conflux_client

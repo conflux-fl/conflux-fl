@@ -28,7 +28,7 @@
 //! # What this does not decide
 //!
 //! **Which ML framework.** Two bundled examples show the range. `logreg`
-//! hand-rolls logistic regression, exactly as `e2e_numpy_logreg` does on
+//! hand-rolls logistic regression, exactly as the Python harness does on
 //! the Python side — full-batch gradient descent over a flat weight
 //! vector, no framework at all — which tests the *architecture* (does
 //! the loop close, does the wire format fit, can a client be a single

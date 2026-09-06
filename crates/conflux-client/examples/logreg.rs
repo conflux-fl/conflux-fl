@@ -4,7 +4,7 @@
 //!   cargo run --example logreg -p conflux-client -- --client-id c1 --client-index 0
 //!
 //! It mirrors
-//! `python/conflux_client/examples/e2e_numpy_logreg` — same model, same
+//! the Python harness's `logreg` model — same model, same
 //! flat `[w_1..w_d, bias]` layout, same full-batch gradient descent — so
 //! the two can be compared rather than argued about.
 //!

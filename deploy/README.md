@@ -44,7 +44,7 @@ CONFLUX_CLIENT_ID=site-7 \
 CONFLUX_SERVER_ADDR=http://fl.example.org:50051 \
 CONFLUX_NODE_AUTH_TOKEN=$SITE7_TOKEN \
   deploy/run_client.sh -- \
-    python3 python/conflux_client/examples/e2e_pytorch_mnist/trainer_client.py \
+    python3 -m _harness.trainer --model mlp \
       --address 127.0.0.1:47100 --client-id site-7 --shard shard.pt --rounds 30
 ```
 

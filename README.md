@@ -189,33 +189,36 @@ Then run the full pipeline locally — a real `conflux-server`, a real
 
 ## 🧪 Train a real model
 
-Four end-to-end harnesses train real models across simulated clients
-through the real pipeline — NumPy logistic regression, PyTorch MNIST,
-CIFAR-10, and a Shakespeare character model — with real convergence
-numbers, and a persistent attacker to defend against:
+One harness trains real models across simulated clients through the real
+pipeline — MNIST, CIFAR-10, a Shakespeare character model, logistic
+regression — with real convergence numbers, and a persistent attacker to
+defend against. A run is one command, because the model, dataset,
+partition and attack come from the baseline's manifest:
 
 ```bash
-cd python/conflux_client
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt \
-  -r examples/e2e_pytorch_mnist/requirements.txt
-./generate_proto.sh && source .venv/bin/activate
-cd examples/e2e_pytorch_mnist
-./run_demo.sh krum 5 15 --poison --no-reputation
+cd python/conflux_client && python3 -m venv .venv \
+  && .venv/bin/pip install -r requirements.txt -r ../../baselines/requirements.txt \
+  && ./generate_proto.sh && cd ../..
+cargo build -p conflux-server -p conflux-node
+cargo run -p conflux-baselines -- run krum-blanchard-2017 --client python
 ```
 
 ```
-=== centralized baseline (target accuracy) ===
-held_out_accuracy=0.8890
+  prepared 5 clients; model dimension 50890
+  round=12 held_out_accuracy=0.8840 held_out_loss=0.4009
+  round=15 held_out_accuracy=0.8870 held_out_loss=0.4108
 
-=== 5 trainer clients + 1 eval client, one persistent attacker present every round ===
-round=2  held_out_accuracy=0.7210
-round=15 held_out_accuracy=0.9050
+  achieved held_out_accuracy = 0.8900   target 0.88 ± 0.06   Δ=0.0100
+✓ krum-blanchard-2017 [python]: REPRODUCED
 ```
 
-A real PyTorch MLP on real MNIST, federated across five clients, matching
-a centralized baseline within a couple of points — **despite a
-large-magnitude attacker submitting every round** — because `krum` does
-what Blanchard et al. (2017) says it should.
+A real PyTorch MLP on real MNIST, federated across five clients, landing
+on the number the paper reports — **despite a large-magnitude attacker
+submitting every round** — because `krum` does what Blanchard et al.
+(2017) says it should. To compare methods against each other rather than
+against a paper, `conflux-baselines sweep` runs a grid of them and
+records every round, including the centralized bar each is measured
+against.
 
 <p>
   <a href="https://confluxfl.dev/tutorial/"><b>Tutorial: train a real model →</b></a><br>

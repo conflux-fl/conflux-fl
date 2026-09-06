@@ -822,7 +822,7 @@ fn pretty_command(m: &Manifest, kind: ClientKind, e: &Edge, cfg: &Cfg) -> String
 
 fn drive(m: &Manifest, kind: ClientKind, e: &Edge, cfg: &Cfg) -> Option<f64> {
     match kind {
-        ClientKind::Python => drive_python(m, e, cfg),
+        ClientKind::Python => drive_python(m, cfg),
         ClientKind::Rust => drive_rust(m, e, cfg),
     }
 }
@@ -835,8 +835,7 @@ fn rust_harness(e: &Edge) -> &str {
     })
 }
 
-fn drive_python(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
-    let _ = e;
+fn drive_python(m: &Manifest, cfg: &Cfg) -> Option<f64> {
     println!("\n  running a real federation on the shared harness…");
     let plan = federation::Plan {
         recipe: federation::Recipe {
@@ -858,57 +857,6 @@ fn drive_python(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
             None
         }
     }
-}
-
-#[allow(dead_code)]
-fn drive_python_via_script(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
-    let example_dir = repo_root()
-        .join("python/conflux_client/examples")
-        .join(e.harness.as_deref().unwrap_or_default());
-    let script = example_dir.join("run_demo.sh");
-    if !script.exists() {
-        eprintln!("harness script not found: {}", script.display());
-        exit(EXIT_FAIL);
-    }
-    let mut argv = vec![
-        m.method.aggregator.clone(),
-        cfg.clients.to_string(),
-        cfg.rounds.to_string(),
-    ];
-    if m.scenario.attackers > 0 {
-        argv.push("--poison".into());
-    }
-    if m.scenario.no_reputation {
-        argv.push("--no-reputation".into());
-    }
-    let mut command = Command::new("bash");
-    command.arg(&script).args(&argv).current_dir(&example_dir);
-    match client_venv_bin() {
-        Some(bin) => {
-            // The harness scripts call bare `python3` and expect the
-            // client's virtualenv to be active. Put it first on PATH so a
-            // plain `cargo run -p conflux-baselines` works without the
-            // caller having sourced anything.
-            let path = std::env::var_os("PATH").unwrap_or_default();
-            let mut joined = std::ffi::OsString::from(&bin);
-            joined.push(":");
-            joined.push(path);
-            command.env("PATH", joined);
-            println!(
-                "\n  driving the Python harness (real federation) with {}",
-                bin.display()
-            );
-        }
-        None => println!(
-            "\n  driving the Python harness (real federation); no python/conflux_client/.venv found, \
-             using whatever `python3` is on PATH"
-        ),
-    }
-    let output = command.output().unwrap_or_else(|err| {
-        eprintln!("failed to launch harness: {err}");
-        exit(EXIT_FAIL);
-    });
-    harness_result("the Python harness", &output)
 }
 
 fn drive_rust(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
@@ -982,13 +930,6 @@ fn harness_result(what: &str, output: &std::process::Output) -> Option<f64> {
         }
     }
     None
-}
-
-/// The Python client's virtualenv `bin/` directory, if the documented
-/// `python3 -m venv .venv` layout exists under `python/conflux_client`.
-fn client_venv_bin() -> Option<PathBuf> {
-    let bin = repo_root().join("python/conflux_client/.venv/bin");
-    bin.join("python3").exists().then_some(bin)
 }
 
 /// Both edges print `... held_out_accuracy=<number> ...`; the last one is

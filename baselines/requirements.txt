@@ -1,0 +1,20 @@
+# What the shared training harness needs, on top of the SDK's own
+# `python/conflux_client/requirements.txt`.
+#
+# CPU wheels by default: a harness exists to check convergence and
+# transport, and pulling a multi-gigabyte CUDA build to train a 50k-
+# parameter MLP on 3000 MNIST samples costs far more than it returns.
+# Drop the index lines to get whatever your platform's default is.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch
+# MNIST and CIFAR-10 come through torchvision's downloaders; the
+# Shakespeare set is fetched directly and needs nothing extra.
+torchvision
+numpy
+
+# Only for `baselines/sweeps/plot_sweep.py`. `summarize_sweep.py`
+# deliberately needs nothing beyond the standard library, so reading a
+# sweep never depends on this.
+# matplotlib
