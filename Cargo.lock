@@ -1257,6 +1257,7 @@ dependencies = [
  "conflux-config",
  "conflux-core",
  "conflux-net",
+ "conflux-node",
  "conflux-privacy",
  "conflux-selector",
  "conflux-server",

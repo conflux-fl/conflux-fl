@@ -56,6 +56,18 @@ pub(crate) enum CliError {
     /// certificate, a key that is not a key.
     #[error("{0}")]
     ServerEnv(conflux_server::EnvError),
+    /// A server could not start, or stopped with an error.
+    #[error("{0}")]
+    Server(conflux_server::ServeError),
+    /// A node could not start, or stopped with an error.
+    #[error("{0}")]
+    Node(conflux_node::RunError),
+    /// The async runtime could not be built.
+    #[error("could not start an async runtime: {source}")]
+    Runtime {
+        /// The underlying error.
+        source: std::io::Error,
+    },
     /// A file the command was asked to write could not be written.
     #[error("could not write {path}: {source}")]
     Write {
@@ -93,6 +105,11 @@ enum Command {
     /// Run every startup check at once — config, backends, TLS, JWT, and
     /// the sidecar — without starting anything.
     Doctor(commands::doctor::Args),
+    /// Run a Conflux server: the round pipeline, the gRPC transport, and
+    /// the admin API.
+    Server(commands::run::ServerArgs),
+    /// Run a Conflux node: the bridge a local `ClientApp` connects to.
+    Node(commands::run::NodeArgs),
     /// Print this binary's version and the framework version it embeds.
     Version,
 }
@@ -111,6 +128,8 @@ fn main() {
         Command::Config(args) => commands::config::run(args),
         Command::Init(args) => commands::init::run(args),
         Command::Doctor(args) => commands::doctor::run(args),
+        Command::Server(args) => commands::run::run_server(args),
+        Command::Node(args) => commands::run::run_node(args),
         Command::Version => Ok(commands::version()),
     };
     match result {

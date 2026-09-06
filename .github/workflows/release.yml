@@ -32,3 +32,71 @@ jobs:
         with:
           name: Conflux FL ${{ github.ref_name }}
           body_path: /tmp/notes.md
+
+  # Prebuilt `cflux` binaries, so evaluating Conflux FL does not start
+  # with installing a Rust toolchain — the barrier the CLI exists to
+  # remove would otherwise stand in front of the CLI itself.
+  #
+  # Built natively on each platform rather than cross-compiled: `cflux`
+  # links `aws-lc-sys` (a C library, via `jsonwebtoken` and the AWS SDK),
+  # and cross-compiling or statically linking that against musl is a
+  # standing source of toolchain pain. Every runner here already has the
+  # C toolchain it needs.
+  binaries:
+    name: cflux ${{ matrix.target }}
+    # After the release exists, so these upload into it rather than
+    # racing to create it.
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not withhold the others: a missing
+      # macOS archive is better than no archives at all.
+      fail-fast: false
+      matrix:
+        include:
+          # Not `ubuntu-latest`: a binary linked against the newest
+          # glibc refuses to start on anything older, and an operator's
+          # server is usually older than a CI runner.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", archive: tar.gz }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: "", archive: tar.gz }
+          - { os: macos-13, target: x86_64-apple-darwin, ext: "", archive: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe", archive: zip }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p cflux --target ${{ matrix.target }}
+      - name: package with a checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="cflux-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/cflux${{ matrix.ext }}" "dist/$name/"
+          # Ship the licence with the binary: a downloaded artifact
+          # travels away from the repository that explains its terms.
+          cp LICENSE NOTICE README.md "dist/$name/"
+          strip "dist/$name/cflux${{ matrix.ext }}" 2>/dev/null || true
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$name.zip" "$name" >/dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+          archive="$name.${{ matrix.archive }}"
+          # `sha256sum` on Linux and Git Bash, `shasum` on macOS.
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          echo "--- packaged ---"; ls -la "$archive" "$archive.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256

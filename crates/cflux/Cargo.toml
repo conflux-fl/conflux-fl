@@ -30,9 +30,15 @@ conflux-server = { path = "../conflux-server" }
 # The sidecar capability handshake — the same `Describe` call the server
 # makes at startup, so a mismatch is found before any client connects.
 conflux-net = { path = "../conflux-net" }
+# `node start` runs the real node, for the same reason `server start`
+# runs the real server: one implementation, not two.
+conflux-node = { path = "../conflux-node" }
 # One async call (that handshake) needs a runtime; a current-thread one
 # is enough, so the CLI never spawns a thread pool to ask one question.
-tokio = { workspace = true, features = ["rt", "net", "time"] }
+# `rt-multi-thread` because `server start` runs a real server: three
+# concurrent tasks, not the single question `doctor` asks. `signal` for
+# the Ctrl-C that stops them.
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time", "signal", "macros"] }
 clap.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

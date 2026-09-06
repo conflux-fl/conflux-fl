@@ -440,3 +440,55 @@ fn every_help_ends_with_a_guide_link_and_version_names_both_versions() {
         stdout(&o)
     );
 }
+
+#[test]
+fn server_and_node_start_are_wired_and_refuse_a_bad_configuration() {
+    // `start` runs until interrupted, so what a test can check without
+    // hanging is the path *before* the servers bind: the flags reach the
+    // same resolution `config check` uses, and a configuration the
+    // server would refuse is refused here too, by the server's own rule
+    // rather than a copy of it.
+    let o = cflux(&["server", "start", "--mode", "production"], &[]);
+    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    // Which rule fires first is the server's own startup order — the JWT
+    // key check precedes the backend check — so this asserts that a
+    // production deployment is refused and told why, not which of the
+    // several reasons was reached first.
+    let refusal = stderr(&o);
+    assert!(
+        refusal.contains("production") && refusal.contains("refusing to start"),
+        "{refusal}"
+    );
+    // The provenance log still reaches stdout before the refusal, which
+    // is what makes a refusal debuggable rather than merely correct.
+    assert!(stdout(&o).contains("config_log_format"), "{}", stdout(&o));
+
+    // A node with nowhere to connect fails on the connection, not on a
+    // panic, and says which address it tried.
+    let o = cflux(
+        &[
+            "node",
+            "start",
+            "--server",
+            "http://127.0.0.1:1",
+            "--client-id",
+            "n1",
+        ],
+        &[],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stderr(&o).contains("failed to connect to conflux-server"),
+        "{}",
+        stderr(&o)
+    );
+
+    // And both are discoverable with their guide links.
+    for args in [vec!["server", "--help"], vec!["node", "--help"]] {
+        let o = cflux(&args, &[]);
+        assert!(
+            stdout(&o).contains("https://confluxfl.dev/guides/cflux/"),
+            "{args:?}"
+        );
+    }
+}

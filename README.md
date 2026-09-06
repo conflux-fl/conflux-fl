@@ -149,9 +149,34 @@ stronger model.
 
 ## 🚀 Quick start
 
-Needs Rust **1.94.1+** to build the whole workspace (`conflux-store` and
-`conflux-server` pull in `aws-sdk-s3`, which requires it); the library
-crates themselves promise **1.88**.
+### Install the command line
+
+`cflux` inspects the method catalog and pre-flights a configuration —
+every resolved value, its source, and every validation finding — without
+starting anything. Prebuilt binaries for Linux, macOS and Windows are
+attached to [each release](https://github.com/conflux-fl/conflux-fl/releases);
+download one, verify its `.sha256`, and put it on your `PATH`.
+
+With a Rust toolchain, install it from the tag instead:
+
+```bash
+cargo install --git https://github.com/conflux-fl/conflux-fl --tag v0.2.0 cflux
+```
+
+```bash
+cflux catalog list                    # every method, its family and paper
+cflux config check --topology cross_silo --mode production
+cflux init --name my_deployment --docker
+cflux doctor                          # every startup check at once
+```
+
+**[The cflux guide →](https://confluxfl.dev/guides/cflux/)**
+
+### Build the framework
+
+Needs Rust **1.94.1+** to build the whole workspace (`conflux-store`,
+`conflux-server` and `cflux` pull in `aws-sdk-s3`, which requires it);
+the library crates themselves promise **1.88**.
 
 ```bash
 cargo build --workspace
