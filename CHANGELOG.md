@@ -14,6 +14,16 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+Nothing yet — `0.3.0` is the current release.
+
+## [0.3.0] — 2026-09-07
+
+Evaluating Conflux FL no longer starts with installing a Rust
+toolchain, and reproducing a paper no longer starts with copying a
+trainer. `cflux` starts the real server and the real node, prebuilt
+binaries ship with every release, and one shared harness replaced the
+four near-identical ones behind the baselines.
+
 ### Added
 
 - **Prebuilt `cflux` binaries on every release.** The release workflow
@@ -683,6 +693,7 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.1.0
