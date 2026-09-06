@@ -20,8 +20,9 @@ partition = "iid"
 
 # Two training edges reproduce this paper: Python (PyTorch) and Rust (Burn).
 [clients.python]
-expected  = 0.90 # measured on the shared harness: 0.928 held-out @ round 15
-                 # (0.924 before clients were seeded independently; 0.905 on the e2e example)
+expected  = 0.90 # measured on the shared harness: 0.927 held-out @ round 15 — the
+                 # requested round, now that the evaluator no longer overruns by one
+                 # (0.905 on the retired e2e example)
 tolerance = 0.06
 smoke     = { clients = 5, rounds = 15 }
 full      = { clients = 100, rounds = 500 }

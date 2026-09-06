@@ -23,7 +23,7 @@ the multi-client signal on non-IID data.
 | Edge | Data | Result |
 |---|---|---|
 | **rust** (Burn) | synthetic non-IID + 1 poisoned client | fedavg 0.54 (collapse) → **trimmed_mean 0.98** (defends strongly); deterministic, seed 0 |
-| **python** (shared harness) | MNIST + 1 poisoned client | **0.91 ± 0.05** — measured 0.923; Yin et al. Table 3 reports 90.7% |
+| **python** (shared harness) | MNIST + 1 poisoned client | **0.91 ± 0.05** — measured 0.916; Yin et al. Table 3 reports 90.7% |
 
 ## Run it
 
