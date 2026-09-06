@@ -48,6 +48,22 @@ impl Store for AnyStore {
             Self::S3(s) => s.save_checkpoint(round, weights).await,
         }
     }
+
+    async fn list_checkpoints(&self) -> Result<Vec<u64>, StoreError> {
+        match self {
+            Self::InMemory(s) => s.list_checkpoints().await,
+            Self::Postgres(s) => s.list_checkpoints().await,
+            Self::S3(s) => s.list_checkpoints().await,
+        }
+    }
+
+    async fn load_checkpoint(&self, round: u64) -> Result<Vec<f32>, StoreError> {
+        match self {
+            Self::InMemory(s) => s.load_checkpoint(round).await,
+            Self::Postgres(s) => s.load_checkpoint(round).await,
+            Self::S3(s) => s.load_checkpoint(round).await,
+        }
+    }
 }
 
 #[cfg(test)]

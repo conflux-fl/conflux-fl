@@ -178,6 +178,29 @@ pub trait Store: Send + Sync {
         round: u64,
         weights: &[f32],
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Every round this store holds a checkpoint for, ascending.
+    ///
+    /// Empty rather than `NoCheckpoint` when there is nothing: "what do
+    /// you have?" answered with "nothing" is not a failure, unlike
+    /// "give me the latest" when there is no latest.
+    ///
+    /// A backend that keeps only the newest checkpoint answers with the
+    /// one round it has. That is not a lie about its history — it is the
+    /// history it keeps.
+    fn list_checkpoints(&self) -> impl Future<Output = Result<Vec<u64>, StoreError>> + Send;
+
+    /// One specific round's weights, or `NoCheckpoint` if that round is
+    /// not held.
+    ///
+    /// Separate from `load_latest_weights` rather than replacing it: the
+    /// round loop asks for the latest on every round, and backends that
+    /// can answer that in one query should not be made to enumerate
+    /// first to serve a caller that wants a specific round.
+    fn load_checkpoint(
+        &self,
+        round: u64,
+    ) -> impl Future<Output = Result<Vec<f32>, StoreError>> + Send;
 }
 
 /// Research/testing backend — the latest checkpoint lives in process
@@ -213,6 +236,21 @@ impl Store for InMemoryStore {
         }
         Ok(())
     }
+
+    async fn list_checkpoints(&self) -> Result<Vec<u64>, StoreError> {
+        // One entry, because this backend keeps one checkpoint. A caller
+        // wanting a history needs a backend that keeps one.
+        Ok(vec![self.latest.lock().expect("store mutex poisoned").0])
+    }
+
+    async fn load_checkpoint(&self, round: u64) -> Result<Vec<f32>, StoreError> {
+        let latest = self.latest.lock().expect("store mutex poisoned");
+        if latest.0 == round {
+            Ok(latest.1.clone())
+        } else {
+            Err(StoreError::NoCheckpoint)
+        }
+    }
 }
 
 /// One flat file per round under `dir` (`checkpoint-<round>.bin`, a raw
@@ -247,6 +285,36 @@ impl FileStore {
 /// be `'static`).
 fn checkpoint_path_in(dir: &Path, round: u64) -> PathBuf {
     dir.join(format!("checkpoint-{round}.bin"))
+}
+
+/// Every round the directory holds a checkpoint for, ascending.
+///
+/// `.bin.tmp` files from an interrupted write do not match the suffix, so
+/// a crash mid-write leaves a stray file this ignores rather than a round
+/// that cannot be loaded.
+fn rounds_in(dir: &Path) -> Result<Vec<u64>, StoreError> {
+    let entries = std::fs::read_dir(dir).map_err(|source| StoreError::Io {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    let mut rounds = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| StoreError::Io {
+            path: dir.display().to_string(),
+            source,
+        })?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(round) = name
+            .strip_prefix("checkpoint-")
+            .and_then(|s| s.strip_suffix(".bin"))
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            rounds.push(round);
+        }
+    }
+    rounds.sort_unstable();
+    Ok(rounds)
 }
 
 fn latest_round_in(dir: &Path) -> Result<Option<u64>, StoreError> {
@@ -297,6 +365,22 @@ impl Store for FileStore {
         blocking(move || {
             let round = latest_round_in(&dir)?.ok_or(StoreError::NoCheckpoint)?;
             read_weights(&checkpoint_path_in(&dir, round))
+        })
+        .await
+    }
+
+    async fn list_checkpoints(&self) -> Result<Vec<u64>, StoreError> {
+        let dir = self.dir.clone();
+        blocking(move || rounds_in(&dir)).await
+    }
+
+    async fn load_checkpoint(&self, round: u64) -> Result<Vec<f32>, StoreError> {
+        let path = self.checkpoint_path(round);
+        blocking(move || {
+            if !path.exists() {
+                return Err(StoreError::NoCheckpoint);
+            }
+            read_weights(&path)
         })
         .await
     }
@@ -403,6 +487,62 @@ mod tests {
         store.save_checkpoint(1, &[1.0, 2.0]).await.unwrap();
 
         assert_eq!(store.load_latest_weights().await.unwrap(), vec![1.0, 2.0]);
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_lists_the_one_round_it_keeps() {
+        let store = InMemoryStore::new(vec![0.0]);
+        store.save_checkpoint(4, &[1.0]).await.unwrap();
+        store.save_checkpoint(9, &[2.0]).await.unwrap();
+
+        // Not a history: this backend replaces rather than accumulates,
+        // and the listing says so rather than implying round 4 is still
+        // fetchable.
+        assert_eq!(store.list_checkpoints().await.unwrap(), vec![9]);
+        assert_eq!(store.load_checkpoint(9).await.unwrap(), vec![2.0]);
+        assert!(matches!(
+            store.load_checkpoint(4).await,
+            Err(StoreError::NoCheckpoint)
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_store_lists_every_round_in_order() {
+        let dir = temp_dir("list");
+        let store = FileStore::new(&dir).unwrap();
+        // Saved out of order, and one round number past where a
+        // lexicographic sort would put it — `checkpoint-10.bin` sorts
+        // before `checkpoint-9.bin` as text.
+        for round in [9u64, 2, 10] {
+            store.save_checkpoint(round, &[round as f32]).await.unwrap();
+        }
+
+        assert_eq!(store.list_checkpoints().await.unwrap(), vec![2, 9, 10]);
+        assert_eq!(store.load_checkpoint(9).await.unwrap(), vec![9.0]);
+        // The numeric maximum, not the lexicographic one.
+        assert_eq!(store.load_latest_weights().await.unwrap(), vec![10.0]);
+        assert!(matches!(
+            store.load_checkpoint(3).await,
+            Err(StoreError::NoCheckpoint)
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_empty_file_store_lists_nothing_rather_than_failing() {
+        let dir = temp_dir("empty-list");
+        let store = FileStore::new(&dir).unwrap();
+
+        // "What do you have?" answered with "nothing" is not a failure,
+        // unlike "give me the latest" when there is no latest.
+        assert!(store.list_checkpoints().await.unwrap().is_empty());
+        assert!(matches!(
+            store.load_latest_weights().await,
+            Err(StoreError::NoCheckpoint)
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn temp_dir(test_name: &str) -> PathBuf {

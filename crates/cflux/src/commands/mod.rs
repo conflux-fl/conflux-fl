@@ -1,6 +1,7 @@
 //! One module per command; `main.rs` only routes to them.
 
 pub mod catalog;
+pub mod checkpoint;
 pub mod config;
 pub mod doctor;
 pub mod init;

@@ -197,6 +197,25 @@ impl PrivacyRoundLog for PostgresStore {
     }
 }
 
+/// A stored blob back into weights.
+///
+/// Shared by the two loading paths so a truncated buffer is reported the
+/// same way whichever one found it.
+fn decode(bytes: Vec<u8>, table: &str) -> Result<Vec<f32>, StoreError> {
+    if !bytes.len().is_multiple_of(4) {
+        return Err(StoreError::MalformedCheckpoint {
+            path: format!("postgres table {table}"),
+            len: bytes.len(),
+        });
+    }
+    Ok(bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect())
+}
+
 impl Store for PostgresStore {
     async fn load_latest_weights(&self) -> Result<Vec<f32>, StoreError> {
         let query = format!(
@@ -212,20 +231,33 @@ impl Store for PostgresStore {
         let Some(row) = row else {
             return Err(StoreError::NoCheckpoint);
         };
-        let bytes: Vec<u8> = row.get(0);
+        decode(row.get(0), &self.table)
+    }
 
-        if !bytes.len().is_multiple_of(4) {
-            return Err(StoreError::MalformedCheckpoint {
-                path: format!("postgres table {}", self.table),
-                len: bytes.len(),
-            });
-        }
-        Ok(bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|c| f32::from_le_bytes(*c))
-            .collect())
+    async fn list_checkpoints(&self) -> Result<Vec<u64>, StoreError> {
+        // Ordered by the database rather than in Rust: the round column
+        // is the primary key, so this is an index scan and the rows
+        // arrive sorted for free.
+        let query = format!("SELECT round FROM {} ORDER BY round ASC", self.table);
+        let rows = self
+            .client
+            .query(&query, &[])
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        Ok(rows.iter().map(|r| r.get::<_, i64>(0) as u64).collect())
+    }
+
+    async fn load_checkpoint(&self, round: u64) -> Result<Vec<f32>, StoreError> {
+        let query = format!("SELECT weights FROM {} WHERE round = $1", self.table);
+        let row = self
+            .client
+            .query_opt(&query, &[&(round as i64)])
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let Some(row) = row else {
+            return Err(StoreError::NoCheckpoint);
+        };
+        decode(row.get(0), &self.table)
     }
 
     async fn save_checkpoint(&self, round: u64, weights: &[f32]) -> Result<(), StoreError> {
