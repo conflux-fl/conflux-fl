@@ -32,6 +32,20 @@ promised before `1.0`.
   already read, which is why a flag and its `CONFLUX_*` counterpart
   cannot mean different things.
 
+- **A shared training harness** (`baselines/_harness/`). Every Python
+  edge now runs on one library: `torch_model` for everything that does
+  not depend on the architecture (flatten, unflatten, local SGD with
+  FedProx and SCAFFOLD, evaluation), plus registries of models (`mlp`,
+  `cnn`, `gru`, `logreg`), datasets (`mnist`, `cifar10`, `shakespeare`)
+  and partitions (`iid`, `dirichlet`, `shard`). A baseline names a
+  *recipe* — the `[experiment]` table it already carried — instead of
+  pointing at an example directory, and `conflux-baselines` runs the
+  federation itself: server, one node per client, one trainer per node,
+  and an evaluator, with cleanup on every failure path rather than a
+  shell trap. It refuses to start when a port it needs is already held
+  and quotes the failing child's own log, so a clash reports itself
+  rather than surfacing a minute later as a transport error.
+
 ### Changed
 
 - **`conflux-server` and `conflux-node` are now libraries with a shell
