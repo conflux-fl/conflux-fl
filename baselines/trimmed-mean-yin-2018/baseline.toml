@@ -21,8 +21,14 @@ attackers      = 1
 no_reputation  = true
 
 [clients.python]
-expected  = 0.86 # provisional — confirm with a measured run
-tolerance = 0.10
+# The old 0.86 tracked the paper's logistic-regression row (Table 2:
+# 86.9% for trimmed mean at m=40, beta=0.05). This setup is closer to
+# Table 3 — a model with hidden units, few workers, a larger Byzantine
+# fraction — where the paper reports 90.7%. Measured 0.918 on the shared
+# harness, so the band is now tight enough to catch a regression instead
+# of admitting almost anything.
+expected  = 0.91
+tolerance = 0.05
 smoke     = { clients = 5, rounds = 15 }
 
 [clients.rust]

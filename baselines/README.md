@@ -22,7 +22,7 @@ Design + manifest schema: the [Baselines guide](https://confluxfl.dev/guides/bas
 | [`bulyan-elmhamdi-2018`](bulyan-elmhamdi-2018/) | [El Mhamdi et al. (ICML 2018)](https://proceedings.mlr.press/v80/mhamdi18a.html) | `bulyan` | rust | 1 attacker(s), reputation filter off | rust 0.91 ± 0.05 |
 | [`fedavg-mcmahan-2017`](fedavg-mcmahan-2017/) | [McMahan et al. (AISTATS 2017)](https://arxiv.org/abs/1602.05629) | `fedavg` | python, rust | clean | python 0.90 ± 0.06 · rust 0.95 ± 0.05 |
 | [`krum-blanchard-2017`](krum-blanchard-2017/) | [Blanchard et al. (NeurIPS 2017)](https://papers.nips.cc/paper/2017/hash/f4b9ec30ad9f68f89b29639786cb62ef-Abstract.html) | `krum` | python, rust | 1 attacker(s), reputation filter off | python 0.88 ± 0.06 · rust 0.71 ± 0.08 |
-| [`trimmed-mean-yin-2018`](trimmed-mean-yin-2018/) | [Yin et al. (ICML 2018)](https://proceedings.mlr.press/v80/yin18a.html) | `trimmed_mean` | python, rust | 1 attacker(s), reputation filter off | python 0.86 ± 0.10 · rust 0.98 ± 0.05 |
+| [`trimmed-mean-yin-2018`](trimmed-mean-yin-2018/) | [Yin et al. (ICML 2018)](https://proceedings.mlr.press/v80/yin18a.html) | `trimmed_mean` | python, rust | 1 attacker(s), reputation filter off | python 0.91 ± 0.05 · rust 0.98 ± 0.05 |
 
 <!-- reproduced-papers:end -->
 
