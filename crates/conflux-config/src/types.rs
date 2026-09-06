@@ -233,24 +233,98 @@ impl Topology {
     /// its participants are anonymous/public rather than known devices.
     pub fn defaults(&self) -> TopologyDefaults {
         match self {
+            // A handful of organizations' always-on servers, with
+            // stable membership and reliable links (Kairouz et al. 2021,
+            // §1 Table 1: cross-silo is 2–100 participants, "typically
+            // all available", indexable and addressable).
             Topology::CrossSilo => TopologyDefaults {
+                // Addressable participants can be *told* a round has
+                // started, so the server dispatches rather than making
+                // every silo poll for work that usually is not there.
                 connection_mode: ConnectionMode::Push,
+                // Silos are organizations with an onboarding process:
+                // exchanging certificates is a form they already fill
+                // in, and mutual TLS proves identity at the transport
+                // rather than trusting a bearer token in a header.
                 auth: AuthMode::Mtls,
+                // Ten minutes. Not a figure any paper states — no paper
+                // knows your model — but calibrated to the shape:
+                // a silo trains on its *whole* local dataset, which is
+                // the regime where a local epoch is minutes rather than
+                // the seconds a phone spends on a few hundred examples.
+                // Too short here does not degrade a round, it excludes
+                // the participant with the most data.
                 round_timeout_secs: 600,
+                // Off. The reputation ladder across topologies tracks
+                // how *open* the population is, and a silo federation is
+                // a closed set of named organizations bound by an
+                // agreement. Scoring them against the batch mean would
+                // penalize the one whose data is most distinctive, which
+                // in a four-hospital consortium is the point of the
+                // consortium.
                 min_reputation_score: 0.0,
+                // An hour. Membership is stable and a silo that is
+                // briefly unreachable is having an outage, not leaving —
+                // evicting it would drop it from rounds it is entitled
+                // to and force a re-registration handshake for nothing.
                 client_registry_ttl: 3600,
             },
+            // Very many unreliable, intermittently available devices
+            // that nobody addresses directly (Kairouz et al. 2021, §1
+            // Table 1; Bonawitz et al. 2019, *Towards Federated Learning
+            // at Scale*, whose production system is this topology's
+            // reference shape: devices check in when eligible, the
+            // server selects from whoever is present, and stragglers are
+            // dropped rather than waited for).
             Topology::CrossDevice => TopologyDefaults {
+                // A phone behind carrier NAT cannot be dialed. It polls
+                // when it is eligible — charging, idle, unmetered — and
+                // the server answers whoever appears.
                 connection_mode: ConnectionMode::Pull,
+                // No pre-provisioning: nobody installs a certificate on
+                // a consumer device before it joins. A short-lived
+                // token the app already obtains is the identity that
+                // exists.
                 auth: AuthMode::Jwt,
+                // Five minutes. The straggler asymmetry runs the other
+                // way from cross_silo: with thousands of candidates a
+                // round is never short of participants, so waiting for
+                // the slowest one costs every other device's battery for
+                // one more update the aggregate barely moves for.
                 round_timeout_secs: 300,
+                // Modest gating. The population is open — anyone who
+                // installs the app joins — so a bad update is expected
+                // occasionally rather than never, but a *legitimately*
+                // unusual device (an unusual locale, an unusual usage
+                // pattern) is exactly the client federated learning
+                // exists to reach. Screen the clearly divergent, keep
+                // the merely different.
                 min_reputation_score: 0.3,
+                // Fifteen minutes. Eligibility windows are short and
+                // devices leave without saying so; a registry that
+                // remembers them for an hour selects clients that went
+                // to sleep forty minutes ago and stalls the round it
+                // selected them for.
                 client_registry_ttl: 900,
             },
+            // Cross-device's shape with a weaker trust assumption:
+            // volunteer participants, unvetted, self-selected, and not
+            // bound by any agreement — the BOINC/Folding@home model
+            // applied to model training.
             Topology::Crowdsource => TopologyDefaults {
+                // Same connectivity story as cross_device.
                 connection_mode: ConnectionMode::Pull,
                 auth: AuthMode::Jwt,
                 round_timeout_secs: 300,
+                // Strict gating, and the reason is the trust model
+                // rather than the hardware. A silo has a contract, a
+                // consumer device has a vendor relationship, a
+                // volunteer has neither — so the incentive to submit a
+                // poisoned update is unopposed by anything except this
+                // filter. Set high enough that admission is the
+                // exception rather than the default, on the assumption
+                // that a crowdsourced federation would rather lose an
+                // honest contribution than accept a hostile one.
                 min_reputation_score: 0.6,
                 client_registry_ttl: 900,
             },

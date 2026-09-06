@@ -14,7 +14,40 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-Nothing yet — `0.2.0` is the current release.
+### Added
+
+- **Prebuilt `cflux` binaries on every release.** The release workflow
+  now builds `cflux` for Linux, macOS (both architectures) and Windows
+  and attaches each with a `.sha256`, so evaluating Conflux FL no longer
+  starts with installing a Rust toolchain — the barrier the CLI exists
+  to remove. Built natively on each platform rather than cross-compiled:
+  `cflux` links a C crypto library, and cross-compiling or statically
+  linking that against musl is a standing source of toolchain pain.
+  The README documents installing from a release or from the tag.
+
+- **`cflux server start` and `cflux node start`.** Each hands off to the
+  same `run_from_env` its binary calls, so the CLI starts the real
+  server and the real node rather than a second implementation of
+  either. Flags are a convenience over the environment those functions
+  already read, which is why a flag and its `CONFLUX_*` counterpart
+  cannot mean different things.
+
+### Changed
+
+- **`conflux-server` and `conflux-node` are now libraries with a shell
+  around them.** Each binary's startup moved into
+  `run_from_env`, and every failure that was a panic is a `ServeError`
+  or `RunError` the caller decides about. The binaries still print a
+  message and exit non-zero, exactly as before; `conflux-server`'s
+  `main.rs` went from 532 lines to 86.
+
+- **Every per-topology default now records why it is what it is.** The
+  numbers themselves are unchanged — on inspection they form a coherent
+  ladder — but each now carries its reasoning inline: what shape of
+  deployment it is calibrated to, and which of them come from the
+  literature (Kairouz et al. 2021's taxonomy; Bonawitz et al. 2019's
+  production cross-device system) rather than from engineering
+  judgment. The claim that they were placeholders was the stale part.
 
 ## [0.2.0] — 2026-09-06
 

@@ -56,6 +56,7 @@ mod error;
 mod http;
 mod round;
 mod round_health;
+mod serve;
 
 pub use admin_auth::{AdminAuthError, AdminToken, validate_admin_binding};
 pub use app_state::{AppState, AppStateError};
@@ -75,3 +76,4 @@ pub use error::ServerError;
 pub use http::router;
 pub use round::{RoundSummary, run_round};
 pub use round_health::{RoundLoopHealth, RoundLoopState, backoff_secs};
+pub use serve::{ServeError, run_from_env};

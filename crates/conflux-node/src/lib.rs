@@ -51,9 +51,11 @@
 #![warn(missing_docs)]
 
 mod bridge;
+mod run;
 mod startup_guard;
 
 pub use bridge::{ConnectionMode, NodeBridge};
+pub use run::{RunError, run_from_env};
 pub use startup_guard::{
     ClientAppKind, RuntimeMode, StartupGuardError, validate_client_app_startup,
 };
