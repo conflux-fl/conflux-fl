@@ -14,7 +14,23 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-Nothing yet — `0.3.0` is the current release.
+### Fixed
+
+- **The `x86_64-apple-darwin` release binary could never be built.** Its
+  matrix row asked for a `macos-13` runner, which GitHub has retired, so
+  the job queued for a runner that no longer exists rather than failing
+  — `v0.3.0` shipped three of its four archives. It is now
+  cross-compiled from the arm64 runner, which is safe in a way the musl
+  cross is not: Apple ships both slices in one SDK, so clang targets
+  x86_64 from arm64 with no third-party toolchain. The Intel images that
+  replaced `macos-13` are larger runners rather than standard ones.
+
+- **Release binaries can now be built for a tag that already exists.**
+  The workflow takes a `workflow_dispatch` input naming a tag, checks
+  that tag out and uploads into its existing release. Without it, the
+  only ways to recover a failed binary build were to move a tag — a lie
+  about what shipped, and blocked by the ruleset — or to leave the
+  release incomplete.
 
 ## [0.3.0] — 2026-09-07
 
