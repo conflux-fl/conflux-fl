@@ -5,6 +5,10 @@ __pycache__/
 .venv/
 python/conflux_client/*_pb2.py
 python/conflux_client/*_pb2_grpc.py
+# Sweep output: a grid's raw JSONL and everything derived from it.
+baselines/sweeps/results_*.jsonl
+baselines/sweeps/results_*.csv
+baselines/sweeps/results_*.png
 python/conflux_client/examples/results_*.jsonl
 python/conflux_client/examples/results_*.csv
 python/conflux_client/examples/results_*.png

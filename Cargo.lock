@@ -1427,6 +1427,7 @@ dependencies = [
  "conflux-privacy",
  "conflux-selector",
  "serde",
+ "serde_json",
  "toml",
 ]
 

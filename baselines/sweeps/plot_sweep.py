@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plots benchmark.py's results — two figures from one JSONL file:
+"""Plots a sweep's results — two figures from one JSONL file:
 
   1. Accuracy vs. round, one line per aggregator, one panel per split —
      shows convergence speed, not just a final number.
@@ -11,7 +11,7 @@ needed to generate these plots):
     pip install matplotlib
 
 Usage:
-    python3 plot_benchmark.py results.jsonl [output_prefix]
+    python3 plot_sweep.py results.jsonl [output_prefix]
 """
 
 import json

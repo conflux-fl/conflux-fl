@@ -17,4 +17,6 @@ conflux-core = { path = "../conflux-core" }
 conflux-selector = { path = "../conflux-selector" }
 conflux-privacy = { path = "../conflux-privacy" }
 serde = { workspace = true, features = ["derive"] }
+# The sweep writes JSONL, one record per round.
+serde_json.workspace = true
 toml.workspace = true

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Converts benchmark.py's JSONL output into a flat CSV (every round)
-and a summary CSV (final-round accuracy per aggregator x split) — no
+"""Converts a sweep's JSONL output into a flat CSV (every round) and a
+summary CSV (final-round accuracy per aggregator x split) — no
 dependencies beyond the standard library.
 
+Produced by `cargo run -p conflux-baselines -- sweep ... --out FILE`.
+
 Usage:
-    python3 summarize_benchmark.py results.jsonl
+    python3 summarize_sweep.py results.jsonl
 """
 
 import csv
