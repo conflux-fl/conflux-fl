@@ -194,7 +194,18 @@ jobs:
           done
         working-directory: python/conflux_client
 
-      # Gate 5 — the SDK and stub client must import against the stubs
+      # Gate 5 — the shared training harness is Python this repository
+      # ships, and it lives in `baselines/` rather than here, so every
+      # gate above walks straight past it. Neither check imports the
+      # code, so this needs no torch: `compileall` parses, and ruff's
+      # E9/F rules are static.
+      - name: byte-compile and lint the baselines harness
+        run: |
+          python -m compileall -q baselines
+          ruff check --select E9,F baselines
+        working-directory: ${{ github.workspace }}
+
+      # Gate 6 — the SDK and stub client must import against the stubs
       # generated in gate 1, and still expose their public names. This is
       # what would have caught the stale-stub drift.
       - name: import the SDK against freshly generated stubs

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
 mod federation;
+mod sweep;
 
 use conflux_config::{StrategyKind, entries};
 use serde::Deserialize;
@@ -131,6 +132,7 @@ fn main() {
         Some("run") => cmd_run(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
         Some("table") => cmd_table(&args[1..]),
+        Some("sweep") => cmd_sweep(&args[1..]),
         Some("-h") | Some("--help") | None => usage(),
         Some(other) => {
             eprintln!("unknown command: {other}\n");
@@ -147,13 +149,120 @@ fn usage() {
          \x20 list                                    every discovered baseline\n\
          \x20 run <name> [--client python|rust] [--full] [--plan]\n\
          \x20 verify [--ci] [--plan]                  run every baseline's Rust edge\n\
-         \x20 table [--write] [--check]               the \"Reproduced papers\" table from the manifests\n\n\
+         \x20 table [--write] [--check]               the \"Reproduced papers\" table from the manifests\n\
+         \x20 sweep --dataset D --model M --aggregators A.. [--splits S..]\n\
+         \x20       [--attacks none|poison ..] [--clients N] [--rounds N] --out FILE\n\n\
          Edges: python drives a real federation on the shared harness; rust drives the Burn\n\
          `conflux-client` example. --plan validates + prints the plan without running.\n\
          `verify` uses the Rust edge — fast, deterministic, no Python needed.\n\
          `table` prints the table; --write puts it into baselines/README.md between\n\
-         its markers; --check exits 1 when that README is stale."
+         its markers; --check exits 1 when that README is stale.\n\
+         `sweep` runs a real federation per (aggregator, split, attack) combination and\n\
+         appends one JSONL record per round, for comparing methods against each other\n\
+         rather than against a paper."
     );
+}
+
+// ---------------------------------------------------------------------------
+// sweep
+// ---------------------------------------------------------------------------
+
+fn cmd_sweep(args: &[String]) {
+    let mut dataset = None;
+    let mut model = None;
+    let mut out = None;
+    let mut aggregators: Vec<String> = Vec::new();
+    let mut splits: Vec<String> = Vec::new();
+    let mut attacks: Vec<String> = Vec::new();
+    let mut clients = 5u32;
+    let mut rounds = 15u32;
+
+    // `--aggregators a b c` takes everything up to the next flag, so the
+    // grid reads the way it is written rather than as repeated flags.
+    let mut i = 0;
+    while i < args.len() {
+        let flag = args[i].as_str();
+        let list = |target: &mut Vec<String>, i: &mut usize| {
+            while *i + 1 < args.len() && !args[*i + 1].starts_with("--") {
+                *i += 1;
+                target.push(args[*i].clone());
+            }
+        };
+        let value = |i: &mut usize| -> String {
+            *i += 1;
+            args.get(*i).cloned().unwrap_or_else(|| {
+                eprintln!("{flag} expects a value");
+                exit(EXIT_FAIL);
+            })
+        };
+        match flag {
+            "--dataset" => dataset = Some(value(&mut i)),
+            "--model" => model = Some(value(&mut i)),
+            "--out" => out = Some(value(&mut i)),
+            "--clients" => clients = parse_u32(&value(&mut i), "--clients"),
+            "--rounds" => rounds = parse_u32(&value(&mut i), "--rounds"),
+            "--aggregators" => list(&mut aggregators, &mut i),
+            "--splits" => list(&mut splits, &mut i),
+            "--attacks" => list(&mut attacks, &mut i),
+            other => {
+                eprintln!("unknown flag: {other}");
+                exit(EXIT_FAIL);
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(dataset), Some(model), Some(out)) = (dataset, model, out) else {
+        eprintln!(
+            "usage: sweep --dataset <name> --model <name> --aggregators <a..> --out <file>\n\
+             \x20      [--splits iid dirichlet:0.5 ..] [--attacks none poison] \
+             [--clients N] [--rounds N]"
+        );
+        exit(EXIT_FAIL);
+    };
+    if aggregators.is_empty() {
+        eprintln!("--aggregators needs at least one method");
+        exit(EXIT_FAIL);
+    }
+    // Every method is checked against the catalog before the first
+    // federation starts, so a typo costs a second rather than the hour
+    // it takes to reach that combination.
+    for name in &aggregators {
+        if !method_exists(StrategyKind::Aggregator, name) {
+            eprintln!("✗ unknown aggregator '{name}' — not in the catalog");
+            exit(EXIT_UNKNOWN_METHOD);
+        }
+    }
+
+    let grid = sweep::Grid {
+        dataset,
+        model,
+        aggregators,
+        splits: if splits.is_empty() {
+            vec!["iid".to_string()]
+        } else {
+            splits
+        },
+        attacks: if attacks.is_empty() {
+            vec!["none".to_string()]
+        } else {
+            attacks
+        },
+        clients,
+        rounds,
+        out,
+    };
+    if let Err(message) = sweep::run(&repo_root(), &grid) {
+        eprintln!("{message}");
+        exit(EXIT_FAIL);
+    }
+}
+
+fn parse_u32(value: &str, flag: &str) -> u32 {
+    value.parse().unwrap_or_else(|_| {
+        eprintln!("{flag} expects a number, got {value:?}");
+        exit(EXIT_FAIL);
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +843,7 @@ fn drive_python(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
             model: &m.experiment.model,
             dataset: &m.experiment.dataset,
             partition: &m.experiment.partition,
+            dirichlet_alpha: None,
         },
         aggregator: &m.method.aggregator,
         clients: cfg.clients,
@@ -742,7 +852,7 @@ fn drive_python(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
         no_reputation: m.scenario.no_reputation,
     };
     match federation::run(&repo_root(), &plan) {
-        Ok(accuracy) => Some(accuracy),
+        Ok(outcome) => Some(outcome.final_accuracy()),
         Err(message) => {
             eprintln!("  {message}");
             None

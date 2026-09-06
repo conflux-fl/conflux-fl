@@ -46,6 +46,16 @@ promised before `1.0`.
   and quotes the failing child's own log, so a clash reports itself
   rather than surfacing a minute later as a transport error.
 
+- **`conflux-baselines sweep`.** A grid of (aggregator, split, attack)
+  combinations, each one a real federation, appended to a JSONL file as
+  one record per round — the comparative counterpart to a baseline's
+  single reproduced number. It replaces a shell-driven sweep that lived
+  inside one of the `e2e_*` example directories and parsed accuracy back
+  out of that script's stdout. The centralized bar each combination is
+  measured against depends only on the model, the data and the step
+  budget, so it is now computed once per sweep instead of recomputed
+  identically for every combination.
+
 ### Changed
 
 - **`conflux-server` and `conflux-node` are now libraries with a shell

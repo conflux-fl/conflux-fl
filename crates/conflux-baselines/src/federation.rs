@@ -16,12 +16,25 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Local SGD steps each client takes per round.
+///
+/// Stated here rather than left to the trainer's own default, because
+/// the centralized baseline has to spend the same total budget for the
+/// comparison to mean anything — and a default in Python that this file
+/// silently depended on would drift without either side noticing.
+pub(crate) const LOCAL_STEPS_PER_ROUND: u32 = 30;
+
 /// What a recipe needs to build its data and model — the `[experiment]`
 /// table of a manifest, which already carried exactly this.
 pub(crate) struct Recipe<'a> {
     pub(crate) model: &'a str,
     pub(crate) dataset: &'a str,
     pub(crate) partition: &'a str,
+    /// Only meaningful for the `dirichlet` partition, where it sets how
+    /// skewed the label distribution is. `None` leaves the harness's own
+    /// default alone rather than restating it here, so the two cannot
+    /// drift apart.
+    pub(crate) dirichlet_alpha: Option<f64>,
 }
 
 /// How to run one federation.
@@ -32,6 +45,27 @@ pub(crate) struct Plan<'a> {
     pub(crate) attackers: u32,
     pub(crate) rounds: u32,
     pub(crate) no_reputation: bool,
+}
+
+/// One round as the evaluator saw it.
+#[derive(Clone, Copy)]
+pub(crate) struct RoundMetric {
+    pub(crate) round: u32,
+    pub(crate) accuracy: f64,
+    pub(crate) loss: f64,
+}
+
+/// What one federation produced.
+pub(crate) struct Outcome {
+    pub(crate) rounds: Vec<RoundMetric>,
+}
+
+impl Outcome {
+    /// The number a baseline is judged on: the last round the evaluator
+    /// managed to report.
+    pub(crate) fn final_accuracy(&self) -> f64 {
+        self.rounds.last().map(|r| r.accuracy).unwrap_or(f64::NAN)
+    }
 }
 
 /// Every process this federation started, killed when it goes out of
@@ -180,6 +214,10 @@ fn prepare(repo_root: &Path, plan: &Plan, work_dir: &Path) -> Result<usize, Stri
         ])
         .args(["--clients", &plan.clients.to_string()])
         .args(["--out-dir", &work_dir.display().to_string()])
+        .args(match plan.recipe.dirichlet_alpha {
+            Some(alpha) => vec!["--dirichlet-alpha".to_string(), alpha.to_string()],
+            None => vec![],
+        })
         .current_dir(repo_root.join("baselines"))
         .output()
         .map_err(|e| format!("could not run the data preparation: {e}"))?;
@@ -202,8 +240,8 @@ fn prepare(repo_root: &Path, plan: &Plan, work_dir: &Path) -> Result<usize, Stri
         .ok_or_else(|| "data preparation printed no model dimension".to_string())
 }
 
-/// Runs one federation and returns the final `held_out_accuracy`.
-pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<f64, String> {
+/// Runs one federation and returns every round the evaluator reported.
+pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
     let ports = Ports::from_env();
     // Up front, before the data preparation spends a minute on a run
     // that cannot succeed.
@@ -217,7 +255,7 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<f64, String> {
         )?;
     }
 
-    let work_dir = repo_root.join("target").join("baseline-work");
+    let work_dir = work_dir(repo_root);
     let _ = std::fs::remove_dir_all(&work_dir);
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("cannot create a work dir: {e}"))?;
 
@@ -315,6 +353,7 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<f64, String> {
             .args(["--address", &format!("127.0.0.1:{port}")])
             .args(["--client-id", &format!("client-{i}")])
             .args(["--rounds", &plan.rounds.to_string()])
+            .args(["--steps", &LOCAL_STEPS_PER_ROUND.to_string()])
             .current_dir(repo_root.join("baselines"))
             .stdout(Stdio::null())
             // Kept, not discarded: a trainer that cannot start is the
@@ -363,25 +402,91 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<f64, String> {
         .stdout
         .take()
         .ok_or("the evaluator has no stdout")?;
-    let mut last = None;
+    let mut rounds: Vec<RoundMetric> = Vec::new();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         println!("  {line}");
-        if let Some(pos) = line.find("held_out_accuracy=") {
-            let rest = &line[pos + "held_out_accuracy=".len()..];
-            let value: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            if let Ok(v) = value.parse::<f64>() {
-                last = Some(v);
-            }
+        // A round line carries all three; anything else is commentary.
+        let (Some(round), Some(accuracy), Some(loss)) = (
+            field(&line, "round="),
+            field(&line, "held_out_accuracy="),
+            field(&line, "held_out_loss="),
+        ) else {
+            continue;
+        };
+        let metric = RoundMetric {
+            round: round as u32,
+            accuracy,
+            loss,
+        };
+        // The evaluator polls, so it can report the same round twice;
+        // the later reading is the one taken.
+        match rounds.iter_mut().find(|r| r.round == metric.round) {
+            Some(existing) => *existing = metric,
+            None => rounds.push(metric),
         }
     }
-    last.ok_or_else(|| {
+    if rounds.is_empty() {
         let mut message = String::from("the evaluator never reported held_out_accuracy");
         for name in ["evaluator.log", "trainer_0.log", "server.log"] {
             message.push_str(&tail(&work_dir, name));
         }
-        message
-    })
+        return Err(message);
+    }
+    rounds.sort_by_key(|r| r.round);
+    Ok(Outcome { rounds })
+}
+
+/// Where a run materializes its data and logs. One directory, so a
+/// sweep's centralized baseline reads the same `pooled.pt` the
+/// federation trained against rather than a second copy.
+pub(crate) fn work_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join("target").join("baseline-work")
+}
+
+/// One `name=value` number out of an evaluator line.
+fn field(line: &str, name: &str) -> Option<f64> {
+    let rest = &line[line.find(name)? + name.len()..];
+    let value: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    value.parse().ok()
+}
+
+/// Trains the recipe's model on the pooled data — the non-federated bar
+/// a federated run is compared against.
+///
+/// Independent of aggregator, partition and attack, so a sweep computes
+/// it once and reuses it across the whole grid rather than paying for an
+/// identical number on every combination, as the shell version did.
+pub(crate) fn centralized_baseline(
+    repo_root: &Path,
+    recipe: &Recipe,
+    work_dir: &Path,
+    total_steps: u32,
+) -> Result<f64, String> {
+    let output = Command::new(python(repo_root))
+        .args(["-m", "_harness.centralized", "--model", recipe.model])
+        .args([
+            "--pooled",
+            &work_dir.join("pooled.pt").display().to_string(),
+        ])
+        .args([
+            "--held-out",
+            &work_dir.join("held_out.pt").display().to_string(),
+        ])
+        .args(["--total-steps", &total_steps.to_string()])
+        .current_dir(repo_root.join("baselines"))
+        .output()
+        .map_err(|e| format!("could not run the centralized baseline: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "the centralized baseline failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| field(line, "held_out_accuracy="))
+        .ok_or_else(|| "the centralized baseline reported no accuracy".to_string())
 }
