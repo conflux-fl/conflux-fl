@@ -14,6 +14,25 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Epsilon accounting now credits privacy amplification by
+  subsampling.** `RdpAccountant` computed per-round RDP for the
+  non-subsampled Gaussian mechanism, charging a deployment that exposes
+  a `sample_rate` fraction of its clients as though it had exposed all
+  of them. It now uses the Sampled Gaussian Mechanism's closed form at
+  integer Rényi orders (Mironov, Talwar & Zhang, 2019), falling back to
+  the old bound where that form does not apply — a non-integer order, a
+  rate outside `(0, 1)`, or a result that is not finite. Every fallback
+  is an upper bound on the truth, so epsilon can still only be
+  over-reported, never under-reported.
+
+  **Reported epsilon drops, sometimes by a lot.** At `noise_multiplier =
+  1.0` and `sample_rate = 0.1`: 17.7 → 3.9 after 8 rounds, 671 → 28.5
+  after 1,000. A budget that was exhausted at round 8 no longer is. No
+  configuration changes; a deployment simply stops being charged for
+  exposure it never had.
+
 ### Added
 
 - **`cflux init`** — scaffolds a deployment: a topology profile and a
