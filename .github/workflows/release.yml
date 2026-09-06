@@ -6,6 +6,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Binaries for a tag that is already released — when a build failed, or
+  # when the matrix itself was wrong and re-tagging is not an option
+  # (`main` is protected, and a moved tag is a lie about what shipped).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build cflux binaries for (e.g. v0.3.0)"
+        required: true
 
 permissions:
   contents: write
@@ -13,6 +21,9 @@ permissions:
 jobs:
   release:
     name: GitHub release from CHANGELOG
+    # A manual run targets a release that already exists; recreating it
+    # would overwrite notes someone may have edited.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,9 +56,15 @@ jobs:
   binaries:
     name: cflux ${{ matrix.target }}
     # After the release exists, so these upload into it rather than
-    # racing to create it.
+    # racing to create it — or straight away on a manual run, where it
+    # already does.
     needs: release
+    # `always()` because a dependency that was *skipped* — which is what
+    # `release` is on a manual run — otherwise skips this job too.
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success')
     runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     strategy:
       # One platform failing should not withhold the others: a missing
       # macOS archive is better than no archives at all.
@@ -59,10 +76,18 @@ jobs:
           # server is usually older than a CI runner.
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", archive: tar.gz }
           - { os: macos-latest, target: aarch64-apple-darwin, ext: "", archive: tar.gz }
-          - { os: macos-13, target: x86_64-apple-darwin, ext: "", archive: tar.gz }
+          # Cross-compiled from the arm64 runner, not built on an Intel
+          # one: GitHub retired `macos-13`, and the Intel images that
+          # replaced it are larger runners rather than standard ones. The
+          # cross is safe here in a way the musl one is not — Apple ships
+          # both slices in one SDK, so clang targets x86_64 from arm64
+          # with no third-party toolchain.
+          - { os: macos-latest, target: x86_64-apple-darwin, ext: "", archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe", archive: zip }
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -72,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          name="cflux-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="cflux-${TAG}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/cflux${{ matrix.ext }}" "dist/$name/"
           # Ship the licence with the binary: a downloaded artifact
@@ -95,7 +120,7 @@ jobs:
           echo "--- packaged ---"; ls -la "$archive" "$archive.sha256"
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.TAG }}
           files: |
             dist/*.tar.gz
             dist/*.zip
