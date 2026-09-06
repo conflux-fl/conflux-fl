@@ -14,6 +14,69 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+Nothing yet — `0.2.0` is the current release.
+
+## [0.2.0] — 2026-09-06
+
+A command line for people who use the framework rather than build it,
+paper reproductions that cannot silently drift from the manifests that
+define them, and an epsilon that reflects what a deployment actually
+spends.
+
+### Added
+
+- **`cflux`, the Conflux FL command line** (`crates/cflux`). The Rust
+  toolchain is for a developer *of* the framework; `cflux` is for a user
+  of it, and it answers — without starting a server — the questions an
+  operator has before a deployment exists:
+
+  | Command | What it answers |
+  |---|---|
+  | `catalog list` / `catalog describe <name>` | what methods exist; one method's family, paper, parameters, and whether it needs the trusted-reference sidecar |
+  | `config resolve` | every resolved parameter and the tier that set it |
+  | `config check` | the same, plus range and combination validation |
+  | `init` | scaffolds a topology profile, a mode profile, and (with `--docker`) a compose file for the durable backends |
+  | `doctor` | every check the server fail-fasts on, at once |
+  | `version` | this binary's version and the framework version it embeds |
+
+  Every command takes `--format pretty|json`, ends its `--help` with a
+  guide link, and uses stable exit codes: `0` ok, `1` a negative answer
+  (an error finding, an unknown name), `2` the command could not run.
+  `doctor` also has `--format github-actions`, which emits findings as
+  annotations on a pull request rather than lines in a job log.
+
+  `init` writes every key an axis owns, commented at its inherited
+  value, so nothing tunable is invisible and scaffolding changes no
+  behavior until a line is uncommented. `doctor` calls the server's own
+  startup functions rather than an imitation of them — backend selection
+  against the mode, the TLS posture, the JWT key requirement, and the
+  sidecar's `Describe` handshake — so a check that passes there is the
+  check that passes at startup. Backend probes are TCP-level and say so:
+  a probe that authenticated would need the CLI to hold a deployment's
+  secrets, and one that wrote anything would make a diagnostic tool a
+  source of side effects. Suggestions are printed, never applied.
+
+  `cflux` declares Rust **1.94.1** rather than the workspace's 1.88,
+  because it links `conflux-server`. CI's isolation job asserts it never
+  links `conflux-attacks`.
+
+- **A generated "Reproduced papers" table.** `conflux-baselines table`
+  emits the table in `baselines/README.md` from the manifests
+  (`--write` fills a fenced region, `--check` exits non-zero when it is
+  stale), and a golden-file test fails CI on drift — the guarantee the
+  aggregation catalog already had. The catalog gained a **Reproduced
+  by** column, and a `baselines` field in its JSON, linking each method
+  to the baselines that reproduce it.
+
+- **Shared library surfaces**, so the CLI and the server cannot disagree
+  about a deployment. `conflux_config::{overrides_from_env,
+  topology_profile_named, mode_profile_named}` and
+  `conflux_server::{backend_selection_from_env, tls_material_from_env,
+  jwt_key_from_env, tls_paths_present, trusted_reference_addr}` — the
+  `CONFLUX_*` and profile reading that lived inside the server binary,
+  now fallible library functions both callers share. The binary still
+  fails fast on any error, with the same messages.
+
 ### Changed
 
 - **Epsilon accounting now credits privacy amplification by
@@ -25,56 +88,15 @@ promised before `1.0`.
   the old bound where that form does not apply — a non-integer order, a
   rate outside `(0, 1)`, or a result that is not finite. Every fallback
   is an upper bound on the truth, so epsilon can still only be
-  over-reported, never under-reported.
+  over-reported, never under-reported. Validated against numerical
+  integration of the Rényi divergence definition, which agreed with the
+  closed form to within 5e-12 relative across nine configurations.
 
   **Reported epsilon drops, sometimes by a lot.** At `noise_multiplier =
   1.0` and `sample_rate = 0.1`: 17.7 → 3.9 after 8 rounds, 671 → 28.5
   after 1,000. A budget that was exhausted at round 8 no longer is. No
   configuration changes; a deployment simply stops being charged for
   exposure it never had.
-
-### Added
-
-- **`cflux init`** — scaffolds a deployment: a topology profile and a
-  mode profile, each extending a builtin with every key that axis owns
-  present but commented at its inherited value, plus (with `--docker`) a
-  compose file for the durable backends. Refuses to shadow a builtin
-  name or overwrite without `--force`, and changes no behavior until a
-  line is uncommented.
-- **`cflux doctor`** — every check the server fail-fasts on, run at once
-  and reported as one list: configuration validation, backend selection
-  against the mode, TCP reachability of each configured backend, TLS
-  material and the posture it produces, the JWT key requirement, and the
-  trusted-reference sidecar's `Describe` handshake for the methods
-  defined in terms of one. Suggestions are printed, never applied.
-  `--format github-actions` emits the findings as CI annotations.
-- `conflux_server::{backend_selection_from_env, tls_material_from_env,
-  jwt_key_from_env, tls_paths_present, trusted_reference_addr}` — the
-  deployment-material env readers, lifted out of the server binary so
-  `doctor` checks the same deployment that starts. Fallible now rather
-  than panicking, with the binary still failing fast on any error.
-- **`cflux`**, the Conflux FL command line (`crates/cflux`), first slice:
-  `catalog list` / `catalog describe <name>` (registry-backed: family,
-  paper, parameters read, whether a method needs the trusted-reference
-  sidecar) and `config resolve` / `config check` (every resolved
-  parameter with its source tier, then validation; `check` exits 1 on an
-  error finding, nothing is started). Every command takes
-  `--format pretty|json`, ends its `--help` with a guide link, and uses
-  stable exit codes (`0` ok, `1` negative answer, `2` could not run).
-  CI's isolation job now also asserts `cflux` never links
-  `conflux-attacks`.
-- `conflux_config::overrides_from_env` / `topology_profile_named` /
-  `mode_profile_named` — the `CONFLUX_*` and profile-name reading that
-  lived inside the server binary, now a library surface `conflux-server`
-  and `cflux` share (a malformed variable is an error naming it, as
-  before).
-- `conflux-baselines table` — the "Reproduced papers" table in
-  `baselines/README.md` is generated from the manifests (`table --write`
-  fills the fenced region; `table --check` exits non-zero when it is
-  stale), and a golden-file test fails CI on drift, the same guarantee
-  the aggregation catalog has. The catalog gained a **Reproduced by**
-  column (and a `baselines` field in its JSON) linking each method to
-  the baselines that reproduce it.
 
 ## [0.1.0] — 2026-09-03
 
@@ -575,5 +597,6 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.1.0
