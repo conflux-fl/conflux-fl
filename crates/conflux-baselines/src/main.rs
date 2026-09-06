@@ -151,15 +151,17 @@ fn usage() {
          \x20 verify [--ci] [--plan]                  run every baseline's Rust edge\n\
          \x20 table [--write] [--check]               the \"Reproduced papers\" table from the manifests\n\
          \x20 sweep --dataset D --model M --aggregators A.. [--splits S..]\n\
-         \x20       [--attacks none|poison ..] [--clients N] [--rounds N] --out FILE\n\n\
+         \x20       [--attacks none|poison ..] [--seeds N..] [--clients N]\n\
+         \x20       [--rounds N] --out FILE\n\n\
          Edges: python drives a real federation on the shared harness; rust drives the Burn\n\
          `conflux-client` example. --plan validates + prints the plan without running.\n\
          `verify` uses the Rust edge — fast, deterministic, no Python needed.\n\
          `table` prints the table; --write puts it into baselines/README.md between\n\
          its markers; --check exits 1 when that README is stale.\n\
-         `sweep` runs a real federation per (aggregator, split, attack) combination and\n\
-         appends one JSONL record per round, for comparing methods against each other\n\
-         rather than against a paper."
+         `sweep` runs a real federation per (aggregator, split, attack, seed) combination\n\
+         and appends one JSONL record per round, for comparing methods against each other\n\
+         rather than against a paper. Pass several `--seeds` and summarize across them:\n\
+         one seed measures a run, not a method."
     );
 }
 
@@ -174,6 +176,7 @@ fn cmd_sweep(args: &[String]) {
     let mut aggregators: Vec<String> = Vec::new();
     let mut splits: Vec<String> = Vec::new();
     let mut attacks: Vec<String> = Vec::new();
+    let mut seeds: Vec<String> = Vec::new();
     let mut clients = 5u32;
     let mut rounds = 15u32;
 
@@ -204,6 +207,7 @@ fn cmd_sweep(args: &[String]) {
             "--aggregators" => list(&mut aggregators, &mut i),
             "--splits" => list(&mut splits, &mut i),
             "--attacks" => list(&mut attacks, &mut i),
+            "--seeds" => list(&mut seeds, &mut i),
             other => {
                 eprintln!("unknown flag: {other}");
                 exit(EXIT_FAIL);
@@ -216,7 +220,7 @@ fn cmd_sweep(args: &[String]) {
         eprintln!(
             "usage: sweep --dataset <name> --model <name> --aggregators <a..> --out <file>\n\
              \x20      [--splits iid dirichlet:0.5 ..] [--attacks none poison] \
-             [--clients N] [--rounds N]"
+             [--seeds 1 2 3] [--clients N] [--rounds N]"
         );
         exit(EXIT_FAIL);
     };
@@ -250,6 +254,14 @@ fn cmd_sweep(args: &[String]) {
         },
         clients,
         rounds,
+        // One seed unless asked otherwise, and that one is the harness
+        // default — so a sweep left alone reproduces what a baseline run
+        // at the same settings produces.
+        seeds: if seeds.is_empty() {
+            vec![federation::DEFAULT_SEED]
+        } else {
+            seeds.iter().map(|s| parse_u32(s, "--seeds")).collect()
+        },
         out,
     };
     if let Err(message) = sweep::run(&repo_root(), &grid) {
@@ -849,6 +861,11 @@ fn drive_python(m: &Manifest, cfg: &Cfg) -> Option<f64> {
         attackers: m.scenario.attackers,
         rounds: cfg.rounds,
         no_reputation: m.scenario.no_reputation,
+        // A baseline is a single measurement against a paper's number,
+        // so it pins the seed its expectation was measured at. Varying
+        // it belongs to `sweep`, which reports a spread rather than a
+        // point.
+        seed: federation::DEFAULT_SEED,
     };
     match federation::run(&repo_root(), &plan) {
         Ok(outcome) => Some(outcome.final_accuracy()),

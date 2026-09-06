@@ -14,6 +14,48 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-seed sweeps, and the per-client metrics that make a fairness
+  claim measurable.** `sweep` takes `--seeds`, and every combination runs
+  once per seed. The seed reaches two places, and both matter: the data
+  preparation draws its subsample and partition from it, and each trainer
+  gets one derived from it, so seeds differ in their SGD trajectory and
+  not only in their shards. Vary just the partition and a "multi-seed"
+  sweep replays one trajectory per shard, which understates the spread it
+  exists to measure.
+
+  The evaluator is now given every client's shard, so each round reports
+  `client_acc_min` and `client_acc_std` beside the pooled number. A
+  pooled mean cannot see who it is failing, and the fairness methods make
+  their claim about that distribution rather than about its average.
+
+  `summarize_sweep.py` reports mean and standard deviation across seeds
+  with `n_seeds` beside every row, instead of a single number that reads
+  like a measurement. Files written before any of this still summarize;
+  they report one seed and an empty spread.
+
+  This restores what `run_fairness_comparison.sh` did before the `e2e_*`
+  harnesses were retired in `0.3.0` — the one capability that release
+  removed.
+
+### Changed
+
+- **Every client now seeds its own sampling.** A trainer previously drew
+  batches from torch's global stream after the shared model init, so five
+  clients shared one sequence; each now reseeds from a value derived from
+  the run's seed and its own index. This is what makes a multi-seed sweep
+  measure anything, and it is the more defensible behavior regardless —
+  five clients drawing from one stream is not what five independent
+  clients should mean.
+
+  It moves the reproduced numbers slightly, so all three baselines were
+  re-measured and their manifests record both figures: FedAvg 0.924 →
+  **0.928**, Trimmed Mean 0.918 → **0.923**, Krum unchanged at **0.890**
+  (it selects one update per round, so a different draw across the five
+  trainers largely washes out). Every baseline still reproduces well
+  inside its tolerance.
+
 ### Fixed
 
 - **The `x86_64-apple-darwin` release binary could never be built.** Its

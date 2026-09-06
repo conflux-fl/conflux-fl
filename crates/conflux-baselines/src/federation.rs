@@ -24,6 +24,14 @@ use std::time::{Duration, Instant};
 /// silently depended on would drift without either side noticing.
 pub(crate) const LOCAL_STEPS_PER_ROUND: u32 = 30;
 
+/// The seed a single run uses, matching `_harness/prepare.py`'s own
+/// default.
+///
+/// Stated rather than left implicit because every baseline's expected
+/// value was measured at this seed — passing a different one silently
+/// moves the number a reproduction is checked against.
+pub(crate) const DEFAULT_SEED: u32 = 42;
+
 /// What a recipe needs to build its data and model — the `[experiment]`
 /// table of a manifest, which already carried exactly this.
 pub(crate) struct Recipe<'a> {
@@ -45,6 +53,15 @@ pub(crate) struct Plan<'a> {
     pub(crate) attackers: u32,
     pub(crate) rounds: u32,
     pub(crate) no_reputation: bool,
+    /// Which repetition this is.
+    ///
+    /// It reaches two places, and both matter. `prepare` uses it to draw
+    /// the subsample and the partition, so each seed sees different data;
+    /// each trainer gets one derived from it, so each seed also walks a
+    /// different SGD trajectory over that data. Vary only the first and a
+    /// "multi-seed" sweep replays one trajectory per shard, which
+    /// understates the real run-to-run spread.
+    pub(crate) seed: u32,
 }
 
 /// One round as the evaluator saw it.
@@ -53,6 +70,15 @@ pub(crate) struct RoundMetric {
     pub(crate) round: u32,
     pub(crate) accuracy: f64,
     pub(crate) loss: f64,
+    /// The worst client's accuracy on its own data, and the spread across
+    /// clients. `None` when the evaluator was not given the shards.
+    ///
+    /// A pooled mean cannot see who it is failing, and the fairness
+    /// methods make their claim about this distribution rather than about
+    /// its average — without these two numbers that claim is not
+    /// measurable.
+    pub(crate) client_acc_min: Option<f64>,
+    pub(crate) client_acc_std: Option<f64>,
 }
 
 /// What one federation produced.
@@ -214,6 +240,7 @@ fn prepare(repo_root: &Path, plan: &Plan, work_dir: &Path) -> Result<usize, Stri
         ])
         .args(["--clients", &plan.clients.to_string()])
         .args(["--out-dir", &work_dir.display().to_string()])
+        .args(["--seed", &plan.seed.to_string()])
         .args(match plan.recipe.dirichlet_alpha {
             Some(alpha) => vec!["--dirichlet-alpha".to_string(), alpha.to_string()],
             None => vec![],
@@ -354,6 +381,12 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
             .args(["--client-id", &format!("client-{i}")])
             .args(["--rounds", &plan.rounds.to_string()])
             .args(["--steps", &LOCAL_STEPS_PER_ROUND.to_string()])
+            // Derived rather than shared: every client reseeding to the
+            // same value would make five trainers draw the same batches,
+            // which is a different experiment from the one intended. The
+            // model init stays shared — federated learning requires it —
+            // and only the sampling varies.
+            .args(["--trainer-seed", &(plan.seed * 1000 + i).to_string()])
             .current_dir(repo_root.join("baselines"))
             .stdout(Stdio::null())
             // Kept, not discarded: a trainer that cannot start is the
@@ -388,6 +421,13 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
             ])
             .args(["--rounds", &plan.rounds.to_string()])
             .args(["--timeout", "900"])
+            // Every client's own training data, so each round reports the
+            // spread across clients beside the pooled number.
+            .args(["--shards"])
+            .args(
+                (0..plan.clients)
+                    .map(|i| work_dir.join(format!("shard_{i}.pt")).display().to_string()),
+            )
             .current_dir(repo_root.join("baselines"))
             .stdout(Stdio::piped())
             .stderr(Stdio::from(
@@ -417,6 +457,8 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
             round: round as u32,
             accuracy,
             loss,
+            client_acc_min: field(&line, "client_acc_min="),
+            client_acc_std: field(&line, "client_acc_std="),
         };
         // The evaluator polls, so it can report the same round twice;
         // the later reading is the one taken.

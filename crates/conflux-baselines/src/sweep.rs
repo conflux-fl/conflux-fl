@@ -16,6 +16,8 @@
 //! invocations. `summarize_sweep.py` turns it into CSV and
 //! `plot_sweep.py` into figures.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::Write;
 use std::path::Path;
 
@@ -30,6 +32,8 @@ struct Combination<'a> {
     alpha: Option<f64>,
     /// `"none"` or `"poison"`.
     attack: &'a str,
+    /// Which repetition of this combination.
+    seed: u32,
 }
 
 /// What the grid is swept over.
@@ -43,6 +47,11 @@ pub(crate) struct Grid {
     pub(crate) attacks: Vec<String>,
     pub(crate) clients: u32,
     pub(crate) rounds: u32,
+    /// Repetitions. Every combination runs once per seed, and the spread
+    /// across them is the point: a single seed on this harness carries a
+    /// run-to-run spread wide enough that two methods can trade places
+    /// without either being better.
+    pub(crate) seeds: Vec<u32>,
     pub(crate) out: String,
 }
 
@@ -70,21 +79,24 @@ fn parse_split(spec: &str) -> Result<(&str, Option<f64>), String> {
 /// and named at the end.
 pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
     let mut combinations = Vec::new();
-    for attack in &grid.attacks {
-        if attack != "none" && attack != "poison" {
-            return Err(format!(
-                "unrecognized attack {attack:?} (expected 'none' or 'poison')"
-            ));
-        }
-        for split_spec in &grid.splits {
-            let (split, alpha) = parse_split(split_spec)?;
-            for aggregator in &grid.aggregators {
-                combinations.push(Combination {
-                    aggregator,
-                    split,
-                    alpha,
-                    attack,
-                });
+    for &seed in &grid.seeds {
+        for attack in &grid.attacks {
+            if attack != "none" && attack != "poison" {
+                return Err(format!(
+                    "unrecognized attack {attack:?} (expected 'none' or 'poison')"
+                ));
+            }
+            for split_spec in &grid.splits {
+                let (split, alpha) = parse_split(split_spec)?;
+                for aggregator in &grid.aggregators {
+                    combinations.push(Combination {
+                        aggregator,
+                        split,
+                        alpha,
+                        attack,
+                        seed,
+                    });
+                }
             }
         }
     }
@@ -97,18 +109,21 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
 
     let total = combinations.len();
     // The centralized bar depends on the model, the data and the step
-    // budget — none of which the grid varies — so it is computed once,
-    // on the first combination that gets far enough to write `pooled.pt`.
-    let mut baseline: Option<f64> = None;
+    // budget. The grid varies none of those *within* a seed — but the
+    // seed itself draws the subsample, so `pooled.pt` differs between
+    // seeds and the bar is computed once per seed rather than once per
+    // sweep.
+    let mut baselines: HashMap<u32, f64> = HashMap::new();
     let mut failures: Vec<String> = Vec::new();
 
     for (i, c) in combinations.iter().enumerate() {
         let label = format!(
-            "aggregator={} split={}{} attack={}",
+            "aggregator={} split={}{} attack={} seed={}",
             c.aggregator,
             c.split,
             c.alpha.map(|a| format!(":{a}")).unwrap_or_default(),
-            c.attack
+            c.attack,
+            c.seed
         );
         println!("\n[{}/{total}] {label}", i + 1);
 
@@ -129,6 +144,7 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
             attackers: if poisoned { 1 } else { 0 },
             rounds: grid.rounds,
             no_reputation: poisoned,
+            seed: c.seed,
         };
 
         let outcome = match federation::run(repo_root, &plan) {
@@ -140,7 +156,7 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
             }
         };
 
-        if baseline.is_none() {
+        if let Entry::Vacant(slot) = baselines.entry(c.seed) {
             let steps = grid.rounds * LOCAL_STEPS_PER_ROUND;
             match federation::centralized_baseline(
                 repo_root,
@@ -150,7 +166,7 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
             ) {
                 Ok(accuracy) => {
                     println!("  centralized baseline ({steps} steps): {accuracy:.4}");
-                    baseline = Some(accuracy);
+                    slot.insert(accuracy);
                 }
                 // Not fatal: the federated numbers are still worth
                 // recording, and the field is nullable in the schema.
@@ -166,10 +182,13 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
                 "dirichlet_alpha": c.alpha,
                 "attack": c.attack,
                 "n_clients": grid.clients,
+                "seed": c.seed,
                 "round": round.round,
                 "held_out_accuracy": round.accuracy,
                 "held_out_loss": round.loss,
-                "centralized_baseline_accuracy": baseline,
+                "client_acc_min": round.client_acc_min,
+                "client_acc_std": round.client_acc_std,
+                "centralized_baseline_accuracy": baselines.get(&c.seed),
             });
             writeln!(out, "{record}").map_err(|e| format!("cannot write to {}: {e}", grid.out))?;
         }
