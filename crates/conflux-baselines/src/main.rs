@@ -12,6 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
+mod federation;
+
 use conflux_config::{StrategyKind, entries};
 use serde::Deserialize;
 
@@ -81,8 +83,12 @@ struct Clients {
 
 #[derive(Deserialize)]
 struct Edge {
-    /// Python: the `e2e_*` example dir. Rust: the `conflux-client` example.
-    harness: String,
+    /// Rust: the `conflux-client` example to run. Absent for a Python
+    /// edge, which is driven by `[experiment]`'s recipe — the model,
+    /// dataset and partition the manifest already names — rather than by
+    /// pointing at a directory that then has to agree with them.
+    #[serde(default)]
+    harness: Option<String>,
     expected: f64,
     tolerance: f64,
     smoke: Cfg,
@@ -142,7 +148,7 @@ fn usage() {
          \x20 run <name> [--client python|rust] [--full] [--plan]\n\
          \x20 verify [--ci] [--plan]                  run every baseline's Rust edge\n\
          \x20 table [--write] [--check]               the \"Reproduced papers\" table from the manifests\n\n\
-         Edges: python drives the e2e_* PyTorch harness; rust drives the Burn\n\
+         Edges: python drives a real federation on the shared harness; rust drives the Burn\n\
          `conflux-client` example. --plan validates + prints the plan without running.\n\
          `verify` uses the Rust edge — fast, deterministic, no Python needed.\n\
          `table` prints the table; --write puts it into baselines/README.md between\n\
@@ -396,7 +402,7 @@ fn cmd_run(args: &[String]) {
             }
         }
         None => {
-            eprintln!("✗ {name}: harness produced no `{METRIC}` (its stderr tail is above)");
+            eprintln!("✗ {name}: harness produced no `{METRIC}` (the reason is above)");
             exit(EXIT_FAIL);
         }
     }
@@ -424,9 +430,12 @@ fn print_plan(name: &str, m: &Manifest, kind: ClientKind, e: &Edge, cfg: &Cfg, l
     );
     println!("  scenario: {scenario}");
     println!(
-        "  edge:     {} — harness {} (dataset={}, model={}, partition={})",
+        "  edge:     {} — {} (dataset={}, model={}, partition={})",
         kind.label(),
-        e.harness,
+        match kind {
+            ClientKind::Rust => format!("harness {}", rust_harness(e)),
+            ClientKind::Python => "the shared harness".to_string(),
+        },
         m.experiment.dataset,
         m.experiment.model,
         m.experiment.partition
@@ -680,22 +689,24 @@ fn paper_short_form(p: &Paper) -> String {
 
 fn pretty_command(m: &Manifest, kind: ClientKind, e: &Edge, cfg: &Cfg) -> String {
     match kind {
-        ClientKind::Python => {
-            let mut s = format!(
-                "bash python/conflux_client/examples/{}/run_demo.sh {} {} {}",
-                e.harness, m.method.aggregator, cfg.clients, cfg.rounds
-            );
-            if m.scenario.attackers > 0 {
-                s.push_str(" --poison");
-            }
-            if m.scenario.no_reputation {
-                s.push_str(" --no-reputation");
-            }
-            s
-        }
+        ClientKind::Python => format!(
+            "a real federation on the shared harness: model={} dataset={} partition={} \
+             aggregator={} clients={} rounds={} attackers={}",
+            m.experiment.model,
+            m.experiment.dataset,
+            m.experiment.partition,
+            m.method.aggregator,
+            cfg.clients,
+            cfg.rounds,
+            m.scenario.attackers
+        ),
         ClientKind::Rust => format!(
             "cargo run --example {} -p conflux-client --features burn -- --aggregator {} --clients {} --rounds {} --attackers {}",
-            e.harness, m.method.aggregator, cfg.clients, cfg.rounds, m.scenario.attackers
+            rust_harness(e),
+            m.method.aggregator,
+            cfg.clients,
+            cfg.rounds,
+            m.scenario.attackers
         ),
     }
 }
@@ -707,10 +718,43 @@ fn drive(m: &Manifest, kind: ClientKind, e: &Edge, cfg: &Cfg) -> Option<f64> {
     }
 }
 
+/// The Rust edge's example name, which that edge cannot run without.
+fn rust_harness(e: &Edge) -> &str {
+    e.harness.as_deref().unwrap_or_else(|| {
+        eprintln!("the rust edge needs `harness = \"<example>\"` in its manifest");
+        exit(EXIT_FAIL);
+    })
+}
+
 fn drive_python(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
+    let _ = e;
+    println!("\n  running a real federation on the shared harness…");
+    let plan = federation::Plan {
+        recipe: federation::Recipe {
+            model: &m.experiment.model,
+            dataset: &m.experiment.dataset,
+            partition: &m.experiment.partition,
+        },
+        aggregator: &m.method.aggregator,
+        clients: cfg.clients,
+        attackers: m.scenario.attackers,
+        rounds: cfg.rounds,
+        no_reputation: m.scenario.no_reputation,
+    };
+    match federation::run(&repo_root(), &plan) {
+        Ok(accuracy) => Some(accuracy),
+        Err(message) => {
+            eprintln!("  {message}");
+            None
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn drive_python_via_script(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
     let example_dir = repo_root()
         .join("python/conflux_client/examples")
-        .join(&e.harness);
+        .join(e.harness.as_deref().unwrap_or_default());
     let script = example_dir.join("run_demo.sh");
     if !script.exists() {
         eprintln!("harness script not found: {}", script.display());
@@ -763,7 +807,7 @@ fn drive_rust(m: &Manifest, e: &Edge, cfg: &Cfg) -> Option<f64> {
     let cargo_args = [
         "run".to_string(),
         "--example".to_string(),
-        e.harness.clone(),
+        rust_harness(e).to_string(),
         "-p".to_string(),
         "conflux-client".to_string(),
         "--features".to_string(),
