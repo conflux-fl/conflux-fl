@@ -21,7 +21,6 @@ attackers      = 1
 no_reputation  = true
 
 [clients.python]
-harness   = "e2e_pytorch_mnist"
 expected  = 0.86 # provisional — confirm with a measured run
 tolerance = 0.10
 smoke     = { clients = 5, rounds = 15 }
