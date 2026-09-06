@@ -2,9 +2,9 @@
 //! and where does it stop helping?
 //!
 //! Two comparisons, at model dimensions spanning what this project's own
-//! examples actually train — `python/conflux_client/examples/`'s logistic
-//! regression is a few thousand parameters, its MNIST CNN a few hundred
-//! thousand, and 1M is a small-CNN upper bound. The 8-element case is
+//! harness actually trains — `baselines/_harness/`'s logistic regression
+//! is a few thousand parameters, its MNIST CNN a few hundred thousand,
+//! and 1M is a small-CNN upper bound. The 8-element case is
 //! there to find the floor: SIMD has per-call setup cost, and below some
 //! size a scalar loop should win. Reporting that honestly is the point —
 //! a benchmark that only measures the size where the answer is flattering

@@ -41,8 +41,9 @@ training stacks:
 - **Rust (Burn)** — `crates/conflux-client/examples/burn_mlp.rs`. A real
   Burn MLP `ClientApp`, `ndarray` CPU backend, feeding the **real cited**
   `conflux-core` aggregators. Fast, deterministic, needs no Python.
-- **Python (PyTorch)** — the `python/conflux_client/examples/e2e_*`
-  harnesses. Drives real MNIST/CIFAR training over the full gRPC pipeline.
+- **Python (PyTorch)** — the shared harness, `baselines/_harness/`.
+  Drives real MNIST/CIFAR training over the full gRPC pipeline, with the
+  model, dataset and partition taken from the manifest's `[experiment]`.
 
 ## Use it
 

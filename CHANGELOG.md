@@ -65,6 +65,18 @@ promised before `1.0`.
   message and exit non-zero, exactly as before; `conflux-server`'s
   `main.rs` went from 532 lines to 86.
 
+- **Trimmed Mean's reproduction target now comes from its paper.** It
+  was `0.86 ± 0.10`, marked provisional. Tracing where 0.86 came from
+  found Yin et al. §7 Table 2 — 86.9% for trimmed mean on logistic
+  regression at m=40, β=0.05 — which is not the experiment this baseline
+  runs. Ours is 5 clients with 1 attacker on a model with hidden units,
+  which is Table 3's regime, where the paper reports 90.7%; we measure
+  0.918. The target is now `0.91 ± 0.05`, tight enough to catch a
+  regression, and the manifest records both the paper's figure and ours.
+  Krum's target is unchanged, but its provenance now cites the shared
+  harness (0.890) rather than an example directory that no longer exists
+  here.
+
 - **Every per-topology default now records why it is what it is.** The
   numbers themselves are unchanged — on inspection they form a coherent
   ladder — but each now carries its reasoning inline: what shape of
@@ -72,6 +84,23 @@ promised before `1.0`.
   literature (Kairouz et al. 2021's taxonomy; Bonawitz et al. 2019's
   production cross-device system) rather than from engineering
   judgment. The claim that they were placeholders was the stale part.
+
+### Removed
+
+- **The four `e2e_*` example harnesses**, and `benchmark.py` with them.
+  They were four near-identical copies of one training loop, and
+  `baselines/_harness/` plus `conflux-baselines sweep` now do everything
+  they did from a single implementation. They are not deleted but
+  archived outside this repository, because several published numbers
+  were measured on them and a manifest citing such a measurement should
+  be able to point at the code that produced it.
+
+  `python/conflux_client/examples/` is gone as a directory. If you drove
+  a trainer from there, `python3 -m _harness.trainer --model <name>` from
+  `baselines/` is the replacement, and it takes the same
+  `--address/--client-id/--shard/--rounds` arguments. The harness's
+  Python dependencies, which used to live in each example's own
+  `requirements.txt`, are now `baselines/requirements.txt`.
 
 ## [0.2.0] — 2026-09-06
 

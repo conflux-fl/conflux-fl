@@ -9,10 +9,6 @@ python/conflux_client/*_pb2_grpc.py
 baselines/sweeps/results_*.jsonl
 baselines/sweeps/results_*.csv
 baselines/sweeps/results_*.png
-python/conflux_client/examples/results_*.jsonl
-python/conflux_client/examples/results_*.csv
-python/conflux_client/examples/results_*.png
-python/conflux_client/examples/benchmark_*.log
 .claude/
 CLAUDE.md
 
@@ -23,5 +19,5 @@ CLAUDE.md
 .env.*
 !.env.example
 conflux-fl-workspace.code-workspace
-# multi-seed sweep output (python/conflux_client/examples/*/run_fairness_comparison.sh)
+# multi-seed sweep output
 fairness_results/

@@ -37,8 +37,8 @@ def main() -> None:
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in rows:
-        # `attack` defaults for rows written before benchmark.py grew
-        # that dimension, so older results files still summarize.
+        # `attack` defaults, so results files written before the sweep
+        # grew that dimension still summarize.
         groups[
             (r["dataset"], r["aggregator"], r["split"], r["dirichlet_alpha"], r.get("attack", "none"))
         ].append(r)

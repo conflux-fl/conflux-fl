@@ -9,8 +9,11 @@
 #   CONFLUX_CLIENT_ID=site-7 \
 #   CONFLUX_SERVER_ADDR=http://fl.example.org:50051 \
 #     deploy/run_client.sh -- \
-#       python3 python/conflux_client/examples/e2e_pytorch_mnist/trainer_client.py \
+#       python3 -m _harness.trainer --model mlp \
 #         --address 127.0.0.1:47100 --client-id site-7 --shard shard.pt --rounds 30
+#
+# (run from `baselines/`, or point at your own trainer — the node does not
+# care what speaks to its loopback listener, only that something does.)
 #
 # The trainer must point at the node's loopback listener, i.e. the same
 # host:port as CONFLUX_LOCAL_ADDR (default 127.0.0.1:47100).
