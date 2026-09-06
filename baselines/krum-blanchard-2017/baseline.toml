@@ -24,7 +24,7 @@ attackers      = 1
 no_reputation  = true
 
 [clients.python]
-expected  = 0.88 # measured on the e2e_pytorch_mnist harness: krum --poison --no-reputation ≈ 0.884
+expected  = 0.88 # measured on the shared harness: 0.890 held-out @ round 15 (was 0.884 on the e2e example)
 tolerance = 0.06
 smoke     = { clients = 5, rounds = 15 }
 
