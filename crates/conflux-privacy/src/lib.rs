@@ -243,13 +243,12 @@ pub trait PrivacyAccountant: Send + Sync {
 /// Rényi Differential Privacy and Analytical Moments Accountant*,
 /// AISTATS.
 ///
-/// **Documented simplification**: per-round RDP is computed for the
-/// *non-subsampled* Gaussian mechanism, ignoring `sample_rate`'s
-/// privacy-amplification-by-subsampling effect. Subsampling only ever
-/// *tightens* (lowers) the true epsilon for `sample_rate < 1`, so this
-/// accountant reports a conservative upper bound, never an underestimate.
-/// Exact subsampled RDP needs numerical-integration machinery this
-/// accountant doesn't implement.
+/// Per-round RDP accounts for **privacy amplification by subsampling**:
+/// a round that exposes a random `sample_rate` fraction of the population
+/// leaks less than one that exposes all of it, and the accountant says
+/// so. See [`sampled_gaussian_rdp`] for the formula and where it applies;
+/// where it does not, the non-subsampled bound stands in, which is never
+/// smaller than the truth.
 ///
 /// Supports two accounting granularities, selected by
 /// `conflux_config::AccountingScope`: `Global` (one running epsilon for
@@ -333,6 +332,12 @@ impl Default for RdpAccountant {
 /// (ε, δ)-DP — the same discrete-grid technique real moments accountants
 /// (opacus, tf-privacy) use for Mironov (2017) §3's RDP→DP conversion,
 /// minimized over α.
+///
+/// Every entry yields a *valid* upper bound on epsilon, so taking the
+/// minimum is sound however the individual terms were computed. That is
+/// what lets the integer orders use the tight subsampled formula while
+/// the fractional ones fall back to the loose bound: the grid is a search
+/// for the best valid answer, not a set of answers that must agree.
 const RDP_ORDERS: &[f64] = &[
     1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0, 32.0, 48.0,
     64.0, 96.0, 128.0, 192.0, 256.0,
@@ -348,22 +353,129 @@ fn epsilon_from_rounds(rounds: &[(f32, f32)], delta: f64) -> f64 {
     if rounds.is_empty() {
         return 0.0;
     }
+    // Rounds sharing a (σ, q) contribute identical RDP, and a real
+    // experiment runs thousands with the same pair. Counting them once
+    // and multiplying turns an O(rounds × orders × α) computation into
+    // one over *distinct configurations*, which is usually one.
+    let mut by_config: std::collections::HashMap<(u32, u32), (f64, f64, u32)> =
+        std::collections::HashMap::new();
+    for &(noise_multiplier, sample_rate) in rounds {
+        let entry = by_config
+            .entry((noise_multiplier.to_bits(), sample_rate.to_bits()))
+            .or_insert((noise_multiplier as f64, sample_rate as f64, 0));
+        entry.2 += 1;
+    }
+
     RDP_ORDERS
         .iter()
         .map(|&alpha| {
-            let rdp_total: f64 = rounds
-                .iter()
-                .map(|&(noise_multiplier, _sample_rate)| {
-                    // Non-subsampled Gaussian mechanism RDP at order α
-                    // (Mironov, 2017): α / (2σ²).
-                    alpha / (2.0 * (noise_multiplier as f64).powi(2))
-                })
+            let rdp_total: f64 = by_config
+                .values()
+                .map(|&(sigma, q, count)| rdp_per_round(alpha, sigma, q) * count as f64)
                 .sum();
             // RDP → (ε, δ)-DP conversion (Mironov, 2017):
             // ε(α) = RDP(α) + ln(1/δ)/(α−1).
             rdp_total + (1.0 / delta).ln() / (alpha - 1.0)
         })
         .fold(f64::INFINITY, f64::min)
+}
+
+/// One round's RDP at order `alpha`, for noise multiplier `sigma` and
+/// sampling rate `q`.
+///
+/// Uses the subsampled (tight) formula where it applies and the
+/// non-subsampled bound otherwise. Both are valid upper bounds, so a
+/// fallback can only over-report epsilon — the safe direction, and the
+/// only direction an accountant may ever err in.
+fn rdp_per_round(alpha: f64, sigma: f64, q: f64) -> f64 {
+    // The non-subsampled Gaussian mechanism at order α (Mironov, 2017):
+    // α / (2σ²). Also the exact answer when every client participates.
+    let full = alpha / (2.0 * sigma * sigma);
+    match sampled_gaussian_rdp(alpha, sigma, q) {
+        // Never take a *larger* number from the tight path: if the two
+        // ever disagree in that direction the bound is the one to trust,
+        // and reporting less privacy spent than is provable is the one
+        // failure this function must not have.
+        Some(tight) if tight < full => tight,
+        _ => full,
+    }
+}
+
+/// RDP of the **Sampled Gaussian Mechanism** at an integer order —
+/// Mironov, Talwar & Zhang (2019), *Rényi Differential Privacy of the
+/// Sampled Gaussian Mechanism*, §3.3; the same closed form opacus and
+/// tf-privacy use for integer orders.
+///
+/// For a Poisson-subsampled Gaussian with rate `q` and noise multiplier
+/// `sigma`:
+///
+/// ```text
+/// A(α) = Σ_{k=0..α} C(α,k) (1−q)^(α−k) q^k exp(k(k−1) / 2σ²)
+/// RDP(α) = ln A(α) / (α−1)
+/// ```
+///
+/// **Why this matters.** Without it, a deployment sampling 1% of its
+/// clients per round is charged as though it exposed all of them, and
+/// reports an epsilon far larger than it actually spends — which ends
+/// either in a budget exhausted long before it truly is, or in noise
+/// added to compensate for a cost that was never incurred.
+///
+/// `None` when the formula does not apply, and the caller falls back:
+///
+/// - **Non-integer α.** The closed form above is only valid at integer
+///   orders; the fractional case needs a different, integral-based
+///   expression. Returning `None` costs nothing, because the grid's
+///   integer orders are searched too and the minimum is what counts.
+/// - **q outside (0, 1).** `q = 1` *is* the non-subsampled mechanism (the
+///   sum collapses to its last term and gives exactly α/2σ², which a test
+///   asserts); `q = 0` means no exposure at all; outside that range the
+///   input is not a sampling rate.
+/// - **A non-finite result**, from a σ so small the exponent overflows.
+///
+/// The sum is taken in log space with the maximum term factored out.
+/// `exp(k(k−1)/2σ²)` reaches `1e300` for entirely ordinary inputs
+/// (α = 64, σ = 0.5), so computing `A(α)` directly would overflow to
+/// infinity and lose the answer before the logarithm could recover it.
+pub fn sampled_gaussian_rdp(alpha: f64, sigma: f64, q: f64) -> Option<f64> {
+    // Written as positive conditions so a `NaN` in any argument fails
+    // every one of them: `NaN > 0.0` is false, where `NaN <= 0.0` would
+    // also be false and let it through.
+    let integer_order = alpha.fract() == 0.0 && alpha >= 2.0;
+    let rate_in_unit_interval = q > 0.0 && q < 1.0;
+    let positive_noise = sigma > 0.0;
+    if !(integer_order && rate_in_unit_interval && positive_noise) {
+        return None;
+    }
+    let order = alpha as u32;
+    let ln_q = q.ln();
+    let ln_1mq = (1.0 - q).ln();
+    let two_sigma_sq = 2.0 * sigma * sigma;
+
+    // log of each term: ln C(α,k) + (α−k)ln(1−q) + k ln q + k(k−1)/2σ².
+    // The binomial coefficient is built up multiplicatively in log space
+    // — C(256, 128) overflows `f64` as a number but is unremarkable as a
+    // logarithm.
+    let mut ln_terms = Vec::with_capacity(order as usize + 1);
+    let mut ln_binomial = 0.0f64;
+    for k in 0..=order {
+        if k > 0 {
+            ln_binomial += ((order - k + 1) as f64).ln() - (k as f64).ln();
+        }
+        let k = k as f64;
+        ln_terms
+            .push(ln_binomial + (alpha - k) * ln_1mq + k * ln_q + (k * (k - 1.0)) / two_sigma_sq);
+    }
+
+    let max = ln_terms.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if !max.is_finite() {
+        return None;
+    }
+    let sum: f64 = ln_terms.iter().map(|&t| (t - max).exp()).sum();
+    let ln_a = max + sum.ln();
+    let rdp = ln_a / (alpha - 1.0);
+    // A(α) ≥ 1 always, so RDP ≥ 0; a tiny negative here is rounding, not
+    // a privacy gain.
+    rdp.is_finite().then(|| rdp.max(0.0))
 }
 
 impl PrivacyAccountant for RdpAccountant {
@@ -518,6 +630,141 @@ mod tests {
         let accountant = RdpAccountant::new();
 
         assert_eq!(accountant.current_epsilon(1e-5), 0.0);
+    }
+
+    // ----- subsampling amplification -----
+
+    /// Values computed independently of this implementation: the Rényi
+    /// divergence of the Sampled Gaussian Mechanism, integrated
+    /// numerically straight from its definition
+    /// (`∫ Q^α P^(1−α) dx`, with `P = N(0,σ²)` and
+    /// `Q = (1−q)N(0,σ²) + qN(1,σ²)`) on a fine grid in log space.
+    /// Definition and closed form agreed to within 5e-12 relative across
+    /// every case below, which is what makes these numbers evidence
+    /// about the *formula* rather than about the arithmetic that
+    /// produced it.
+    const REFERENCE: &[(f64, f64, f64, f64)] = &[
+        // (alpha, sigma, q, rdp)
+        (2.0, 1.0, 0.01, 1.718134220744e-04),
+        (4.0, 2.0, 0.1, 6.003282964490e-03),
+        (8.0, 2.0, 0.05, 3.121526642301e-03),
+        (16.0, 4.0, 0.01, 5.207209700579e-05),
+        (3.0, 1.0, 0.5, 6.968891185980e-01),
+    ];
+
+    #[test]
+    fn subsampled_rdp_matches_the_definition_integrated_numerically() {
+        for &(alpha, sigma, q, expected) in REFERENCE {
+            let got = sampled_gaussian_rdp(alpha, sigma, q)
+                .unwrap_or_else(|| panic!("α={alpha} σ={sigma} q={q} should be computable"));
+            let relative = (got - expected).abs() / expected;
+            assert!(
+                relative < 1e-9,
+                "α={alpha} σ={sigma} q={q}: got {got:e}, expected {expected:e} (relative {relative:e})"
+            );
+        }
+    }
+
+    #[test]
+    fn full_participation_is_exactly_the_non_subsampled_bound() {
+        // q = 1 is not subsampling at all: the sum collapses to its last
+        // term, `exp(α(α−1)/2σ²)`, and the formula reduces to α/2σ². The
+        // implementation declines it (it is outside the open interval)
+        // and the caller falls back — to the same number the algebra
+        // gives, which is what makes the fallback safe rather than
+        // merely conservative.
+        for (alpha, sigma) in [(2.0, 1.0), (8.0, 2.0), (64.0, 4.0)] {
+            assert_eq!(sampled_gaussian_rdp(alpha, sigma, 1.0), None);
+            assert_eq!(
+                rdp_per_round(alpha, sigma, 1.0),
+                alpha / (2.0 * sigma * sigma)
+            );
+        }
+    }
+
+    #[test]
+    fn sampling_a_fraction_costs_less_than_exposing_everyone() {
+        // The whole point: a round that exposes 1% of the population
+        // must not be charged as though it exposed all of it.
+        for &(alpha, sigma, q, _) in REFERENCE {
+            let sampled = rdp_per_round(alpha, sigma, q);
+            let full = rdp_per_round(alpha, sigma, 1.0);
+            assert!(
+                sampled < full,
+                "α={alpha} σ={sigma} q={q}: {sampled} !< {full}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_smaller_sampling_rate_costs_less_at_every_order() {
+        for &alpha in &[2.0, 8.0, 32.0] {
+            let mut previous = f64::INFINITY;
+            for &q in &[0.5, 0.2, 0.1, 0.01, 0.001] {
+                let rdp = rdp_per_round(alpha, 1.5, q);
+                assert!(rdp < previous, "α={alpha} q={q}: {rdp} !< {previous}");
+                previous = rdp;
+            }
+        }
+    }
+
+    #[test]
+    fn a_non_integer_order_declines_rather_than_guessing() {
+        // The closed form holds at integer orders only. Declining costs
+        // nothing — the grid's integer orders are searched too, and the
+        // minimum over valid bounds is what the conversion reports.
+        assert_eq!(sampled_gaussian_rdp(2.5, 1.0, 0.1), None);
+        assert_eq!(sampled_gaussian_rdp(1.25, 1.0, 0.1), None);
+        // And a declined order still yields a usable, valid bound.
+        assert_eq!(rdp_per_round(2.5, 1.0, 0.1), 2.5 / 2.0);
+    }
+
+    #[test]
+    fn an_unusable_sampling_rate_or_noise_scale_falls_back_instead_of_failing() {
+        for q in [0.0, -0.1, 1.5, f64::NAN] {
+            assert_eq!(sampled_gaussian_rdp(4.0, 1.0, q), None);
+        }
+        assert_eq!(sampled_gaussian_rdp(4.0, 0.0, 0.1), None);
+        // A σ small enough to overflow the exponent: the term
+        // `exp(k(k−1)/2σ²)` is `exp(1.3e6)` here, so a direct sum would
+        // be infinity. Log space keeps it finite, and anything that is
+        // not finite falls back rather than reporting nonsense.
+        let extreme = rdp_per_round(256.0, 0.01, 0.001);
+        assert!(extreme.is_finite() && extreme > 0.0, "got {extreme}");
+    }
+
+    #[test]
+    fn the_accountant_charges_a_sampling_deployment_far_less_than_a_full_one() {
+        // Ten thousand rounds at σ = 1.0, the shape a real DP-SGD run
+        // has: sampling 1% per round rather than everyone is the
+        // difference between a usable budget and an unusable one.
+        let mut sampled = RdpAccountant::new();
+        let mut full = RdpAccountant::new();
+        for _ in 0..10_000 {
+            sampled.record_round(1.0, 0.01);
+            full.record_round(1.0, 1.0);
+        }
+        let (a, b) = (sampled.current_epsilon(1e-5), full.current_epsilon(1e-5));
+        assert!(a < b / 100.0, "sampled {a} should be far below full {b}");
+        assert!(a > 0.0 && a.is_finite(), "got {a}");
+    }
+
+    #[test]
+    fn rounds_at_the_same_configuration_compose_linearly_in_rdp() {
+        // The grouping optimization must not change the answer: one
+        // round counted a thousand times is a thousand rounds.
+        let mut many = RdpAccountant::new();
+        for _ in 0..1_000 {
+            many.record_round(1.5, 0.05);
+        }
+        let mut mixed = RdpAccountant::new();
+        for _ in 0..500 {
+            mixed.record_round(1.5, 0.05);
+        }
+        for _ in 0..500 {
+            mixed.record_round(1.5, 0.05);
+        }
+        assert_eq!(many.current_epsilon(1e-5), mixed.current_epsilon(1e-5));
     }
 
     #[test]
