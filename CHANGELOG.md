@@ -41,6 +41,28 @@ promised before `1.0`.
 
 ### Changed
 
+- **The evaluator now sees every round.** It observed roughly every
+  *other* one, and the pattern was regular enough to name the cause:
+  fetching and scoring shared a loop, one score takes about as long as
+  one round, and the server moved on while the evaluator was busy.
+  `FetchTask` only ever returns the current round, so a missed round was
+  unrecoverable — a convergence curve permanently missing half its
+  points.
+
+  Fetching now runs on its own thread and buffers each new round's
+  weights; scoring drains that buffer. The cheap part keeps up with the
+  server, and the expensive part is allowed to lag. Measured on a
+  ten-round run: ten of ten rounds, contiguous, where the same run
+  previously recorded four.
+
+  A side effect worth knowing: the evaluator now stops at exactly the
+  round it was asked for, instead of overrunning by one while it waited
+  to observe enough distinct rounds. Baselines therefore report their
+  final round rather than one past it, and the manifests are re-measured
+  accordingly — FedAvg **0.927**, Trimmed Mean **0.916**, Krum unchanged
+  at **0.890**. All three still reproduce inside their tolerances, and
+  the numbers now describe the round the manifest actually asks for.
+
 - **Every client now seeds its own sampling.** A trainer previously drew
   batches from torch's global stream after the shared model init, so five
   clients shared one sequence; each now reseeds from a value derived from

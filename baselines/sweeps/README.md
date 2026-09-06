@@ -42,6 +42,12 @@ rather than the method it was pointed at.
 Output is appended, not overwritten, so a grid can be extended across
 several invocations. Delete the file for a clean run.
 
+Every round is recorded, so the JSONL is a complete convergence curve
+rather than a sample of one. The evaluator fetches on one thread and
+scores on another for exactly this reason: scoring a round costs about
+what a round costs, and a single loop doing both fell a round behind on
+every iteration.
+
 ## Reading one
 
 ```bash

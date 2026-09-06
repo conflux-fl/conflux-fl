@@ -26,7 +26,7 @@ no_reputation  = true
 [clients.python]
 expected  = 0.88 # measured on the shared harness: 0.890 held-out @ round 15 — unmoved by
                  # independent client seeding, since krum selects one update per round
-                 # (0.884 on the e2e example)
+                 # (0.884 on the retired e2e example)
 tolerance = 0.06
 smoke     = { clients = 5, rounds = 15 }
 

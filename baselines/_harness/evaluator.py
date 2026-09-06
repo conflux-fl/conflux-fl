@@ -8,13 +8,23 @@ of what it should be.
 
 Prints `held_out_accuracy=<value>` per round, which is the token
 `conflux-baselines` reads to decide whether a paper reproduced.
+
+Fetching and scoring run on separate threads, and that split is the
+whole reason this sees every round. Fetching is one cheap RPC; scoring
+is a pass over the held-out set plus one per client shard, which takes
+about as long as a round. Doing both in one loop meant the server moved
+on while the evaluator was busy, and it observed every *other* round —
+a convergence curve with half its points missing, and no way to recover
+them, because `FetchTask` only ever returns the current round.
 """
 
 from __future__ import annotations
 
 import argparse
+import queue
 import statistics
 import struct
+import threading
 import time
 
 import torch
@@ -30,6 +40,47 @@ import fl_transport_pb2_grpc as pb2_grpc  # noqa: E402
 
 def decode_weights(data: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(data) // 4}f", data))
+
+
+# How often to ask the server what round it is on. Fast enough that a
+# round cannot open and close unseen; the call returns the current model
+# and does nothing else, so the cost is bandwidth on loopback.
+POLL_INTERVAL_S = 0.2
+
+# How long the round number may stand still before this decides training
+# has finished. Time rather than a poll count, so changing the interval
+# above cannot silently change when the evaluator gives up.
+STALL_TIMEOUT_S = 20.0
+
+
+def _fetch_rounds(stub, out, target_rounds: int, deadline: float) -> None:
+    """Captures each new round's weights as fast as they appear.
+
+    Runs on its own thread and does no scoring, so the loop stays short
+    enough that nothing slips past it. Ends with a `None`, which is what
+    tells the consumer no further rounds are coming.
+    """
+    seen: set[int] = set()
+    last_change = time.time()
+    try:
+        while len(seen) < target_rounds and time.time() < deadline:
+            task = stub.FetchTask(pb2.FetchTaskRequest(client_id="evaluator"))
+            if task.round in seen:
+                if time.time() - last_change > STALL_TIMEOUT_S:
+                    break
+                time.sleep(POLL_INTERVAL_S)
+                continue
+            last_change = time.time()
+            seen.add(task.round)
+            out.put((task.round, task.model_weights))
+    except Exception as e:  # noqa: BLE001 — re-raised on the main thread
+        out.put(e)
+    finally:
+        # In a `finally`, because a consumer blocked on an empty queue has
+        # no other way to learn this thread is done. Without it a dead
+        # fetcher becomes a hang rather than an error, which is strictly
+        # worse than the crash it replaced.
+        out.put(None)
 
 
 def run(
@@ -61,25 +112,32 @@ def run(
     stub = pb2_grpc.FlTransportStub(channel)
     stub.Register(pb2.RegisterRequest(client_id="evaluator", auth_token="client-token"))
 
-    seen: set[int] = set()
+    # The fetcher runs ahead and buffers; this loop drains it. Scoring
+    # may lag the server by a round or two on a fast federation, and
+    # that is the trade — a complete curve reported slightly late beats
+    # half a curve reported live. The queue is unbounded because the
+    # weights of one run's rounds are a few megabytes at most.
+    pending: queue.Queue = queue.Queue()
     deadline = time.time() + timeout_s
-    # An evaluator polls, so it sees *some* of the rounds that happen,
-    # never all of them — waiting to observe `target_rounds` distinct
-    # ones would outlast the training it is watching. What it can see is
-    # the round number going still, which is what training finishing
-    # looks like from here.
-    stalled = 0
-    stall_limit = 40  # polls, at half a second each
-    while len(seen) < target_rounds and time.time() < deadline and stalled < stall_limit:
-        task = stub.FetchTask(pb2.FetchTaskRequest(client_id="evaluator"))
-        if task.round in seen:
-            stalled += 1
-            time.sleep(0.5)
-            continue
-        stalled = 0
-        seen.add(task.round)
+    fetcher = threading.Thread(
+        target=_fetch_rounds,
+        args=(stub, pending, target_rounds, deadline),
+        daemon=True,
+    )
+    fetcher.start()
 
-        weights = decode_weights(task.model_weights)
+    while True:
+        item = pending.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            # Raised here rather than swallowed on the fetcher thread, so
+            # a transport failure still ends the process non-zero and the
+            # runner reports it instead of reporting no metric.
+            raise item
+        round_number, raw_weights = item
+
+        weights = decode_weights(raw_weights)
         # The same placeholder substitution every trainer makes: scoring
         # the server's all-zero checkpoint would report an accuracy about
         # the placeholder rather than about the model, and round one's
@@ -89,7 +147,7 @@ def run(
             torch_model.unflatten(model, weights)
         acc, loss = torch_model.evaluate(model, X, y)
 
-        line = f"round={task.round} held_out_accuracy={acc:.4f} held_out_loss={loss:.4f}"
+        line = f"round={round_number} held_out_accuracy={acc:.4f} held_out_loss={loss:.4f}"
         if shards:
             per_client = [torch_model.evaluate(model, sx, sy)[0] for sx, sy in shards]
             line += (
