@@ -14,26 +14,14 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-### Fixed
+Nothing yet — `0.4.0` is the current release.
 
-- **`cflux init` now prints the whole sequence, not just the next step.**
-  It scaffolded two profiles and told you how to `config check` them —
-  then the obvious next command, `cflux server start`, resolved the
-  builtin `cross_device` / `research` defaults instead. Nothing was
-  broken: profiles are selected *by name*, and writing one does not
-  activate it. But a missing selection is a silent fallback rather than
-  an error, so the result was a running server that was not the
-  deployment just scaffolded.
+## [0.4.0] — 2026-09-07
 
-  `init` now names that outright — "these are selected by name, not by
-  being the only profiles here" — prints the `export` line, and lists
-  every step through `server start`.
-
-- **A refused bind now names the flag that moves it.** `cannot bind
-  127.0.0.1:8080: Address already in use` said what happened and nothing
-  about what to do, and it is the first failure a new deployment hits,
-  because 8080 is a popular port. It now points at `--http-addr` and
-  `CONFLUX_HTTP_ADDR`.
+Installing takes one command, a sweep measures a method rather than a
+run, and the tools say what to do about what they find. Bulyan gains a
+Python edge — and, in the process, a Byzantine fraction its own
+precondition can actually be satisfied at.
 
 ### Added
 
@@ -60,7 +48,6 @@ promised before `1.0`.
   release now attaches `install.sh` as an asset — so if the served copy
   ever drifts, the release asset is the authoritative one.
 
-### Added
 
 - **Bulyan reproduces on the Python edge**, and a manifest can now state
   the Byzantine fraction its method should assume
@@ -181,6 +168,26 @@ promised before `1.0`.
   inside its tolerance.
 
 ### Fixed
+
+- **`cflux init` now prints the whole sequence, not just the next step.**
+  It scaffolded two profiles and told you how to `config check` them —
+  then the obvious next command, `cflux server start`, resolved the
+  builtin `cross_device` / `research` defaults instead. Nothing was
+  broken: profiles are selected *by name*, and writing one does not
+  activate it. But a missing selection is a silent fallback rather than
+  an error, so the result was a running server that was not the
+  deployment just scaffolded.
+
+  `init` now names that outright — "these are selected by name, not by
+  being the only profiles here" — prints the `export` line, and lists
+  every step through `server start`.
+
+- **A refused bind now names the flag that moves it.** `cannot bind
+  127.0.0.1:8080: Address already in use` said what happened and nothing
+  about what to do, and it is the first failure a new deployment hits,
+  because 8080 is a popular port. It now points at `--http-addr` and
+  `CONFLUX_HTTP_ADDR`.
+
 
 - **The `x86_64-apple-darwin` release binary could never be built.** Its
   matrix row asked for a `macos-13` runner, which GitHub has retired, so
@@ -875,7 +882,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.4.0
 [0.3.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.1.0

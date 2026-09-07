@@ -88,7 +88,7 @@ usage() {
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--version)
-		[ $# -ge 2 ] || die "--version needs a value, e.g. --version v0.3.0"
+		[ $# -ge 2 ] || die "--version needs a value, e.g. --version vX.Y.Z"
 		VERSION="$2"
 		shift 2
 		;;
@@ -178,8 +178,12 @@ resolve_version() {
 	VERSION=${url##*/tag/}
 	case "$VERSION" in
 	v*) : ;;
+	# Generic rather than naming a release: a concrete version here
+	# would be stale the day after the next one ships, in the one
+	# message someone reads when things are already going wrong.
 	*) die "could not work out the latest version.
-  Pass one explicitly:  --version v0.3.0" ;;
+  Pass one explicitly:  --version vX.Y.Z
+  Releases: https://github.com/${REPO}/releases" ;;
 	esac
 }
 
