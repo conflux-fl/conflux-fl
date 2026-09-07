@@ -93,6 +93,7 @@
 
 mod env;
 mod file;
+mod preconditions;
 mod profile;
 mod registry;
 mod source;
@@ -102,6 +103,7 @@ mod validate;
 pub use env::{
     EnvError, mode_profile_named, overrides_from_env, overrides_from_vars, topology_profile_named,
 };
+pub use preconditions::{BatchRequirement, batch_requirement};
 
 /// The framework's version — every workspace crate shares it. A binary
 /// that embeds the framework (`cflux`) reports it next to its own.
@@ -114,7 +116,7 @@ pub use registry::{StrategyEntry, StrategyKind, entries, lookup, registered_name
 pub use source::ConfigSource;
 pub use types::{
     AccountingScope, AuthMode, BudgetExhaustedAction, ConnectionMode, LogFormat, Mode,
-    ModeDefaults, SeedMode, Topology, TopologyDefaults,
+    ModeDefaults, RoundLogDetail, SeedMode, Topology, TopologyDefaults,
 };
 pub use validate::{Finding, Severity, Validation};
 
@@ -348,6 +350,8 @@ pub struct Overrides {
     pub require_node_auth: Option<bool>,
     /// JSON or text for the startup configuration log. Mode-owned.
     pub config_log_format: Option<LogFormat>,
+    /// How much each round says when nothing is wrong.
+    pub round_log_detail: Option<RoundLogDetail>,
 }
 
 /// Every configuration parameter, resolved against a topology + mode and
@@ -507,6 +511,9 @@ pub struct ResolvedConfig {
     ///
     /// See the same field on [`Overrides`] for the full description.
     pub config_log_format: Resolved<LogFormat>,
+    /// How much each round says when nothing is wrong. A violation is
+    /// reported at every setting.
+    pub round_log_detail: Resolved<RoundLogDetail>,
 }
 
 /// No variants today — every parameter [`resolve`] currently knows about
@@ -1071,6 +1078,23 @@ pub fn resolve_with_profiles(
         &env_var!("CONFIG_LOG_FORMAT"),
     );
 
+    // A built-in fallback rather than a mode default: "did my
+    // guarantee lapse?" matters identically whether you are iterating or
+    // running live, so making `research` and `production` differ here
+    // would be inventing a distinction to justify the axis.
+    let round_log_detail = layer(
+        RoundLogDetail::Changes,
+        None,
+        None,
+        file_overrides.and_then(|o| o.round_log_detail),
+        env.round_log_detail,
+        cli.round_log_detail,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("ROUND_LOG_DETAIL"),
+    );
+
     Ok(ResolvedConfig {
         topology: topology.base,
         mode: mode.base,
@@ -1106,6 +1130,7 @@ pub fn resolve_with_profiles(
         allow_stub_client,
         require_node_auth,
         config_log_format,
+        round_log_detail,
     })
 }
 
@@ -1320,6 +1345,12 @@ impl ResolvedConfig {
             "config_log_format",
             LoggedValue::Text(self.config_log_format.value.as_str()),
             &self.config_log_format.source,
+        ));
+        lines.push(log_line(
+            format,
+            "round_log_detail",
+            LoggedValue::Text(self.round_log_detail.value.as_str()),
+            &self.round_log_detail.source,
         ));
 
         lines

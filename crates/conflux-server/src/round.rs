@@ -60,6 +60,12 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     let selected = state.selector.select(&active, target_n, round);
     let quorum = quorum_override(state).unwrap_or(selected.len());
 
+    // Checked before the task goes out, so a batch that cannot satisfy
+    // the method's citation costs nobody a training round. Only
+    // reachable with no configured quorum: with one, configuration
+    // validation refuses the deployment at startup instead.
+    check_batch_requirement(state, round, quorum as u32)?;
+
     let buffer = Arc::new(RoundBuffer::new(round, quorum));
     *state
         .current_buffer
@@ -83,6 +89,11 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
 
     let timeout = Duration::from_secs(state.config.round_timeout_secs.value);
     let flush = buffer.await_flush(timeout).await;
+
+    // Again, against the batch that actually arrived: a timeout flush
+    // closes with whatever showed up, which can be fewer than the round
+    // opened expecting.
+    check_batch_requirement(state, round, flush.deltas.len() as u32)?;
 
     let decoded = decode_flushed_deltas(&flush.deltas)?;
     let decoded = filter_by_per_client_budget(state, decoded, round)?;
@@ -152,6 +163,39 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         num_selected: selected.len(),
         num_submitted,
         num_passed,
+    })
+}
+
+/// Refuses a batch the configured method's citation does not cover.
+///
+/// The framework's posture is to fail rather than warn: a robust
+/// aggregator run below its stated batch size still returns a number,
+/// and that number looks exactly like a valid one. Continuing would
+/// write a checkpoint nobody could tell apart from a sound one, so this
+/// stops the run instead — `ServerError::PreconditionViolated` is not
+/// transient, so the loop halts and `/health` carries the reason.
+///
+/// Methods that state no batch minimum (`fedavg`, `median`) yield no
+/// requirement and pass through untouched.
+fn check_batch_requirement(state: &AppState, round: u64, batch: u32) -> Result<(), ServerError> {
+    let aggregator = &state.config.aggregator.value;
+    let fraction = state.config.robust_byzantine_fraction.value;
+    let Some(req) = conflux_config::batch_requirement(aggregator, fraction, batch) else {
+        return Ok(());
+    };
+    if req.satisfied_by(batch) {
+        state
+            .round_verdict
+            .record_satisfied(state, round, batch, &req);
+        return Ok(());
+    }
+    Err(ServerError::PreconditionViolated {
+        round,
+        aggregator: aggregator.clone(),
+        batch,
+        required: req.required,
+        excluded: req.excluded,
+        citation: req.citation.to_string(),
     })
 }
 

@@ -64,6 +64,12 @@ pub struct AppState {
     pub config: ResolvedConfig,
     /// Client lifecycle — who is registered and still alive.
     pub registry: Arc<AnyRegistry>,
+    /// Whether the last checked batch satisfied its method's citation.
+    ///
+    /// Held here rather than passed through the round loop because two
+    /// callers need it: the round itself, which decides whether to log,
+    /// and `/round/status`, which reports it to anyone polling.
+    pub round_verdict: crate::RoundVerdict,
     /// Where checkpoints are read from and written to.
     pub store: Arc<AnyStore>,
     /// Always constructed, even when `config.require_node_auth`
@@ -326,6 +332,7 @@ impl AppState {
         .expect("unknown privacy mechanism in resolved config");
 
         Self {
+            round_verdict: crate::RoundVerdict::default(),
             registry,
             store,
             node_allowlist,
