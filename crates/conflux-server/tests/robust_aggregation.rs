@@ -27,24 +27,33 @@ fn config_with(overrides: Overrides) -> conflux_config::ResolvedConfig {
     .unwrap()
 }
 
-/// One client, every `robust` aggregator name — with a single submission
-/// each method's own small-batch clamp degrades to "return it unchanged"
-/// (Krum/Multi-Krum: nothing to filter out; Trimmed Mean/Median: nothing
-/// to trim/no other value to combine with), so this proves each name
-/// constructs a real, working `Aggregator` through the registry with one
-/// shared assertion shape, the same way the fedavg test does.
-async fn run_single_client_round(aggregator_name: &str) -> Vec<f32> {
+/// Three identical clients, every `robust` aggregator name.
+///
+/// Three rather than one, and that is the whole subtlety. A single
+/// submission used to work because each method's small-batch clamp
+/// degrades to "return it unchanged" — but a batch of one is below what
+/// Krum, Multi-Krum and Bulyan's papers cover, and the server now
+/// refuses to aggregate outside a citation rather than clamping into it.
+/// Three is the smallest batch every method here accepts: at the default
+/// Byzantine fraction none of them excludes anybody, so Krum's `2f + 3`
+/// and Bulyan's `4f + 3` both come to three.
+///
+/// Identical submissions, so every method still has one shared assertion
+/// shape: whatever it selects or trims, the answer is that value.
+async fn run_round_with_three_clients(aggregator_name: &str) -> Vec<f32> {
     let config = config_with(Overrides {
         aggregator: Some(aggregator_name.to_string()),
         ..Default::default()
     });
     let state = Arc::new(AppState::new(config, vec![1.0, 2.0]));
 
-    state
-        .registry
-        .register(ClientId("client-1".to_string()))
-        .await
-        .unwrap();
+    for i in 1..=3 {
+        state
+            .registry
+            .register(ClientId(format!("client-{i}")))
+            .await
+            .unwrap();
+    }
 
     let round_state = Arc::clone(&state);
     let round_handle = tokio::spawn(async move { run_round(&round_state).await });
@@ -61,34 +70,36 @@ async fn run_single_client_round(aggregator_name: &str) -> Vec<f32> {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
 
-    state
-        .submit_delta(vec![DeltaChunk {
-            client_id: "client-1".to_string(),
-            round: 1,
-            chunk_index: 0,
-            total_chunks: 1,
-            data: encode_weights(&[10.0, 20.0]),
-            num_samples: 5,
-            ..Default::default()
-        }])
-        .await
-        .unwrap();
+    for i in 1..=3 {
+        state
+            .submit_delta(vec![DeltaChunk {
+                client_id: format!("client-{i}"),
+                round: 1,
+                chunk_index: 0,
+                total_chunks: 1,
+                data: encode_weights(&[10.0, 20.0]),
+                num_samples: 5,
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+    }
 
     let summary = round_handle.await.unwrap().unwrap();
-    assert_eq!(summary.num_passed, 1);
+    assert_eq!(summary.num_passed, 3);
 
     state.store.load_latest_weights().await.unwrap()
 }
 
 #[tokio::test]
 async fn krum_resolves_through_the_registry_end_to_end() {
-    assert_eq!(run_single_client_round("krum").await, vec![10.0, 20.0]);
+    assert_eq!(run_round_with_three_clients("krum").await, vec![10.0, 20.0]);
 }
 
 #[tokio::test]
 async fn multi_krum_resolves_through_the_registry_end_to_end() {
     assert_eq!(
-        run_single_client_round("multi_krum").await,
+        run_round_with_three_clients("multi_krum").await,
         vec![10.0, 20.0]
     );
 }
@@ -96,30 +107,36 @@ async fn multi_krum_resolves_through_the_registry_end_to_end() {
 #[tokio::test]
 async fn trimmed_mean_resolves_through_the_registry_end_to_end() {
     assert_eq!(
-        run_single_client_round("trimmed_mean").await,
+        run_round_with_three_clients("trimmed_mean").await,
         vec![10.0, 20.0]
     );
 }
 
 #[tokio::test]
 async fn median_resolves_through_the_registry_end_to_end() {
-    assert_eq!(run_single_client_round("median").await, vec![10.0, 20.0]);
+    assert_eq!(
+        run_round_with_three_clients("median").await,
+        vec![10.0, 20.0]
+    );
 }
 
 #[tokio::test]
 async fn faba_resolves_through_the_registry_end_to_end() {
-    assert_eq!(run_single_client_round("faba").await, vec![10.0, 20.0]);
+    assert_eq!(run_round_with_three_clients("faba").await, vec![10.0, 20.0]);
 }
 
 #[tokio::test]
 async fn bulyan_resolves_through_the_registry_end_to_end() {
-    assert_eq!(run_single_client_round("bulyan").await, vec![10.0, 20.0]);
+    assert_eq!(
+        run_round_with_three_clients("bulyan").await,
+        vec![10.0, 20.0]
+    );
 }
 
 #[tokio::test]
 async fn geometric_median_resolves_through_the_registry_end_to_end() {
     assert_eq!(
-        run_single_client_round("geometric_median").await,
+        run_round_with_three_clients("geometric_median").await,
         vec![10.0, 20.0]
     );
 }
@@ -127,7 +144,7 @@ async fn geometric_median_resolves_through_the_registry_end_to_end() {
 #[tokio::test]
 async fn median_of_means_resolves_through_the_registry_end_to_end() {
     assert_eq!(
-        run_single_client_round("median_of_means").await,
+        run_round_with_three_clients("median_of_means").await,
         vec![10.0, 20.0]
     );
 }
@@ -135,14 +152,17 @@ async fn median_of_means_resolves_through_the_registry_end_to_end() {
 #[tokio::test]
 async fn divide_and_conquer_resolves_through_the_registry_end_to_end() {
     assert_eq!(
-        run_single_client_round("divide_and_conquer").await,
+        run_round_with_three_clients("divide_and_conquer").await,
         vec![10.0, 20.0]
     );
 }
 
 #[tokio::test]
 async fn foolsgold_resolves_through_the_registry_end_to_end() {
-    assert_eq!(run_single_client_round("foolsgold").await, vec![10.0, 20.0]);
+    assert_eq!(
+        run_round_with_three_clients("foolsgold").await,
+        vec![10.0, 20.0]
+    );
 }
 
 #[test]

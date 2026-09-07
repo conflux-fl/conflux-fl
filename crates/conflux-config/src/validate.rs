@@ -411,36 +411,38 @@ impl ResolvedConfig {
                 ),
             );
         }
-        if let Some(quorum) = &self.quorum {
-            let n = quorum.value as f32;
-            if quorum.value > 0 && (0.0..=1.0).contains(&fraction) {
-                let b = ((fraction * n).floor() as u64).min(u64::from(quorum.value) - 1);
-                let (required, citation): (u64, &str) = match aggregator {
-                    // Blanchard, El Mhamdi, Guerraoui & Stainer (2017).
-                    "krum" | "multi_krum" => (2 * b + 3, "Krum requires n ≥ 2f + 3"),
-                    // El Mhamdi, Guerraoui & Rouault (2018).
-                    "bulyan" => (4 * b + 3, "Bulyan requires n ≥ 4f + 3"),
-                    // Yin, Chen, Ramchandran & Bartlett (2018): trimming
-                    // b from each side must leave something.
-                    "trimmed_mean" => (2 * b + 1, "the trimmed mean must keep ≥ 1 value"),
-                    _ => (0, ""),
-                };
-                if required > 0 && u64::from(quorum.value) < required {
-                    v.push(
-                        Warning,
-                        "quorum",
-                        quorum.value,
-                        &quorum.source,
-                        format!(
-                            "at n = {n_q} with robust_byzantine_fraction = {fraction}, \
-                             {aggregator} trims/excludes f = {b}, and {citation} — \
-                             quorum-sized rounds ({n_q} < {required}) run outside the \
-                             cited guarantee",
-                            n_q = quorum.value,
-                        ),
-                    );
-                }
-            }
+        if let Some(quorum) = &self.quorum
+            && let Some(req) = crate::batch_requirement(aggregator, fraction, quorum.value)
+            && !req.satisfied_by(quorum.value)
+        {
+            // An Error, not a Warning: this is the earliest moment the
+            // violation is knowable, and a round can never flush below a
+            // configured quorum — so every round of this run would
+            // aggregate outside the citation. A number that looks fine
+            // and means nothing is worse than a server that refuses to
+            // start.
+            v.push(
+                Error,
+                "quorum",
+                quorum.value,
+                &quorum.source,
+                format!(
+                    concat!(
+                        "at n = {n} with robust_byzantine_fraction = {fraction}, ",
+                        "{aggregator} trims/excludes f = {excluded}, and {citation} — ",
+                        "every round would close at {n} and aggregate outside the ",
+                        "cited guarantee. Raise quorum to {required}, lower ",
+                        "robust_byzantine_fraction, or choose a method that states ",
+                        "no batch minimum."
+                    ),
+                    n = quorum.value,
+                    fraction = fraction,
+                    aggregator = aggregator,
+                    excluded = req.excluded,
+                    citation = req.citation,
+                    required = req.required,
+                ),
+            );
         }
 
         v
@@ -613,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn krum_quorum_below_the_cited_requirement_warns_with_the_arithmetic() {
+    fn krum_quorum_below_the_cited_requirement_refuses_with_the_arithmetic() {
         let short = config(Overrides {
             aggregator: Some("krum".to_string()),
             robust_byzantine_fraction: Some(0.3),
@@ -621,12 +623,16 @@ mod tests {
             ..Default::default()
         });
         let v = short.validate();
-        assert_eq!(v.warnings.len(), 1, "{:?}", v.warnings);
-        assert!(
-            v.warnings[0].message.contains("n ≥ 2f + 3"),
-            "{}",
-            v.warnings[0]
-        );
+        // An Error, so the server refuses to start. A round cannot flush
+        // below a configured quorum, so every round of this run would
+        // aggregate outside the citation — there is nothing here that
+        // continuing could discover.
+        assert!(v.warnings.is_empty(), "{:?}", v.warnings);
+        assert_eq!(v.errors.len(), 1, "{:?}", v.errors);
+        let message = &v.errors[0].message;
+        assert!(message.contains("n ≥ 2f + 3"), "{message}");
+        // The way out, not just the diagnosis.
+        assert!(message.contains("Raise quorum to 5"), "{message}");
 
         let enough = config(Overrides {
             aggregator: Some("krum".to_string()),

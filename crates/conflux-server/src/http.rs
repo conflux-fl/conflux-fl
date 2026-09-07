@@ -92,11 +92,25 @@ async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthR
 #[derive(Serialize)]
 struct RoundStatusResponse {
     round: u64,
+    /// Whether the last checked batch satisfied the configured method's
+    /// cited batch requirement.
+    ///
+    /// `null` when there is nothing to report — either no round has been
+    /// checked yet, or the method states no batch minimum. Distinct from
+    /// `false` on purpose: "no claim was made" and "the claim does not
+    /// hold" are different answers, and collapsing them would let a
+    /// `fedavg` deployment look like a failing one.
+    ///
+    /// It is never `false` for long: a batch outside its citation halts
+    /// the run, so a poller that sees `false` is seeing a server on its
+    /// way down, with the reason on `/health`.
+    cited_requirement_satisfied: Option<bool>,
 }
 
 async fn round_status(State(state): State<Arc<AppState>>) -> Json<RoundStatusResponse> {
     Json(RoundStatusResponse {
         round: state.round.load(Ordering::SeqCst),
+        cited_requirement_satisfied: state.round_verdict.satisfied(),
     })
 }
 

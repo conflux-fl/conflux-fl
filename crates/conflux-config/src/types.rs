@@ -143,6 +143,65 @@ pub enum LogFormat {
     Text,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// How much a round says about itself when nothing is wrong.
+///
+/// Violations are never governed by this — a batch outside its method's
+/// citation halts the run at any setting. What this controls is the
+/// reassuring case, which is the one that can drown a log: a 500-round
+/// run with 100 participants has 500 opportunities to say "still fine".
+pub enum RoundLogDetail {
+    /// Nothing on the happy path. Failures still speak.
+    Quiet,
+    /// One line when the answer *changes* — the default.
+    ///
+    /// Deliberately keyed on the verdict rather than on the batch size.
+    /// With many participants the batch oscillates every round, so
+    /// logging on "n changed" reproduces exactly the noise this exists
+    /// to avoid; logging on "the guarantee started or stopped holding"
+    /// stays silent through a healthy run and speaks the round something
+    /// actually happens.
+    Changes,
+    /// One line per round, with the full arithmetic. For a short run
+    /// where the question is what the numbers are, not whether they
+    /// moved.
+    Every,
+}
+
+impl RoundLogDetail {
+    /// This value's canonical string form, in a config file and in the
+    /// startup log alike.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RoundLogDetail::Quiet => "quiet",
+            RoundLogDetail::Changes => "changes",
+            RoundLogDetail::Every => "every",
+        }
+    }
+}
+
+impl std::fmt::Display for RoundLogDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for RoundLogDetail {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "quiet" => Ok(RoundLogDetail::Quiet),
+            "changes" => Ok(RoundLogDetail::Changes),
+            "every" => Ok(RoundLogDetail::Every),
+            other => Err(format!(
+                "unrecognized round_log_detail {other:?} (expected quiet, changes, or every)"
+            )),
+        }
+    }
+}
+
 impl LogFormat {
     /// This value's canonical string form — the spelling accepted in a
     /// config file and printed in the startup log, which are the same by

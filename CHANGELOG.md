@@ -14,6 +14,50 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Added
+
+- **A batch that cannot satisfy its method's citation now halts the
+  run.** Krum states `n >= 2f + 3`, Bulyan `n >= 4f + 3`, the trimmed
+  mean that trimming must leave a value. Below those the implementations
+  still compute something — they floor and clamp rather than refusing —
+  and the number is indistinguishable from a sound one. The framework
+  now refuses instead of warning: `ServerError::PreconditionViolated`
+  sits beside `BudgetExhausted` on the non-transient side, so the loop
+  stops and `/health` carries the reason. Retrying would only produce
+  more invalid rounds.
+
+  Checked twice, because the batch size is knowable at two moments: at
+  round start, before any client is asked to train, and again after the
+  flush, since a timeout closes with whatever arrived rather than what
+  the round opened expecting.
+
+  With a `quorum` configured this is unreachable — a round cannot flush
+  below it, so **configuration validation now refuses at startup**
+  instead, which is earlier and cheaper. That check was previously a
+  warning.
+
+- **`round_log_detail` — `quiet`, `changes` (default) or `every`.**
+  Governs only the reassuring case; a violation halts at every setting.
+
+  `changes` is keyed on the *verdict*, not the batch size, and that is
+  the whole design. With a hundred participants the batch oscillates
+  every round, so logging on "n changed" would reproduce exactly the
+  noise the setting exists to prevent. Logging on "the guarantee started
+  or stopped holding" means a healthy 500-round run says so once, and a
+  line appearing at round 312 means clients left and the batch fell
+  below the citation — rare, and therefore worth reading.
+
+- **`/round/status` reports `cited_requirement_satisfied`.** `null` when
+  there is nothing to claim — no round checked yet, or a method that
+  states no batch minimum — which is deliberately distinct from `false`,
+  so a `fedavg` deployment does not look like a failing one.
+
+- **`conflux_config::batch_requirement`**, one implementation of the
+  paper arithmetic shared by configuration validation and the round
+  loop. It lives in `conflux-config` rather than beside the methods in
+  `conflux-core`, because `conflux-core` depends on `conflux-config` and
+  that edge cannot be reversed.
+
 ### Fixed
 
 - **A robust aggregator with no `quorum` now says its paper requirement
