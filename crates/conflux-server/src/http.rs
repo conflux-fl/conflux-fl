@@ -25,6 +25,7 @@ pub fn router(state: Arc<AppState>, admin_token: Option<AdminToken>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/round/status", get(round_status))
+        .route("/rounds", get(rounds))
         .route("/clients/register", post(register))
         .route("/admin/allowlist", get(list_allowlist).post(allow_node))
         .route("/admin/allowlist/{client_id}", delete(revoke_node))
@@ -111,6 +112,54 @@ async fn round_status(State(state): State<Arc<AppState>>) -> Json<RoundStatusRes
     Json(RoundStatusResponse {
         round: state.round.load(Ordering::SeqCst),
         cited_requirement_satisfied: state.round_verdict.satisfied(),
+    })
+}
+
+/// How many rounds `/rounds` returns when the caller does not say.
+///
+/// Small on purpose: the common question is "what happened just before
+/// it stopped", and a caller who wants more can ask with `?limit=`.
+const DEFAULT_ROUNDS_LIMIT: usize = 20;
+
+#[derive(Deserialize)]
+struct RoundsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct RoundsResponse {
+    /// Newest first, so the rounds nearest a halt come back without the
+    /// caller needing to know how many exist.
+    rounds: Vec<crate::RoundRecord>,
+    /// How many the history currently holds, which may exceed the
+    /// number returned.
+    held: usize,
+    /// The configured bound, so a caller can tell "this is all of it"
+    /// from "this is where retention ended".
+    capacity: u32,
+}
+
+/// The last completed rounds — what led up to the current state, rather
+/// than the current state itself.
+///
+/// Bounded by `round_history_len`; `capacity` is reported so a caller
+/// seeing exactly that many rounds knows the record may be truncated
+/// rather than complete.
+async fn rounds(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<RoundsQuery>,
+) -> Json<RoundsResponse> {
+    let capacity = state.config.round_history_len.value;
+    // Clamped to the capacity, so `?limit=100000` cannot ask the server
+    // to build a larger response than the history can hold.
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_ROUNDS_LIMIT)
+        .min(capacity as usize);
+    Json(RoundsResponse {
+        rounds: state.round_history.recent(limit),
+        held: state.round_history.len(),
+        capacity,
     })
 }
 
