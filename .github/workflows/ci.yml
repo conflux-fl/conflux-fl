@@ -194,6 +194,18 @@ jobs:
           done
         working-directory: python/conflux_client
 
+      # The installer is the one script strangers run, and they run it by
+      # piping it into a shell sight-unseen. `sh -n` catches a syntax
+      # error; shellcheck catches the quoting and word-splitting bugs
+      # that make a shell script destructive rather than merely broken.
+      - name: check the installer
+        run: |
+          set -e
+          sh -n install.sh && echo "  ok  install.sh parses as POSIX sh"
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -s sh install.sh && echo "  ok  shellcheck clean"
+        working-directory: ${{ github.workspace }}
+
       # Gate 5 — the shared training harness is Python this repository
       # ships, and it lives in `baselines/` rather than here, so every
       # gate above walks straight past it. Neither check imports the

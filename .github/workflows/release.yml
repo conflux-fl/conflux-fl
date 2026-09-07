@@ -53,6 +53,22 @@ jobs:
   # and cross-compiling or statically linking that against musl is a
   # standing source of toolchain pain. Every runner here already has the
   # C toolchain it needs.
+  # The installer is attached to the release as well as served from
+  # confluxfl.dev. The site's copy is a convenience alias; this one is
+  # always exactly the script that shipped with this tag, which is what
+  # makes a drifted copy recoverable rather than authoritative.
+  installer:
+    name: attach install.sh
+    needs: release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: install.sh
+
   binaries:
     name: cflux ${{ matrix.target }}
     # After the release exists, so these upload into it rather than

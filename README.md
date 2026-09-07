@@ -153,11 +153,21 @@ stronger model.
 
 `cflux` inspects the method catalog and pre-flights a configuration —
 every resolved value, its source, and every validation finding — without
-starting anything. Prebuilt binaries for Linux, macOS and Windows are
-attached to [each release](https://github.com/conflux-fl/conflux-fl/releases);
-download one, verify its `.sha256`, and put it on your `PATH`.
+starting anything. No toolchain needed:
 
-With a Rust toolchain, install it from the tag instead:
+```bash
+curl -fsSL https://confluxfl.dev/install.sh | sh
+```
+
+It picks the right build for your machine, **verifies the published
+SHA-256 before unpacking**, and installs one binary — no root, nothing
+written outside the install directory. Read it first if you would rather
+(`curl -fsSL https://confluxfl.dev/install.sh | less`); it is also
+attached to [each release](https://github.com/conflux-fl/conflux-fl/releases)
+alongside the binaries and their checksums, if you prefer to download and
+verify by hand.
+
+With a Rust toolchain, install from the tag instead:
 
 ```bash
 cargo install --git https://github.com/conflux-fl/conflux-fl --tag v0.3.0 cflux
