@@ -11,8 +11,9 @@ use std::path::PathBuf;
 
 use clap::{Args as ClapArgs, Subcommand};
 use conflux_config::{
-    LogFormat, Overrides, ResolvedConfig, Severity, Validation, mode_profile_named,
-    overrides_from_env, resolve_with_profiles, topology_profile_named,
+    LogFormat, Overrides, ResolvedConfig, Severity, UnselectedProfiles, Validation,
+    mode_profile_named, overrides_from_env, resolve_with_profiles, topology_profile_named,
+    unselected_profiles,
 };
 use serde_json::json;
 
@@ -62,6 +63,13 @@ pub struct Resolution {
     pub config: ResolvedConfig,
     pub topology_chain: Vec<String>,
     pub mode_chain: Vec<String>,
+    /// The directory profiles were looked for in, for anything that
+    /// needs to name it.
+    pub profile_dir: PathBuf,
+    /// Profile files in that directory this selection did not read —
+    /// what `cflux doctor` reports, and what the server warns about at
+    /// startup, from the same survey so the two cannot disagree.
+    pub unselected: UnselectedProfiles,
 }
 
 pub fn resolve(sel: &Selection) -> Result<Resolution, CliError> {
@@ -97,10 +105,14 @@ pub fn resolve(sel: &Selection) -> Result<Resolution, CliError> {
 
     let env = overrides_from_env()?;
     let config = resolve_with_profiles(&topology, &mode, file_tier, &env, &Overrides::default())?;
+    let unselected =
+        unselected_profiles(&profile_dir, topology_name.as_deref(), mode_name.as_deref());
     Ok(Resolution {
         config,
         topology_chain: topology.chain,
         mode_chain: mode.chain,
+        profile_dir,
+        unselected,
     })
 }
 

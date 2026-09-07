@@ -336,6 +336,67 @@ fn doctor_reports_every_check_at_once_and_passes_a_research_default() {
 }
 
 #[test]
+fn doctor_names_the_profiles_init_wrote_when_nothing_selected_them() {
+    // The loop this closes: `init` writes two profiles and prints the
+    // line that selects them; skip that line and the builtins are
+    // silently in force with two hand-edited files sitting unread. This
+    // is the command `init` sends people to before starting anything.
+    let dir = temp_dir("doctor-unselected");
+    let o = cflux(
+        &["init", "--name", "hospital", "--dir", dir.to_str().unwrap()],
+        &[],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}{}", stdout(&o), stderr(&o));
+    let profiles = dir.join("profiles");
+    let profiles = profiles.to_str().unwrap();
+
+    let o = cflux(&["doctor", "--profile-dir", profiles], &[]);
+    let out = stdout(&o);
+    // Each name beside the variable that selects it — the variable is
+    // the entire action.
+    assert!(out.contains("hospital → CONFLUX_TOPOLOGY"), "{out}");
+    assert!(out.contains("hospital_mode → CONFLUX_MODE"), "{out}");
+    // A warning, not a failure: running on the builtins is legal.
+    assert_eq!(o.status.code(), Some(0), "{out}{}", stderr(&o));
+
+    // Selecting them is what silences it.
+    let o = cflux(
+        &[
+            "doctor",
+            "--profile-dir",
+            profiles,
+            "--topology",
+            "hospital",
+            "--mode",
+            "hospital_mode",
+        ],
+        &[],
+    );
+    let out = stdout(&o);
+    assert!(out.contains("went unread"), "{out}");
+    assert!(!out.contains("CONFLUX_TOPOLOGY"), "{out}");
+
+    // And so does choosing a builtin by name: that is a choice, not an
+    // omission, so the files beside it are a library rather than a
+    // mistake.
+    let o = cflux(
+        &[
+            "doctor",
+            "--profile-dir",
+            profiles,
+            "--topology",
+            "cross_silo",
+            "--mode",
+            "research",
+        ],
+        &[],
+    );
+    assert!(stdout(&o).contains("went unread"), "{}", stdout(&o));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn doctor_fails_production_on_in_memory_backends_and_names_each_one() {
     let o = cflux(&["doctor", "--mode", "production"], &[]);
     assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));

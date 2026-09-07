@@ -98,6 +98,7 @@ mod profile;
 mod registry;
 mod source;
 mod types;
+mod unselected;
 mod validate;
 
 pub use env::{
@@ -118,6 +119,7 @@ pub use types::{
     AccountingScope, AuthMode, BudgetExhaustedAction, ConnectionMode, LogFormat, Mode,
     ModeDefaults, RoundLogDetail, SeedMode, Topology, TopologyDefaults,
 };
+pub use unselected::{ProfileAxis, UnselectedProfiles, UnusableProfile, unselected_profiles};
 pub use validate::{Finding, Severity, Validation};
 
 use source::{LoggedValue, log_line};
