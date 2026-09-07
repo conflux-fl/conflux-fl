@@ -14,21 +14,48 @@ aggregator = "bulyan"
 selector   = "uniform_random"
 
 [experiment]
-dataset   = "synthetic" # rust edge only (see below)
+dataset   = "mnist" # the Python edge; the Rust edge uses a synthetic non-IID problem
 model     = "mlp"
-partition = "non-iid"
+partition = "iid"
 
 [scenario]
 attackers     = 1
 no_reputation = true
+# Stated rather than left at the framework default of 0.3, and this is
+# the manifest that shows why the field exists. Bulyan's guarantee holds
+# only for n ≥ 4f + 3. At the default, f is 30% of n, and n ≥ 1.2n + 3
+# has no solution — no client count would satisfy the precondition. At
+# 0.125 with 8 clients, f = 1 and n ≥ 7 holds.
+#
+# The implementation would not refuse the default: `byzantine_count`
+# floors and clamps, so it would run outside the paper's regime quietly
+# rather than loudly. A reproduction that runs where its paper makes no
+# claim is not a reproduction.
+byzantine_fraction = 0.125
 
-# Rust edge only. Bulyan requires n ≥ 4f+3, so with 1 Byzantine client
-# (f=1) it needs at least 7 participants — hence clients = 8. The Python
-# edge is omitted here: run_demo.sh pins byzantine_fraction = 0.3, which at
-# 8 clients demands n ≥ 11 and would fail fast (a good illustration of a
-# method's own preconditions — see the guide).
 [clients.rust]
 harness   = "burn_mlp"
 expected  = 0.91 # Burn synthetic non-IID + 1 poisoned client, deterministic (seed 0)
 tolerance = 0.05
 smoke     = { clients = 8, rounds = 8 }
+
+[clients.python]
+# 8 clients, not the 5 the other robust baselines use. §4 of the paper:
+# "Bulyan(A) requires n ≥ 4f + 3 received gradients". With 1 attacker
+# that is 7, and 8 is the next even count above it.
+#
+# The target is a measurement, not the paper's figure: El Mhamdi et al.
+# report convergence *curves* for MNIST and CIFAR-10 rather than a
+# tabulated accuracy, so there is no number to reproduce against — only
+# a regime to stay inside, which `byzantine_fraction` above is what
+# keeps us in.
+#
+# The tolerance also has to absorb run-to-run variation that seeding
+# cannot remove. Four runs of this exact configuration measured 0.918,
+# 0.922, 0.925 and 0.922: the training is seeded, but the order updates
+# arrive in is not, and Bulyan is the catalog's most order-sensitive
+# method — an iterative selection whose tie-break takes the first
+# minimum, then a trimmed mean summing floats in that order.
+expected  = 0.91 # measured on the shared harness: 0.918–0.925 held-out @ round 15
+tolerance = 0.05
+smoke     = { clients = 8, rounds = 15 }

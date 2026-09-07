@@ -28,7 +28,18 @@ cargo run -p conflux-baselines -- sweep \
 `--seeds` is the one to think about before reading any result. Each seed
 is a full repetition — different subsample, different partition,
 different SGD trajectory — and the summary reports the spread across
-them. One seed measures a run; it does not measure a method. Omit the
+them. One seed measures a run; it does not measure a method.
+
+The spread it reports is wider than the seeds alone, and that is
+correct. Seeding fixes what the harness controls: the data, the model
+initialization, the batch sampling. It does not fix the order client
+updates arrive in, which no seed can, and several aggregators are
+sensitive to it — Bulyan runs an iterative selection whose tie-break
+takes the first minimum and then sums floats in the resulting order.
+Four runs of one Bulyan configuration, identical in every seeded
+respect, measured 0.918, 0.922, 0.925 and 0.922. A federation is a distributed
+system, and the reported std is the honest total rather than a
+sampling-noise estimate that would understate it. Omit the
 flag and the sweep uses the harness default seed alone, which reproduces
 what a baseline run at the same settings produces but tells you nothing
 about how much of a gap between two methods is noise.

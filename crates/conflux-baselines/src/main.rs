@@ -71,6 +71,16 @@ struct Scenario {
     attackers: u32,
     #[serde(default)]
     no_reputation: bool,
+    /// The Byzantine fraction the aggregator should assume, when the
+    /// default does not suit the method.
+    ///
+    /// A robust method's guarantee is stated in terms of this, and some
+    /// state a precondition relating it to the client count — Bulyan
+    /// needs `n >= 4f + 3`, which no client count satisfies while `f` is
+    /// 30% of `n`. Leaving it unset keeps the framework-wide default,
+    /// which is a conservative over-estimate rather than a measurement.
+    #[serde(default)]
+    byzantine_fraction: Option<f64>,
 }
 
 /// The training edges that reproduce this baseline. At least one.
@@ -861,6 +871,7 @@ fn drive_python(m: &Manifest, cfg: &Cfg) -> Option<f64> {
         attackers: m.scenario.attackers,
         rounds: cfg.rounds,
         no_reputation: m.scenario.no_reputation,
+        byzantine_fraction: m.scenario.byzantine_fraction,
         // A baseline is a single measurement against a paper's number,
         // so it pins the seed its expectation was measured at. Varying
         // it belongs to `sweep`, which reports a spread rather than a
