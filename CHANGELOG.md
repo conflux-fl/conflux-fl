@@ -14,6 +14,28 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installer's glibc floor is now checked against the binary it
+  describes.** `install.sh` refuses to install on a system older than
+  the glibc `cflux` was built against, and knew that floor as a
+  hardcoded `MIN_GLIBC="2.34"`. Nothing related it to the
+  `ubuntu-22.04` runner that decides it, so bumping the runner would
+  make the installer quietly wrong in one of two directions: refusing
+  systems that would work, or admitting ones where the binary will not
+  start.
+
+  The release workflow now derives the floor from the binary it just
+  built and fails if the two disagree, before the upload, so a mismatch
+  cannot ship. The runner pin carries a comment saying it decides that
+  constant.
+
+  Release-time rather than CI, because CI cannot answer the question: it
+  runs on `ubuntu-latest`, so a floor derived there would be a different
+  runner's. If the check does fire, the release exists without its Linux
+  binary — recoverable through the `workflow_dispatch` path added in
+  `0.4.0` once `install.sh` is corrected.
+
 ### Added
 
 - **`/rounds` — what led up to the current state.** `/round/status`

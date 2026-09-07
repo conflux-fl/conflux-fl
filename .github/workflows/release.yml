@@ -90,6 +90,10 @@ jobs:
           # Not `ubuntu-latest`: a binary linked against the newest
           # glibc refuses to start on anything older, and an operator's
           # server is usually older than a CI runner.
+          #
+          # This line decides `install.sh`'s MIN_GLIBC. Changing it
+          # without changing that constant is caught by the check below,
+          # but the fix belongs in the same commit as the bump.
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", archive: tar.gz }
           - { os: macos-latest, target: aarch64-apple-darwin, ext: "", archive: tar.gz }
           # Cross-compiled from the arm64 runner, not built on an Intel
@@ -109,6 +113,34 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p cflux --target ${{ matrix.target }}
+      # `install.sh` refuses to install on a system older than the glibc
+      # this binary was built against, and it knows that floor as a
+      # hardcoded constant. Nothing otherwise relates the constant to the
+      # runner that decides it, so bumping the runner below would make
+      # the installer quietly wrong in one of two directions: refusing
+      # systems that would work, or admitting ones where the binary will
+      # not start.
+      #
+      # Checked here because this is the only place both artifacts exist
+      # together, and before the upload so a mismatch cannot ship. CI
+      # cannot do it: it runs on `ubuntu-latest`, so a floor derived
+      # there would be a different runner's answer.
+      - name: the installer's glibc floor matches this binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          built=$(objdump -T "target/${{ matrix.target }}/release/cflux" \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -V | tail -1)
+          declared=$(grep -oE 'MIN_GLIBC="[0-9.]+"' install.sh | grep -oE '[0-9.]+')
+          echo "built against glibc $built; install.sh declares $declared"
+          if [ "$built" != "$declared" ]; then
+            echo "::error::install.sh declares MIN_GLIBC=\"$declared\" but this binary \
+          needs glibc $built. The runner in this workflow decides the floor; \
+          install.sh has to agree with it. Fix: set MIN_GLIBC=\"$built\" in install.sh."
+            exit 1
+          fi
+
       - name: package with a checksum
         shell: bash
         run: |
