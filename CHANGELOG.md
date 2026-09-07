@@ -16,6 +16,35 @@ promised before `1.0`.
 
 ### Added
 
+- **Bulyan reproduces on the Python edge**, and a manifest can now state
+  the Byzantine fraction its method should assume
+  (`[scenario] byzantine_fraction`). The two are the same change.
+
+  Bulyan's guarantee holds only for `n >= 4f + 3`. The runner pinned the
+  fraction at 0.3 for every baseline, which makes `f` 30% of `n` — and
+  `n >= 1.2n + 3` has no solution, so no client count could satisfy the
+  precondition. The manifest recorded this as "would fail fast", but that
+  is not what the implementation does: `byzantine_count` floors and
+  clamps and `theta` saturates, so at 8 clients it computes `f = 2`,
+  selects 4 of 8, and runs *quietly* outside the regime the paper
+  describes. A reproduction running where its paper makes no claim is
+  not a reproduction.
+
+  At `byzantine_fraction = 0.125` with 8 clients, `f = 1` and `n >= 7`
+  holds, and the Python edge measures **0.918–0.925** across four runs
+  against a target of `0.91 ± 0.05`. That range is not seed noise —
+  every run is identically seeded. The order client updates arrive in is
+  not seeded and cannot be, and Bulyan is the catalog's most
+  order-sensitive method: an iterative selection whose tie-break takes
+  the first minimum, then a trimmed mean summing floats in that order.
+  A federation is a distributed system, and its tolerances have to
+  absorb that. Unset, the field keeps the framework-wide 0.3, so no existing
+  baseline moves. Bulyan's `[experiment]` also changes from
+  `synthetic`/`non-iid` — neither of which the harness registry knows —
+  to the `mnist`/`iid` recipe the other baselines use, following the
+  existing convention that `[experiment]` describes the Python edge while
+  the Rust edge's comment records its synthetic problem.
+
 - **`cflux checkpoint list` and `cflux checkpoint show <round>`.** What a
   durable store actually holds, read directly rather than through the
   server — so it answers while the server is down, which is when the

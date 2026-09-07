@@ -17,21 +17,38 @@ selected updates.
 
 ## Precondition: n ≥ 4f+3
 
-Bulyan needs at least `4f+3` participants for `f` Byzantine clients. With
-one attacker (f=1) that is ≥ 7, so this baseline uses **8 clients**. This
-is why it ships a **Rust edge only**: `run_demo.sh` pins
-`byzantine_fraction = 0.3`, which at 8 clients would demand n ≥ 11 and fail
-fast — a good illustration of a method enforcing its own preconditions.
+§4 of the paper is explicit: *"Bulyan(A) requires n ≥ 4f + 3 received
+gradients"*. With one attacker (f=1) that is ≥ 7, so this baseline uses
+**8 clients**.
 
-## Result (Rust / Burn edge)
+That precondition is also why this manifest sets
+`[scenario] byzantine_fraction = 0.125` rather than taking the
+framework's 0.3 default. At 0.3, `f` is 30% of `n`, and `n ≥ 1.2n + 3`
+has no solution — *no* client count would satisfy the precondition.
 
-| Setting | Held-out accuracy |
-|---|---|
-| synthetic non-IID, 8 clients, 1 poisoned, 8 rounds | **0.91** (deterministic, seed 0) — vs FedAvg's 0.54 collapse |
+The implementation would not stop you. `byzantine_count` floors and
+clamps and `theta` saturates, so at the default it computes `f = 2` from
+8 clients, selects 4 of them, and runs perfectly happily — outside the
+regime the paper makes any claim about. A method quietly operating
+outside its own precondition is the failure this baseline exists to
+notice, so it pins the fraction that keeps it inside.
+
+## Results
+
+| Edge | Setting | Held-out accuracy |
+|---|---|---|
+| **rust** (Burn) | synthetic non-IID, 8 clients, 1 poisoned, 8 rounds | **0.91 ± 0.05** (deterministic, seed 0) — vs FedAvg's 0.54 collapse |
+| **python** (shared harness) | MNIST, 8 clients, 1 poisoned, 15 rounds | **0.91 ± 0.05** — measured 0.918 |
+
+The target is a measurement rather than the paper's own figure: El
+Mhamdi et al. report convergence *curves* for MNIST and CIFAR-10, not a
+tabulated accuracy, so there is no number to reproduce against — only a
+regime to stay inside.
 
 ## Run it
 
 ```bash
 cargo run -p conflux-baselines -- run bulyan-elmhamdi-2018 --client rust
+cargo run -p conflux-baselines -- run bulyan-elmhamdi-2018 --client python
 cargo run -p conflux-baselines -- run bulyan-elmhamdi-2018 --client rust --plan
 ```

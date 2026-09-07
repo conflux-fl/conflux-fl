@@ -145,6 +145,10 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
             rounds: grid.rounds,
             no_reputation: poisoned,
             seed: c.seed,
+            // A sweep compares methods under one shared assumption, so
+            // it takes the default rather than letting each method pick
+            // the fraction that flatters it.
+            byzantine_fraction: None,
         };
 
         let outcome = match federation::run(repo_root, &plan) {

@@ -24,6 +24,15 @@ use std::time::{Duration, Instant};
 /// silently depended on would drift without either side noticing.
 pub(crate) const LOCAL_STEPS_PER_ROUND: u32 = 30;
 
+/// What a robust aggregator assumes about how many clients are
+/// Byzantine, unless a manifest says otherwise.
+///
+/// A deliberate over-estimate: a defense sized for more adversaries than
+/// are present is conservative, and most of the catalog degrades
+/// gracefully when it is wrong in that direction. It does not suit every
+/// method — see `Plan::byzantine_fraction`.
+pub(crate) const DEFAULT_BYZANTINE_FRACTION: f64 = 0.3;
+
 /// The seed a single run uses, matching `_harness/prepare.py`'s own
 /// default.
 ///
@@ -62,6 +71,16 @@ pub(crate) struct Plan<'a> {
     /// "multi-seed" sweep replays one trajectory per shard, which
     /// understates the real run-to-run spread.
     pub(crate) seed: u32,
+    /// What the aggregator should assume, overriding
+    /// [`DEFAULT_BYZANTINE_FRACTION`].
+    ///
+    /// Bulyan is why this exists. Its guarantee holds only for
+    /// `n >= 4f + 3`, and with `f` fixed at 30% of `n` that inequality
+    /// has no solution at any client count — so at the default it would
+    /// run, silently, outside the regime its paper describes. The
+    /// implementation floors and clamps rather than refusing, which
+    /// makes that failure quiet rather than loud.
+    pub(crate) byzantine_fraction: Option<f64>,
 }
 
 /// One round as the evaluator saw it.
@@ -310,7 +329,12 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
             .env("CONFLUX_TOPOLOGY", "cross_device")
             .env("CONFLUX_MODE", "research")
             .env("CONFLUX_AGGREGATOR", plan.aggregator)
-            .env("CONFLUX_ROBUST_BYZANTINE_FRACTION", "0.3")
+            .env(
+                "CONFLUX_ROBUST_BYZANTINE_FRACTION",
+                plan.byzantine_fraction
+                    .unwrap_or(DEFAULT_BYZANTINE_FRACTION)
+                    .to_string(),
+            )
             .env("CONFLUX_MIN_REPUTATION_SCORE", min_reputation)
             .env("CONFLUX_QUORUM", plan.clients.to_string())
             .env("CONFLUX_SCAFFOLD_NUM_CLIENTS", plan.clients.to_string())
