@@ -80,7 +80,15 @@ pub enum ServeError {
     Sidecar(String),
     /// A listener could not take its address — usually another process
     /// already holds that port.
-    #[error("cannot bind {addr}: {source}")]
+    ///
+    /// The message names the knob that moves it. "Address already in
+    /// use" is clear about what happened and silent about what to do,
+    /// and this is the first failure a new deployment hits: 8080 is a
+    /// popular port.
+    #[error(
+        "cannot bind {addr}: {source}\n  Another process already holds that address. \
+         Choose a different one with --http-addr, or set CONFLUX_HTTP_ADDR."
+    )]
     Bind {
         /// The address that was refused.
         addr: SocketAddr,

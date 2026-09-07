@@ -141,14 +141,43 @@ pub fn run(args: Args) -> Result<Report, CliError> {
     for w in &written {
         text.push_str(&format!("  {w}\n"));
     }
+    // The whole sequence, not just the next step. A profile is selected
+    // by *name*: writing one here does not make it the one that loads,
+    // and a reader who follows only the check command will later run
+    // `server start` with no selection and get the builtin defaults —
+    // silently, because resolving to a default is not an error.
     text.push_str(&format!(
-        "\nEdit the profiles, then check them before starting anything:\n\
-         \x20 CONFLUX_TOPOLOGY={name} CONFLUX_MODE={name}_mode cflux config check\n",
+        "\nThese are selected by name, not by being the only profiles here.\n\
+         Every command below needs both, or it resolves the builtin\n\
+         defaults instead:\n\n\
+         \x20 export CONFLUX_TOPOLOGY={name} CONFLUX_MODE={name}_mode\n\n\
+         Then, in order:\n\
+         \x20 1. edit the two profiles above\n\
+         \x20 2. cflux config check      # every value, and what set it\n",
         name = args.name
     ));
-    if args.docker {
-        text.push_str("\nThe compose file brings up Redis, Postgres and MinIO on non-standard\nports so they cannot collide with services already on this machine:\n  docker compose up -d\n");
+    // Written line by line rather than as one continued literal: Rust's
+    // line continuations swallow the following indentation, which is
+    // exactly the whitespace this output depends on.
+    let steps: &[&str] = if args.docker {
+        &[
+            "  3. docker compose up -d    # Redis, Postgres and MinIO, on ports",
+            "                             #   chosen not to collide with this",
+            "                             #   machine's own services",
+            "  4. cflux doctor            # every startup check, nothing started",
+            "  5. cflux server start",
+        ]
+    } else {
+        &[
+            "  3. cflux doctor            # every startup check, nothing started",
+            "  4. cflux server start",
+        ]
+    };
+    for line in steps {
+        text.push_str(line);
+        text.push('\n');
     }
+
     Ok(Report::plain(
         text,
         json!({ "ok": true, "files": written, "topology": args.topology, "mode": args.mode }),
