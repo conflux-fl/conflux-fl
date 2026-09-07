@@ -14,7 +14,7 @@
   <a href="https://confluxfl.dev"><img src="https://img.shields.io/badge/docs-confluxfl.dev-2b6cb0" alt="Docs"></a>
   <img src="https://img.shields.io/badge/Rust-1.94%2B-dea584?logo=rust&logoColor=white" alt="Rust 1.94+">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0">
-  <img src="https://img.shields.io/badge/version-0.4.0-informational" alt="Version 0.4.0">
+  <img src="https://img.shields.io/badge/version-0.5.0-informational" alt="Version 0.5.0">
 </p>
 
 <p align="center">
@@ -170,7 +170,7 @@ verify by hand.
 With a Rust toolchain, install from the tag instead:
 
 ```bash
-cargo install --git https://github.com/conflux-fl/conflux-fl --tag v0.4.0 cflux
+cargo install --git https://github.com/conflux-fl/conflux-fl --tag v0.5.0 cflux
 ```
 
 ```bash
@@ -374,12 +374,12 @@ In this repository: [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md)
 
 | | |
 |---|---|
-| **Tests** | 616 pass workspace-wide, including a cross-round adversarial suite that holds every method to "never panic, never return a non-finite aggregate" |
+| **Tests** | 640 pass workspace-wide, including a cross-round adversarial suite that holds every method to "never panic, never return a non-finite aggregate" |
 | **Lints** | `cargo fmt --check` and `cargo clippy --workspace --all-targets` clean under `-D warnings`; `cargo deny` gates advisories and licenses |
 | **Catalog** | 22 server-side methods across 5 families, plus FedProx client-side |
 | **Clients** | Python and Rust SDKs ship; four paper reproductions in `baselines/`, each verified through both edges |
 | **Operations** | Redis / Postgres / S3, allow-list / JWT / mTLS auth, DP accounting across restarts |
-| **Version** | `0.4.0` — the `0.x` is deliberate and [documented](https://confluxfl.dev/reference/api-stability/): the public API is still moving, and breaking changes land in minor versions until `1.0` is a promise this codebase can keep |
+| **Version** | `0.5.0` — the `0.x` is deliberate and [documented](https://confluxfl.dev/reference/api-stability/): the public API is still moving, and breaking changes land in minor versions until `1.0` is a promise this codebase can keep |
 
 Conflux ships literal, cited implementations of published methods; a
 method joins the catalog when it is published and can be implemented
