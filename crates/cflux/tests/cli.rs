@@ -420,6 +420,40 @@ fn a_backend_named_without_its_connection_string_cannot_run() {
 }
 
 #[test]
+fn checkpoint_says_an_in_memory_store_is_not_readable_from_here() {
+    // The default backend keeps checkpoints inside the server's own
+    // process, so a separate process genuinely cannot read them. That is
+    // an answer — exit 1, "the answer is no" — rather than a failure to
+    // run, and the message has to name the variable that changes it,
+    // because the alternative is a user concluding the store is empty.
+    let o = cflux(
+        &["checkpoint", "list"],
+        &[("CONFLUX_STORE_BACKEND", "memory")],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("in-memory"), "{out}");
+    assert!(out.contains("CONFLUX_STORE_BACKEND"), "{out}");
+}
+
+#[test]
+fn checkpoint_reports_a_missing_connection_string_as_a_usage_error() {
+    // Selecting a durable backend without saying where it is cannot run
+    // at all, which is exit 2 rather than exit 1 — a script that treats
+    // those alike would report a misconfiguration as "no checkpoints".
+    let o = cflux(
+        &["checkpoint", "list"],
+        &[("CONFLUX_STORE_BACKEND", "postgres")],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stderr(&o).contains("CONFLUX_POSTGRES_URL"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
 fn every_help_ends_with_a_guide_link_and_version_names_both_versions() {
     for args in [
         vec!["--help"],

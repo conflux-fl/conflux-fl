@@ -68,6 +68,9 @@ pub(crate) enum CliError {
         /// The underlying error.
         source: std::io::Error,
     },
+    /// A checkpoint store could not be reached or read.
+    #[error("{0}")]
+    Checkpoint(conflux_store::StoreError),
     /// A file the command was asked to write could not be written.
     #[error("could not write {path}: {source}")]
     Write {
@@ -110,6 +113,9 @@ enum Command {
     Server(commands::run::ServerArgs),
     /// Run a Conflux node: the bridge a local `ClientApp` connects to.
     Node(commands::run::NodeArgs),
+    /// Inspect the checkpoints a durable store holds, without starting
+    /// a server.
+    Checkpoint(commands::checkpoint::CheckpointArgs),
     /// Print this binary's version and the framework version it embeds.
     Version,
 }
@@ -130,6 +136,7 @@ fn main() {
         Command::Doctor(args) => commands::doctor::run(args),
         Command::Server(args) => commands::run::run_server(args),
         Command::Node(args) => commands::run::run_node(args),
+        Command::Checkpoint(args) => commands::checkpoint::run(args),
         Command::Version => Ok(commands::version()),
     };
     match result {

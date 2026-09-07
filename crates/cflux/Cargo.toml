@@ -27,6 +27,8 @@ conflux-privacy = { path = "../conflux-privacy" }
 # imitation of them: backend selection vs mode, the TLS posture, the JWT
 # key requirement, and the deployment-material env readers behind them.
 conflux-server = { path = "../conflux-server" }
+# Read checkpoints directly, so `checkpoint` works while the server is down.
+conflux-store = { path = "../conflux-store" }
 # The sidecar capability handshake — the same `Describe` call the server
 # makes at startup, so a mismatch is found before any client connects.
 conflux-net = { path = "../conflux-net" }

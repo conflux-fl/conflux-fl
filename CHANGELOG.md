@@ -16,6 +16,33 @@ promised before `1.0`.
 
 ### Added
 
+- **`cflux checkpoint list` and `cflux checkpoint show <round>`.** What a
+  durable store actually holds, read directly rather than through the
+  server — so it answers while the server is down, which is when the
+  question is usually asked.
+
+  `list` names gaps in the sequence, because a run that checkpointed
+  rounds 1–40 and then 45 lost five somewhere and nothing else reports
+  it. `show` gives a round's parameter count, L2 norm and range, flags
+  the all-zero placeholder the server hands out before any client has
+  trained, and **exits non-zero when any weight is NaN or infinite** —
+  one such value poisons every client that resumes from that checkpoint,
+  and the range alone would not reveal it.
+
+  An in-memory store is answered rather than attempted: those
+  checkpoints live inside the server's process and no separate process
+  can read them, so the command says so and names the variable that
+  changes it. That is exit `1` — a negative answer — not exit `2`, which
+  a script must be able to tell apart from a misconfiguration.
+
+- **`Store::list_checkpoints` and `Store::load_checkpoint`**, across
+  every backend. The enumeration already existed inside each backend's
+  `load_latest_weights`, which found the highest round and then loaded
+  it; this lifts it out rather than writing it again. `load_latest_weights`
+  stays a single query on Postgres rather than becoming
+  enumerate-then-fetch — the round loop calls it every round, and a CLI
+  convenience should not slow the server's hot path.
+
 - **Multi-seed sweeps, and the per-client metrics that make a fairness
   claim measurable.** `sweep` takes `--seeds`, and every combination runs
   once per seed. The seed reaches two places, and both matter: the data

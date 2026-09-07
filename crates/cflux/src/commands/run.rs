@@ -94,7 +94,7 @@ fn export(var: &str, value: Option<&String>) {
 }
 
 /// A runtime for a process whose whole job is to run one server.
-fn runtime() -> Result<tokio::runtime::Runtime, CliError> {
+pub(crate) fn runtime() -> Result<tokio::runtime::Runtime, CliError> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

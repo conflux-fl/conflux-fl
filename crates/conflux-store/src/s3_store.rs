@@ -97,13 +97,16 @@ impl S3Store {
     }
 }
 
-impl Store for S3Store {
-    async fn load_latest_weights(&self) -> Result<Vec<f32>, StoreError> {
+impl S3Store {
+    /// Every round the bucket holds, ascending.
+    ///
+    /// Paginated: one `ListObjectsV2` page holds at most 1000 keys, and
+    /// keys sort lexicographically (`checkpoint-1000.bin` before
+    /// `checkpoint-999.bin`), so reading a single page of a longer
+    /// experiment would silently miss rounds — and, for the latest,
+    /// silently pick a stale one.
+    async fn rounds(&self) -> Result<Vec<u64>, StoreError> {
         let list_prefix = self.key_prefix();
-        // Paginated: one `ListObjectsV2` page holds at most 1000 keys, and
-        // keys sort lexicographically (`checkpoint-1000.bin` before
-        // `checkpoint-999.bin`), so reading a single page of a longer
-        // experiment would silently pick a stale round as the latest.
         let mut pages = self
             .client
             .list_objects_v2()
@@ -112,7 +115,7 @@ impl Store for S3Store {
             .into_paginator()
             .send();
 
-        let mut latest_round: Option<u64> = None;
+        let mut rounds = Vec::new();
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| StoreError::Backend(e.to_string()))?;
             for object in page.contents() {
@@ -122,14 +125,17 @@ impl Store for S3Store {
                     .and_then(|s| s.strip_suffix(".bin"))
                     .and_then(|s| s.parse::<u64>().ok())
                 {
-                    latest_round = Some(latest_round.map_or(round, |current| current.max(round)));
+                    rounds.push(round);
                 }
             }
         }
+        rounds.sort_unstable();
+        Ok(rounds)
+    }
 
-        let round = latest_round.ok_or(StoreError::NoCheckpoint)?;
+    /// One key's bytes, decoded.
+    async fn fetch(&self, round: u64) -> Result<Vec<f32>, StoreError> {
         let key = self.key_for(round);
-
         let object = self
             .client
             .get_object()
@@ -157,6 +163,31 @@ impl Store for S3Store {
             .iter()
             .map(|c| f32::from_le_bytes(*c))
             .collect())
+    }
+}
+
+impl Store for S3Store {
+    async fn load_latest_weights(&self) -> Result<Vec<f32>, StoreError> {
+        let round = *self
+            .rounds()
+            .await?
+            .last()
+            .ok_or(StoreError::NoCheckpoint)?;
+        self.fetch(round).await
+    }
+
+    async fn list_checkpoints(&self) -> Result<Vec<u64>, StoreError> {
+        self.rounds().await
+    }
+
+    async fn load_checkpoint(&self, round: u64) -> Result<Vec<f32>, StoreError> {
+        // Checked against the listing rather than letting `get_object`
+        // fail: a missing round is `NoCheckpoint`, not a backend error,
+        // and the two mean different things to a caller.
+        if !self.rounds().await?.contains(&round) {
+            return Err(StoreError::NoCheckpoint);
+        }
+        self.fetch(round).await
     }
 
     async fn save_checkpoint(&self, round: u64, weights: &[f32]) -> Result<(), StoreError> {
