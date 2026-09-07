@@ -157,13 +157,23 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
         .lock()
         .expect("app state mutex poisoned") = None;
 
-    Ok(RoundSummary {
+    let summary = RoundSummary {
         round,
         flush_reason: flush.reason,
         num_selected: selected.len(),
         num_submitted,
         num_passed,
-    })
+    };
+
+    // Recorded here rather than in the loop that calls this, because
+    // returning `Ok` *is* "a round completed" — and a test that drives a
+    // round directly should exercise the same path a server does, not a
+    // shorter one.
+    state
+        .round_history
+        .record(&summary, state.round_verdict.satisfied());
+
+    Ok(summary)
 }
 
 /// Refuses a batch the configured method's citation does not cover.

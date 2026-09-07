@@ -179,3 +179,63 @@ fn robust_byzantine_fraction_override_is_honored_by_construction() {
     assert_eq!(config.robust_byzantine_fraction.value, 0.4);
     let _state = AppState::new(config, vec![0.0]); // must not panic
 }
+
+/// A completed round lands in the history the admin API serves.
+///
+/// Driven through `run_round` rather than a running server on purpose:
+/// recording lives there precisely so the path a test exercises is the
+/// path a deployment takes, not a shorter one beside it.
+#[tokio::test]
+async fn a_completed_round_is_recorded_in_the_history() {
+    let config = config_with(Overrides {
+        aggregator: Some("fedavg".to_string()),
+        round_history_len: Some(4),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState::new(config, vec![1.0, 2.0]));
+    assert!(state.round_history.is_empty());
+
+    state
+        .registry
+        .register(ClientId("client-1".to_string()))
+        .await
+        .unwrap();
+
+    let round_state = Arc::clone(&state);
+    let round_handle = tokio::spawn(async move { run_round(&round_state).await });
+
+    for _ in 0..200 {
+        if state
+            .current_buffer
+            .lock()
+            .expect("mutex poisoned")
+            .is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    state
+        .submit_delta(vec![DeltaChunk {
+            client_id: "client-1".to_string(),
+            round: 1,
+            chunk_index: 0,
+            total_chunks: 1,
+            data: encode_weights(&[10.0, 20.0]),
+            num_samples: 5,
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+    round_handle.await.unwrap().unwrap();
+
+    let recent = state.round_history.recent(10);
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].round, 1);
+    assert_eq!(recent[0].submitted, 1);
+    assert_eq!(recent[0].passed, 1);
+    // `fedavg` states no batch minimum, so there is no claim to report —
+    // and `None` must not be flattened into `false` on the way out.
+    assert_eq!(recent[0].cited_requirement_satisfied, None);
+}

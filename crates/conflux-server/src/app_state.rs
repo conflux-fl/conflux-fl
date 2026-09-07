@@ -70,6 +70,11 @@ pub struct AppState {
     /// callers need it: the round itself, which decides whether to log,
     /// and `/round/status`, which reports it to anyone polling.
     pub round_verdict: crate::RoundVerdict,
+    /// The last completed rounds, bounded by `round_history_len`.
+    ///
+    /// Kept beside the verdict because they answer the same question in
+    /// two tenses: what is true now, and what was true on the way here.
+    pub round_history: crate::RoundHistory,
     /// Where checkpoints are read from and written to.
     pub store: Arc<AnyStore>,
     /// Always constructed, even when `config.require_node_auth`
@@ -333,6 +338,7 @@ impl AppState {
 
         Self {
             round_verdict: crate::RoundVerdict::default(),
+            round_history: crate::RoundHistory::new(config.round_history_len.value as usize),
             registry,
             store,
             node_allowlist,

@@ -74,6 +74,7 @@ pub fn overrides_from_vars(get: impl Fn(&str) -> Option<String>) -> Result<Overr
         reputation_filter_enabled: var!("CONFLUX_REPUTATION_FILTER_ENABLED"),
         quorum: var!("CONFLUX_QUORUM"),
         round_log_detail: var!("CONFLUX_ROUND_LOG_DETAIL"),
+        round_history_len: var!("CONFLUX_ROUND_HISTORY_LEN"),
         max_update_bytes: var!("CONFLUX_MAX_UPDATE_BYTES"),
         round_timeout_secs: var!("CONFLUX_ROUND_TIMEOUT_SECS"),
         clip_norm: var!("CONFLUX_CLIP_NORM"),

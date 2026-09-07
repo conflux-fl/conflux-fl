@@ -352,6 +352,8 @@ pub struct Overrides {
     pub config_log_format: Option<LogFormat>,
     /// How much each round says when nothing is wrong.
     pub round_log_detail: Option<RoundLogDetail>,
+    /// How many completed rounds `/rounds` keeps.
+    pub round_history_len: Option<u32>,
 }
 
 /// Every configuration parameter, resolved against a topology + mode and
@@ -514,6 +516,8 @@ pub struct ResolvedConfig {
     /// How much each round says when nothing is wrong. A violation is
     /// reported at every setting.
     pub round_log_detail: Resolved<RoundLogDetail>,
+    /// How many completed rounds `/rounds` keeps. `0` disables it.
+    pub round_history_len: Resolved<u32>,
 }
 
 /// No variants today — every parameter [`resolve`] currently knows about
@@ -1095,6 +1099,23 @@ pub fn resolve_with_profiles(
         &env_var!("ROUND_LOG_DETAIL"),
     );
 
+    // Bounded, so a long run's memory does not grow with its length.
+    // 128 is a few hours at cross-silo pace and a few minutes at
+    // cross-device — enough to see what led to a halt without being a
+    // retention policy anybody has to think about.
+    let round_history_len = layer(
+        128_u32,
+        None,
+        None,
+        file_overrides.and_then(|o| o.round_history_len),
+        env.round_history_len,
+        cli.round_history_len,
+        &topology_source,
+        &mode_source,
+        &file_source,
+        &env_var!("ROUND_HISTORY_LEN"),
+    );
+
     Ok(ResolvedConfig {
         topology: topology.base,
         mode: mode.base,
@@ -1131,6 +1152,7 @@ pub fn resolve_with_profiles(
         require_node_auth,
         config_log_format,
         round_log_detail,
+        round_history_len,
     })
 }
 
@@ -1351,6 +1373,12 @@ impl ResolvedConfig {
             "round_log_detail",
             LoggedValue::Text(self.round_log_detail.value.as_str()),
             &self.round_log_detail.source,
+        ));
+        lines.push(log_line(
+            format,
+            "round_history_len",
+            LoggedValue::Number(self.round_history_len.value.to_string()),
+            &self.round_history_len.source,
         ));
 
         lines

@@ -16,6 +16,32 @@ promised before `1.0`.
 
 ### Added
 
+- **`/rounds` — what led up to the current state.** `/round/status`
+  answers "what is happening now", which is the wrong tense for the
+  question people have when a run stops. A batch falling below its
+  method's cited requirement at round 312 halts the server and says so,
+  but whether clients bled away gradually or dropped at once is the
+  difference between a capacity problem and an outage, and nothing
+  recorded it.
+
+  Each record carries the round, when it completed, whether it closed on
+  quorum or timeout, how many were selected/submitted/passed, and the
+  citation verdict. `RoundSummary` already carried most of that — this
+  is retention, not new instrumentation.
+
+  Newest first, because a caller asking about a halt wants the rounds
+  nearest to it and should not have to know how many exist to find them.
+  The response reports `capacity` alongside, so seeing exactly that many
+  rounds reads as "retention ended here" rather than "this is all that
+  happened".
+
+- **`round_history_len`** (default `128`, `0` disables). Bounded on
+  purpose: an unbounded history would make a long run's memory a
+  function of how long it has been running, which is a liability in
+  exactly the deployments that run longest. Configurable because how far
+  back is useful depends on round pace — 128 is hours at cross-silo and
+  minutes at cross-device.
+
 - **A batch that cannot satisfy its method's citation now halts the
   run.** Krum states `n >= 2f + 3`, Bulyan `n >= 4f + 3`, the trimmed
   mean that trimming must leave a value. Below those the implementations
