@@ -17,7 +17,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use conflux_config::{AuthMode, ConfigSource, Overrides};
+use conflux_config::{AuthMode, ConfigSource, Overrides, ProfileAxis};
 use conflux_net::FlTransportService;
 use conflux_proto::fl_transport_server::FlTransportServer;
 
@@ -134,6 +134,57 @@ where
     }
 }
 
+/// Says out loud which profile files were sitting in the profile
+/// directory and did not take part in this run.
+///
+/// The rule and its edge live in `conflux_config::unselected_profiles`;
+/// the short version is that only an axis nobody selected is reported,
+/// so a deployment that keeps a library of profiles and chooses one is
+/// silent. This warns rather than refusing because nothing is violated:
+/// the builtins are a legal default and a fresh checkout must still
+/// start. The refuse-early rule elsewhere covers a running
+/// configuration breaking a promise it made, which is the opposite
+/// shape.
+fn report_unselected_profiles(
+    dir: &std::path::Path,
+    topology_name: Option<&str>,
+    mode_name: Option<&str>,
+    topology_in_force: &str,
+    mode_in_force: &str,
+) {
+    let found = conflux_config::unselected_profiles(dir, topology_name, mode_name);
+    if found.is_empty() {
+        return;
+    }
+    for axis in ProfileAxis::ALL {
+        let profiles = found.on(axis);
+        if profiles.is_empty() {
+            continue;
+        }
+        let in_force = match axis {
+            ProfileAxis::Topology => topology_in_force,
+            ProfileAxis::Mode => mode_in_force,
+        };
+        tracing::warn!(
+            dir = %dir.display(),
+            profiles = %profiles.join(", "),
+            "{} is unset, so the builtin {} is in force and these {} profiles were not read. Set {}=<name> to select one.",
+            axis.env_var(),
+            in_force,
+            axis.label(),
+            axis.env_var(),
+        );
+    }
+    for unusable in &found.unusable {
+        tracing::warn!(
+            dir = %dir.display(),
+            profile = %unusable.name,
+            problem = %unusable.problem,
+            "a profile file in the directory cannot be loaded — it would fail the moment anything selected it"
+        );
+    }
+}
+
 /// Resolves the whole deployment from the environment and runs it until
 /// `shutdown` completes.
 ///
@@ -175,6 +226,13 @@ pub async fn run_from_env(
             "custom mode profile loaded"
         );
     }
+    report_unselected_profiles(
+        profile_dir,
+        topology_name.as_deref(),
+        mode_name.as_deref(),
+        &topology_profile.name,
+        &mode_profile.name,
+    );
 
     // Downstream startup checks (TLS posture, JWT validation, backend
     // validation) branch on the behavioral mode, which for a custom

@@ -16,6 +16,28 @@ promised before `1.0`.
 
 ### Fixed
 
+- **The framework's log lines are visible without being asked for.**
+  Both binaries built their filter with
+  `EnvFilter::from_default_env()`, whose default with `RUST_LOG` unset
+  is ERROR — so every `tracing` event the framework emits was silent
+  unless an operator already knew to set the variable, which is
+  precisely the operator who did not need telling. That included two
+  security-relevant startup warnings: auth resolving to JWT with no
+  public key configured, and an unauthenticated admin API.
+
+  `cflux server start` and `node start` were quieter still. They do not
+  spawn a binary — they call the same `run_from_env` the binaries call,
+  in-process — and `cflux` installed no subscriber at all, so the
+  command the tutorial ends on dropped every event: quorum-or-timeout,
+  each rejected update and its score, cumulative epsilon, all of it.
+
+  `RUST_LOG` still wins when set; the default is now INFO, and `cflux`
+  installs a subscriber writing to stderr, leaving stdout to the
+  command's own report. Measured rather than assumed: a real startup
+  plus a round emits thirteen events, every one from a `conflux_*`
+  target and none from `tonic`, `hyper` or the AWS SDK, so a plain
+  `info` needs no per-dependency directives to stay readable.
+
 - **The installer's glibc floor is now checked against the binary it
   describes.** `install.sh` refuses to install on a system older than
   the glibc `cflux` was built against, and knew that floor as a
@@ -37,6 +59,37 @@ promised before `1.0`.
   `0.4.0` once `install.sh` is corrected.
 
 ### Added
+
+- **Profiles that were written and never selected are named at
+  startup.** `cflux init hospital` writes two profiles and prints the
+  line that selects them. Skip that line and the server starts on the
+  builtins — correctly, with an entirely accurate provenance log — while
+  two hand-edited files sit unread beside it. Nothing was wrong enough
+  to fail, which is exactly why nothing said anything.
+
+  `conflux-server` now names them at startup, and `cflux doctor` gained
+  a `profiles` check, from the same survey so the two cannot disagree.
+  Each name is reported beside the variable that would have selected it,
+  since that variable is the entire action.
+
+  **Only an axis where nothing was selected is reported.** Naming a
+  builtin is a choice, and a directory of profiles beside a chosen one
+  is a library rather than a mistake — a deployment that keeps six and
+  runs one must not hear about the other five on every start. That also
+  covers the half-slip, where one variable is exported and the other
+  forgotten: `init` writes two files, so it is at least as likely as
+  forgetting both.
+
+  A file that declares `inherits` and loads as neither axis is named
+  too, with why. Until now an unselected profile was never loaded, so a
+  wrong-axis key or a file shadowing a builtin waited silently for the
+  day someone finally selected it.
+
+  This warns rather than refusing, deliberately: nothing is violated,
+  the builtins are a legal default, and a fresh checkout with a
+  `profiles/` directory must still start. The refuse-early rule covers a
+  running configuration breaking a promise it made, which is the
+  opposite shape.
 
 - **`/rounds` — what led up to the current state.** `/round/status`
   answers "what is happening now", which is the wrong tense for the

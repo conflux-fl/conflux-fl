@@ -16,10 +16,11 @@
 //! the ones where doing something silently is worst.
 
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::Path;
 use std::time::Duration;
 
 use clap::Args as ClapArgs;
-use conflux_config::{AuthMode, Severity};
+use conflux_config::{AuthMode, ProfileAxis, Severity, UnselectedProfiles};
 use conflux_server::{
     AccountingBackend, BackendSelection, RegistryBackend, StoreBackend, backend_selection_from_env,
     jwt_key_from_env, resolve_server_tls, tls_material_from_env, tls_paths_present,
@@ -41,6 +42,51 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 pub struct Args {
     #[command(flatten)]
     selection: Selection,
+}
+
+/// One line naming what went unread and the variable that would have
+/// selected it.
+///
+/// The variable is the entire action, so it belongs beside each name
+/// rather than in a sentence underneath — and the table gives every
+/// check exactly one line, which is what bounds this.
+fn describe_unselected(dir: &Path, found: &UnselectedProfiles) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for axis in ProfileAxis::ALL {
+        for name in found.on(axis) {
+            parts.push(format!("{name} → {}", axis.env_var()));
+        }
+    }
+    for unusable in &found.unusable {
+        parts.push(format!(
+            "{} → unusable: {}",
+            unusable.name,
+            brief(&unusable.problem)
+        ));
+    }
+    format!(
+        "{} in {} not read: {}",
+        found.len(),
+        dir.display(),
+        parts.join(", ")
+    )
+}
+
+/// The head of a loader message, for a one-line row.
+///
+/// The profile loader's errors lead with the problem and follow with the
+/// reasoning, so the head is the half worth keeping; the server's
+/// startup warning carries all of it.
+fn brief(problem: &str) -> String {
+    const MAX: usize = 90;
+    if problem.chars().count() <= MAX {
+        return problem.to_string();
+    }
+    let head: String = problem.chars().take(MAX).collect();
+    match head.rfind(' ') {
+        Some(cut) => format!("{}…", &head[..cut]),
+        None => format!("{head}…"),
+    }
 }
 
 /// What one check concluded.
@@ -280,7 +326,26 @@ pub fn run(args: Args) -> Result<Report, CliError> {
         },
     ));
 
-    // 2. Backends: what was selected, and whether this mode permits it.
+    // 2. Profiles that were written and not selected. `init` prints the
+    // line that selects what it wrote, and this is the check for having
+    // skipped it — the reason it belongs in the command `init` sends
+    // people to before they start anything.
+    let unselected = &r.unselected;
+    checks.push(Check::new(
+        "profiles",
+        if unselected.is_empty() {
+            Status::Pass
+        } else {
+            Status::Warn
+        },
+        if unselected.is_empty() {
+            format!("nothing in {} went unread", r.profile_dir.display())
+        } else {
+            describe_unselected(&r.profile_dir, unselected)
+        },
+    ));
+
+    // 3. Backends: what was selected, and whether this mode permits it.
     let backends = backend_selection_from_env().map_err(CliError::ServerEnv)?;
     let selected = describe_selection(&backends);
     checks.push(match validate_production_backends(mode, &backends) {
@@ -292,7 +357,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
         Err(e) => Check::new("backends", Status::Fail, e.to_string()),
     });
 
-    // 3. Can each configured backend be reached at all?
+    // 4. Can each configured backend be reached at all?
     checks.push(match &backends.registry {
         RegistryBackend::Memory => Check::new("redis", Status::Skip, "registry is in-memory"),
         RegistryBackend::Redis { url } => probe("redis", url, 6379),
@@ -311,7 +376,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
         AccountingBackend::Postgres { url } => probe("accounting", url, 5432),
     });
 
-    // 4. TLS material, and the posture it produces for this auth setting.
+    // 5. TLS material, and the posture it produces for this auth setting.
     let present = tls_paths_present();
     let set = present.iter().filter(|(_, ok)| *ok).count();
     if set > 0 && set < present.len() {
@@ -350,7 +415,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
         Err(e) => Check::new("tls", Status::Fail, e.to_string()),
     });
 
-    // 5. The JWT key, when tokens are what proves identity.
+    // 6. The JWT key, when tokens are what proves identity.
     let jwt_key = jwt_key_from_env().map_err(CliError::ServerEnv)?;
     checks.push(
         match validate_jwt_startup(mode, config.auth.value, jwt_key.as_ref()) {
@@ -374,7 +439,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
         },
     );
 
-    // 6. The sidecar, for the methods defined in terms of one.
+    // 7. The sidecar, for the methods defined in terms of one.
     let (needs_reference, needs_scores) = sidecar_needs(&config.aggregator.value);
     checks.push(sidecar_check(needs_reference, needs_scores));
 

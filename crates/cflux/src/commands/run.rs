@@ -119,17 +119,44 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    // Printed rather than traced: `cflux` initializes no subscriber, so a
-    // `tracing` event here would go nowhere. The servers it starts do
-    // their own logging.
+    // Printed rather than traced, and it stays that way: this line is
+    // the CLI talking about itself, not the server talking about a
+    // decision, so it belongs beside the command's own output.
     tokio::select! {
         _ = ctrl_c => eprintln!("received Ctrl-C; shutting down"),
         _ = terminate => eprintln!("received SIGTERM; shutting down"),
     }
 }
 
+/// Sends the server's and node's own `tracing` events somewhere.
+///
+/// `server start` and `node start` do not spawn a binary — they call the
+/// same `run_from_env` the binaries call, in this process. So without a
+/// subscriber here, everything the framework says out loud went nowhere:
+/// quorum-or-timeout, every rejected update and its score, cumulative
+/// epsilon, and the startup warnings about an unauthenticated admin API
+/// or JWT auth with no key. The command that the tutorial ends on was
+/// the quietest way to run the server.
+///
+/// To stderr, unlike the binaries' stdout, because `cflux` owns stdout:
+/// `--format json` puts a machine-readable report there, and log lines
+/// interleaved into it would not parse.
+///
+/// `try_init` rather than `init`: failing to install a subscriber is not
+/// a reason to refuse to start a server.
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
 pub fn run_server(args: ServerArgs) -> Result<Report, CliError> {
     let ServerCommand::Start(a) = args.command;
+    init_logging();
     export("CONFLUX_TOPOLOGY", a.topology.as_ref());
     export("CONFLUX_MODE", a.mode.as_ref());
     export("CONFLUX_EXPERIMENT_CONFIG_PATH", a.config_file.as_ref());
@@ -149,6 +176,7 @@ pub fn run_server(args: ServerArgs) -> Result<Report, CliError> {
 
 pub fn run_node(args: NodeArgs) -> Result<Report, CliError> {
     let NodeCommand::Start(a) = args.command;
+    init_logging();
     export("CONFLUX_SERVER_ADDR", a.server.as_ref());
     export("CONFLUX_CLIENT_ID", a.client_id.as_ref());
     export("CONFLUX_LOCAL_ADDR", a.local_addr.as_ref());
