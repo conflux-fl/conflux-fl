@@ -374,10 +374,10 @@ In this repository: [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md)
 
 | | |
 |---|---|
-| **Tests** | 536 pass workspace-wide, including a cross-round adversarial suite that holds every method to "never panic, never return a non-finite aggregate" |
+| **Tests** | 616 pass workspace-wide, including a cross-round adversarial suite that holds every method to "never panic, never return a non-finite aggregate" |
 | **Lints** | `cargo fmt --check` and `cargo clippy --workspace --all-targets` clean under `-D warnings`; `cargo deny` gates advisories and licenses |
 | **Catalog** | 22 server-side methods across 5 families, plus FedProx client-side |
-| **Clients** | Python and Rust SDKs ship; four paper reproductions in `baselines/` verified through the Rust edge |
+| **Clients** | Python and Rust SDKs ship; four paper reproductions in `baselines/`, each verified through both edges |
 | **Operations** | Redis / Postgres / S3, allow-list / JWT / mTLS auth, DP accounting across restarts |
 | **Version** | `0.4.0` — the `0.x` is deliberate and [documented](https://confluxfl.dev/reference/api-stability/): the public API is still moving, and breaking changes land in minor versions until `1.0` is a promise this codebase can keep |
 

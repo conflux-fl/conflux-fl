@@ -214,3 +214,39 @@ pub(crate) fn run(repo_root: &Path, grid: &Grid) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_split_parses_into_its_partition_and_parameter() {
+        assert_eq!(parse_split("iid").unwrap(), ("iid", None));
+        assert_eq!(
+            parse_split("dirichlet:0.5").unwrap(),
+            ("dirichlet", Some(0.5))
+        );
+    }
+
+    #[test]
+    fn an_unparseable_split_names_what_was_expected() {
+        // These come from a command line, so the message has to be
+        // readable by whoever typed it — not just non-zero.
+        let e = parse_split("dirichlet").unwrap_err();
+        assert!(e.contains("iid"), "{e}");
+        assert!(e.contains("dirichlet:<alpha>"), "{e}");
+
+        let e = parse_split("dirichlet:half").unwrap_err();
+        assert!(e.contains("alpha"), "{e}");
+    }
+
+    #[test]
+    fn a_dirichlet_alpha_of_zero_is_still_a_number() {
+        // Degenerate, but the sweep's job is to run what it was asked
+        // for; the harness decides whether the value is usable.
+        assert_eq!(
+            parse_split("dirichlet:0").unwrap(),
+            ("dirichlet", Some(0.0))
+        );
+    }
+}

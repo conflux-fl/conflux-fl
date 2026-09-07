@@ -2,7 +2,8 @@
 
 The Python `ClientApp` SDK (`app.py`): subclass `ClientApp`, implement
 `train`, and `run` it against `conflux-node`'s local loopback listener.
-The four `examples/e2e_*` harnesses are real-model clients built on it.
+The shared training harness in `baselines/_harness/` is the real-model
+client built on it.
 
 `stub_client.py` — fixed dummy weights, no PyTorch dependency — is a test
 fixture for end-to-end pipeline testing, permitted only in research mode
@@ -36,7 +37,7 @@ Run alongside one or more honest `stub_client.py` instances against a
 `conflux-server` configured with `aggregator = "krum"` (or
 `"multi_krum"`/`"trimmed_mean"`/`"median"`) to see the poisoned
 submission's influence bounded, over the real network hop — see
-the [E2E harnesses guide](https://confluxfl.dev/guides/e2e-harnesses/) for the full
+[Reproduce a paper](https://confluxfl.dev/guides/baselines-add/) for the full
 harness this is meant to plug into, and
 the [aggregation catalog](https://confluxfl.dev/reference/aggregation-catalog/)
 for the aggregation methods themselves.

@@ -14,7 +14,39 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-Nothing yet — `0.4.0` is the current release.
+### Fixed
+
+- **A robust aggregator with no `quorum` now says its paper requirement
+  went unchecked.** Conflux validates the batch sizes the robust
+  methods' papers state — Krum's `n >= 2f + 3`, Bulyan's `n >= 4f + 3`,
+  the trimmed mean keeping at least one value — against `quorum`,
+  because that is the smallest batch a round may close with. The check
+  was guarded by `if let Some(quorum)`, so with no quorum configured it
+  did not run at all, and `cflux config check` reported a clean
+  configuration.
+
+  That is the configuration nobody has to opt into: no profile sets
+  `quorum`. The check still cannot run without one — the batch size is
+  then whatever the round selects, which is not knowable before clients
+  register — but it now says so, names the variable, and explains that a
+  round will close only once every selected client has responded.
+
+  `median` and `fedavg` stay quiet, because neither states a batch
+  minimum there is anything to check.
+
+- **Documentation corrected against the code.** `quorum` was described
+  as having "no fallback value"; it falls back to every selected client.
+  The `conflux-store` deep dive described a two-method `Store` trait,
+  which gained `list_checkpoints` and `load_checkpoint` in `0.4.0`. The
+  Python client's README pointed at the `e2e_*` harnesses removed in
+  `0.3.0`. The README's status table claimed 536 tests and reproductions
+  "verified through the Rust edge", when all four now verify through
+  both. Six crate deep dives stated test counts that had drifted; the
+  counts are gone rather than updated, since a hardcoded one always
+  rots.
+
+- **Tests for `sweep.rs`'s split parsing**, which had none — the grid's
+  only user-facing parser.
 
 ## [0.4.0] — 2026-09-07
 
