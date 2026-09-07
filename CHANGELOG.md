@@ -14,49 +14,20 @@ promised before `1.0`.
 
 ## [Unreleased]
 
-### Fixed
+## [0.5.0] — 2026-09-07
 
-- **The framework's log lines are visible without being asked for.**
-  Both binaries built their filter with
-  `EnvFilter::from_default_env()`, whose default with `RUST_LOG` unset
-  is ERROR — so every `tracing` event the framework emits was silent
-  unless an operator already knew to set the variable, which is
-  precisely the operator who did not need telling. That included two
-  security-relevant startup warnings: auth resolving to JWT with no
-  public key configured, and an unauthenticated admin API.
+Conflux was already deciding a great deal quietly. This release makes it
+say so, and refuse rather than aggregate a number that merely looks
+sound: a batch below its method's cited requirement halts the run,
+`/rounds` keeps what led up to a halt, and profiles you wrote and never
+selected are named instead of sitting unread.
 
-  `cflux server start` and `node start` were quieter still. They do not
-  spawn a binary — they call the same `run_from_env` the binaries call,
-  in-process — and `cflux` installed no subscriber at all, so the
-  command the tutorial ends on dropped every event: quorum-or-timeout,
-  each rejected update and its score, cumulative epsilon, all of it.
-
-  `RUST_LOG` still wins when set; the default is now INFO, and `cflux`
-  installs a subscriber writing to stderr, leaving stdout to the
-  command's own report. Measured rather than assumed: a real startup
-  plus a round emits thirteen events, every one from a `conflux_*`
-  target and none from `tonic`, `hyper` or the AWS SDK, so a plain
-  `info` needs no per-dependency directives to stay readable.
-
-- **The installer's glibc floor is now checked against the binary it
-  describes.** `install.sh` refuses to install on a system older than
-  the glibc `cflux` was built against, and knew that floor as a
-  hardcoded `MIN_GLIBC="2.34"`. Nothing related it to the
-  `ubuntu-22.04` runner that decides it, so bumping the runner would
-  make the installer quietly wrong in one of two directions: refusing
-  systems that would work, or admitting ones where the binary will not
-  start.
-
-  The release workflow now derives the floor from the binary it just
-  built and fails if the two disagree, before the upload, so a mismatch
-  cannot ship. The runner pin carries a comment saying it decides that
-  constant.
-
-  Release-time rather than CI, because CI cannot answer the question: it
-  runs on `ubuntu-latest`, so a floor derived there would be a different
-  runner's. If the check does fire, the release exists without its Linux
-  binary — recoverable through the `workflow_dispatch` path added in
-  `0.4.0` once `install.sh` is corrected.
+The defect underneath all three is the one to read before upgrading.
+Every message above is a `tracing` event, and both binaries built a
+filter that dropped everything below ERROR — so the framework had been
+saying a great deal nobody could hear, including that the admin API was
+unauthenticated. Logs now default to INFO, and a deployment parsing
+stdout will see more lines than it did in `0.4.0`.
 
 ### Added
 
@@ -117,26 +88,6 @@ promised before `1.0`.
   back is useful depends on round pace — 128 is hours at cross-silo and
   minutes at cross-device.
 
-- **A batch that cannot satisfy its method's citation now halts the
-  run.** Krum states `n >= 2f + 3`, Bulyan `n >= 4f + 3`, the trimmed
-  mean that trimming must leave a value. Below those the implementations
-  still compute something — they floor and clamp rather than refusing —
-  and the number is indistinguishable from a sound one. The framework
-  now refuses instead of warning: `ServerError::PreconditionViolated`
-  sits beside `BudgetExhausted` on the non-transient side, so the loop
-  stops and `/health` carries the reason. Retrying would only produce
-  more invalid rounds.
-
-  Checked twice, because the batch size is knowable at two moments: at
-  round start, before any client is asked to train, and again after the
-  flush, since a timeout closes with whatever arrived rather than what
-  the round opened expecting.
-
-  With a `quorum` configured this is unreachable — a round cannot flush
-  below it, so **configuration validation now refuses at startup**
-  instead, which is earlier and cheaper. That check was previously a
-  warning.
-
 - **`round_log_detail` — `quiet`, `changes` (default) or `every`.**
   Governs only the reassuring case; a violation halts at every setting.
 
@@ -159,6 +110,50 @@ promised before `1.0`.
   `conflux-core`, because `conflux-core` depends on `conflux-config` and
   that edge cannot be reversed.
 
+### Changed
+
+- **A batch that cannot satisfy its method's citation now halts the
+  run.** Krum states `n >= 2f + 3`, Bulyan `n >= 4f + 3`, the trimmed
+  mean that trimming must leave a value. Below those the implementations
+  still compute something — they floor and clamp rather than refusing —
+  and the number is indistinguishable from a sound one. The framework
+  now refuses instead of warning: `ServerError::PreconditionViolated`
+  sits beside `BudgetExhausted` on the non-transient side, so the loop
+  stops and `/health` carries the reason. Retrying would only produce
+  more invalid rounds.
+
+  Checked twice, because the batch size is knowable at two moments: at
+  round start, before any client is asked to train, and again after the
+  flush, since a timeout closes with whatever arrived rather than what
+  the round opened expecting.
+
+  With a `quorum` configured this is unreachable — a round cannot flush
+  below it, so **configuration validation now refuses at startup**
+  instead, which is earlier and cheaper. That check was previously a
+  warning.
+
+- **The framework's log lines are visible without being asked for.**
+  Both binaries built their filter with
+  `EnvFilter::from_default_env()`, whose default with `RUST_LOG` unset
+  is ERROR — so every `tracing` event the framework emits was silent
+  unless an operator already knew to set the variable, which is
+  precisely the operator who did not need telling. That included two
+  security-relevant startup warnings: auth resolving to JWT with no
+  public key configured, and an unauthenticated admin API.
+
+  `cflux server start` and `node start` were quieter still. They do not
+  spawn a binary — they call the same `run_from_env` the binaries call,
+  in-process — and `cflux` installed no subscriber at all, so the
+  command the tutorial ends on dropped every event: quorum-or-timeout,
+  each rejected update and its score, cumulative epsilon, all of it.
+
+  `RUST_LOG` still wins when set; the default is now INFO, and `cflux`
+  installs a subscriber writing to stderr, leaving stdout to the
+  command's own report. Measured rather than assumed: a real startup
+  plus a round emits thirteen events, every one from a `conflux_*`
+  target and none from `tonic`, `hyper` or the AWS SDK, so a plain
+  `info` needs no per-dependency directives to stay readable.
+
 ### Fixed
 
 - **A robust aggregator with no `quorum` now says its paper requirement
@@ -178,6 +173,26 @@ promised before `1.0`.
 
   `median` and `fedavg` stay quiet, because neither states a batch
   minimum there is anything to check.
+
+- **The installer's glibc floor is now checked against the binary it
+  describes.** `install.sh` refuses to install on a system older than
+  the glibc `cflux` was built against, and knew that floor as a
+  hardcoded `MIN_GLIBC="2.34"`. Nothing related it to the
+  `ubuntu-22.04` runner that decides it, so bumping the runner would
+  make the installer quietly wrong in one of two directions: refusing
+  systems that would work, or admitting ones where the binary will not
+  start.
+
+  The release workflow now derives the floor from the binary it just
+  built and fails if the two disagree, before the upload, so a mismatch
+  cannot ship. The runner pin carries a comment saying it decides that
+  constant.
+
+  Release-time rather than CI, because CI cannot answer the question: it
+  runs on `ubuntu-latest`, so a floor derived there would be a different
+  runner's. If the check does fire, the release exists without its Linux
+  binary — recoverable through the `workflow_dispatch` path added in
+  `0.4.0` once `install.sh` is corrected.
 
 - **Documentation corrected against the code.** `quorum` was described
   as having "no fallback value"; it falls back to every selected client.
@@ -1059,7 +1074,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.5.0
 [0.4.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.4.0
 [0.3.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.2.0
