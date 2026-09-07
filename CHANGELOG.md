@@ -16,6 +16,31 @@ promised before `1.0`.
 
 ### Added
 
+- **`curl -fsSL https://confluxfl.dev/install.sh | sh`.** Installing
+  `cflux` was four manual steps — pick the right target triple, download
+  the archive and its checksum, verify with whichever of `sha256sum` or
+  `shasum` your platform has, clear macOS quarantine, then edit your
+  `PATH`. It is now one line.
+
+  Piping a script into a shell is a real trust decision, so the script
+  tries to earn it. It is POSIX `sh` and short enough to read before
+  running (`… | less`). It **verifies the checksum before unpacking**,
+  because unpacking is already trusting the bytes, and it removes the
+  temp directory on every exit path including that failure, so a
+  corrupted archive is never left behind to be found and trusted later.
+  It needs no root and writes nothing outside the install directory.
+
+  It refuses rather than guesses: musl, non-x86_64 Linux, a glibc older
+  than the build's 2.34 floor, and Windows each get a specific message
+  naming the alternative, instead of a binary that will not start.
+
+  The canonical copy lives here and is linted in CI (`sh -n` plus
+  shellcheck); `confluxfl.dev/install.sh` serves a copy of it, and each
+  release now attaches `install.sh` as an asset — so if the served copy
+  ever drifts, the release asset is the authoritative one.
+
+### Added
+
 - **Bulyan reproduces on the Python edge**, and a manifest can now state
   the Byzantine fraction its method should assume
   (`[scenario] byzantine_fraction`). The two are the same change.
