@@ -14,6 +14,27 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cflux init` now prints the whole sequence, not just the next step.**
+  It scaffolded two profiles and told you how to `config check` them —
+  then the obvious next command, `cflux server start`, resolved the
+  builtin `cross_device` / `research` defaults instead. Nothing was
+  broken: profiles are selected *by name*, and writing one does not
+  activate it. But a missing selection is a silent fallback rather than
+  an error, so the result was a running server that was not the
+  deployment just scaffolded.
+
+  `init` now names that outright — "these are selected by name, not by
+  being the only profiles here" — prints the `export` line, and lists
+  every step through `server start`.
+
+- **A refused bind now names the flag that moves it.** `cannot bind
+  127.0.0.1:8080: Address already in use` said what happened and nothing
+  about what to do, and it is the first failure a new deployment hits,
+  because 8080 is a popular port. It now points at `--http-addr` and
+  `CONFLUX_HTTP_ADDR`.
+
 ### Added
 
 - **`curl -fsSL https://confluxfl.dev/install.sh | sh`.** Installing
