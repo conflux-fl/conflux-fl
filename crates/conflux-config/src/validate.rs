@@ -384,6 +384,33 @@ impl ResolvedConfig {
         // smallest batch a round may close with. `b` is what the
         // implementation will actually trim at that size:
         // floor(fraction × n), capped at n − 1.
+        // Unset, this check cannot run: the batch size is then whatever
+        // the round selects, which is not knowable until clients have
+        // registered. Saying so is the point — silently skipping the one
+        // validation that cites the papers, on the configuration most
+        // people run, is worse than the check being unavailable.
+        if self.quorum.is_none() && robust_batch_method {
+            v.push(
+                Warning,
+                "quorum",
+                "unset",
+                &self.robust_byzantine_fraction.source,
+                format!(
+                    // Concatenated rather than continued with a
+                    // trailing backslash: a line continuation keeps the
+                    // following indentation, and this string is read by a
+                    // person in a terminal.
+                    concat!(
+                        "no quorum is configured, so {}'s paper-stated batch ",
+                        "requirement could not be checked — a round will close only ",
+                        "when every selected client has responded, and whether that ",
+                        "batch satisfies the citation depends on how many register. ",
+                        "Set CONFLUX_QUORUM to have this validated."
+                    ),
+                    aggregator
+                ),
+            );
+        }
         if let Some(quorum) = &self.quorum {
             let n = quorum.value as f32;
             if quorum.value > 0 && (0.0..=1.0).contains(&fraction) {
@@ -552,6 +579,39 @@ mod tests {
     /// Krum's paper-stated n ≥ 2f + 3, checked at quorum. At fraction
     /// 0.3: n = 4 trims f = floor(1.2) = 1 and needs n ≥ 5 — warning;
     /// n = 5 trims f = 1 and 5 ≥ 5 — clean.
+    #[test]
+    fn a_robust_method_without_a_quorum_says_the_check_could_not_run() {
+        // The silent version of this was the bug: no quorum meant the
+        // paper-requirement check was skipped entirely, on the
+        // configuration nobody has to opt into, and `config check`
+        // reported a clean bill of health.
+        let unset = config(Overrides {
+            aggregator: Some("krum".to_string()),
+            quorum: None,
+            ..Default::default()
+        });
+        let v = unset.validate();
+        assert_eq!(v.warnings.len(), 1, "{:?}", v.warnings);
+        let message = &v.warnings[0].message;
+        assert!(message.contains("no quorum is configured"), "{message}");
+        assert!(message.contains("CONFLUX_QUORUM"), "{message}");
+        // Whitespace has been mangled here twice by line continuations,
+        // and this string is read by a person in a terminal.
+        assert!(!message.contains("  "), "double space in: {message}");
+    }
+
+    #[test]
+    fn a_method_with_no_batch_requirement_stays_quiet_without_a_quorum() {
+        // `fedavg` touches the whole batch and states no minimum, so
+        // there is nothing this warning could tell anyone.
+        let unset = config(Overrides {
+            aggregator: Some("fedavg".to_string()),
+            quorum: None,
+            ..Default::default()
+        });
+        assert!(unset.validate().warnings.is_empty());
+    }
+
     #[test]
     fn krum_quorum_below_the_cited_requirement_warns_with_the_arithmetic() {
         let short = config(Overrides {
