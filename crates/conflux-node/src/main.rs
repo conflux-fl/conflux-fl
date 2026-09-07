@@ -19,8 +19,15 @@
 
 #[tokio::main]
 async fn main() {
+    // `RUST_LOG` when set, otherwise INFO rather than the library
+    // default of ERROR — for the reason `conflux-server`'s `main`
+    // spells out: what the node says about its own decisions, including
+    // the stub-client guard, is worth hearing without being asked for.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     // The node's whole body lives in the library, so `cflux node start`

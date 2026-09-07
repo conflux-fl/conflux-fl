@@ -33,8 +33,29 @@
 
 #[tokio::main]
 async fn main() {
+    // `RUST_LOG` wins when it is set; otherwise INFO, not the library
+    // default of ERROR.
+    //
+    // The framework's whole posture is to say what it decided out loud:
+    // the buffer says whether a round closed on quorum or timeout, the
+    // reputation filter names every update it rejected with its score,
+    // the accountant reports cumulative epsilon each round, and startup
+    // warns when auth resolved to JWT with no key and when the admin API
+    // is unauthenticated. Every one of those is a `tracing` event, and
+    // under an ERROR-only default every one of them was silent unless an
+    // operator already knew to set `RUST_LOG` — which is precisely the
+    // operator who did not need to be told.
+    //
+    // Measured before choosing a plain `info`: a real startup plus a
+    // round emits thirteen events, all from `conflux_*` targets and none
+    // from `tonic`, `hyper` or the AWS SDK, which log at DEBUG and
+    // below. So there is no dependency noise to filter out, and no list
+    // of per-crate directives to keep current.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     // Everything this binary does lives in the library, so that `cflux

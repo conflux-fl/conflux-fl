@@ -44,3 +44,9 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time", 
 clap.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# `server start` and `node start` run the real server and node in this
+# process, and everything those say — quorum or timeout, rejected
+# updates, cumulative epsilon, unauthenticated admin API — is a
+# `tracing` event. Without a subscriber here they went nowhere, so the
+# CLI path was quieter than the binary it claims to be.
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
