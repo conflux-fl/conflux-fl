@@ -6,9 +6,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
-conflux-proto = { path = "../conflux-proto" }
+conflux-proto.workspace = true
 # The gRPC server half of the sidecar hop. `conflux-net` is deliberately
 # NOT a dependency: that crate holds the *client* the server uses, and
 # depending on it here would couple the two halves of a boundary whose
@@ -30,5 +31,5 @@ tokio-stream.workspace = true
 # even through a dev-dependency (the same rule that keeps it away from
 # `conflux-attacks`). Putting the end-to-end test on this side of the
 # boundary proves the hop works while leaving that graph untouched.
-conflux-net = { path = "../conflux-net" }
-conflux-core = { path = "../conflux-core" }
+conflux-net.workspace = true
+conflux-core.workspace = true

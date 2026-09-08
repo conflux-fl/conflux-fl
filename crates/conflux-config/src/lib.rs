@@ -120,7 +120,7 @@ pub use types::{
     ModeDefaults, RoundLogDetail, SeedMode, Topology, TopologyDefaults,
 };
 pub use unselected::{ProfileAxis, UnselectedProfiles, UnusableProfile, unselected_profiles};
-pub use validate::{Finding, Severity, Validation};
+pub use validate::{Finding, Severity, Validation, unregistered_strategies};
 
 use source::{LoggedValue, log_line};
 

@@ -85,6 +85,17 @@ impl Validation {
         self.errors.is_empty() && self.warnings.is_empty()
     }
 
+    /// Folds another validation's findings into this one.
+    ///
+    /// Exists so a caller can report [`unregistered_strategies`] and
+    /// [`ResolvedConfig::validate`] as one list — a reader wants
+    /// everything wrong with the configuration, not two reports whose
+    /// union they have to take themselves.
+    pub fn merge(&mut self, other: Validation) {
+        self.errors.extend(other.errors);
+        self.warnings.extend(other.warnings);
+    }
+
     fn push(
         &mut self,
         severity: Severity,
@@ -105,6 +116,81 @@ impl Validation {
             Severity::Warning => self.warnings.push(finding),
         }
     }
+}
+
+/// Findings for `aggregator`/`selector`/`privacy_mechanism` names that
+/// nothing has registered.
+///
+/// **Deliberately not part of [`ResolvedConfig::validate`].** The
+/// registry is a property of the *binary*, not of the configuration:
+/// this crate sits beneath the crates that `inventory::submit!` into it,
+/// so a binary linking `conflux-config` alone sees an empty registry and
+/// every name — `fedavg` included — would look misspelled. Reporting
+/// that would be confidently wrong in exactly the situation where the
+/// checker knows least.
+///
+/// So this is called by binaries that link the strategy crates and can
+/// therefore answer the question: `conflux-server` before it builds its
+/// `AppState`, and `cflux` on the path shared by `config check` and
+/// `doctor`. A kind whose registry is empty is skipped for the same
+/// reason — nothing registered means nothing linked, which is not the
+/// same as a typo.
+///
+/// Without this, one typo in one environment variable resolved cleanly,
+/// validated clean, was pronounced healthy by both pre-flight commands,
+/// and then panicked inside `AppState::new` with a backtrace.
+pub fn unregistered_strategies(config: &ResolvedConfig) -> Validation {
+    use crate::registry::StrategyKind;
+    let mut v = Validation::default();
+    for (kind, parameter, noun, value, source) in [
+        (
+            StrategyKind::Aggregator,
+            "aggregator",
+            "an aggregator",
+            &config.aggregator.value,
+            &config.aggregator.source,
+        ),
+        (
+            StrategyKind::Selector,
+            "selector",
+            "a selector",
+            &config.selector.value,
+            &config.selector.source,
+        ),
+        (
+            StrategyKind::PrivacyMechanism,
+            "privacy_mechanism",
+            "a privacy mechanism",
+            &config.privacy_mechanism.value,
+            &config.privacy_mechanism.source,
+        ),
+    ] {
+        if crate::registry::lookup(kind, value).is_some() {
+            continue;
+        }
+        let mut names = crate::registry::registered_names(kind);
+        if names.is_empty() {
+            continue;
+        }
+        names.sort_unstable();
+        let closest = names
+            .iter()
+            .map(|n| (*n, crate::profile::levenshtein(value, n)))
+            .filter(|(_, d)| *d <= 2)
+            .min_by_key(|(_, d)| *d)
+            .map(|(n, _)| n);
+        let list = names.join(", ");
+        // Built from pieces, not a line continuation: a continuation
+        // keeps the following line's indentation and it ends up in the
+        // message someone reads.
+        let guess = match closest {
+            Some(near) => format!(" — did you mean \"{near}\"?"),
+            None => ".".to_string(),
+        };
+        let message = format!("nothing registers {noun} by this name{guess} Registered: {list}");
+        v.push(Severity::Error, parameter, value, source, message);
+    }
+    v
 }
 
 impl ResolvedConfig {
@@ -462,6 +548,67 @@ mod tests {
             &Overrides::default(),
         )
         .expect("resolution itself cannot fail")
+    }
+
+    #[test]
+    fn a_misspelled_strategy_name_is_reported_with_the_near_miss() {
+        // Against this crate's own registry, which holds exactly one
+        // test dummy — the real names are registered by crates that
+        // depend on this one, so `cflux`'s CLI tests cover those.
+        let c = config(Overrides {
+            aggregator: Some("test_dummy_aggregatorr".to_string()),
+            ..Default::default()
+        });
+        let v = crate::unregistered_strategies(&c);
+        let f = v
+            .errors
+            .iter()
+            .find(|f| f.parameter == "aggregator")
+            .unwrap();
+        assert!(
+            f.message
+                .contains("did you mean \"test_dummy_aggregator\"?"),
+            "{}",
+            f.message
+        );
+        assert!(f.source.contains("CONFLUX_AGGREGATOR"), "{}", f.source);
+    }
+
+    #[test]
+    fn a_registered_name_says_nothing() {
+        let c = config(Overrides {
+            aggregator: Some("test_dummy_aggregator".to_string()),
+            ..Default::default()
+        });
+        assert!(crate::unregistered_strategies(&c).errors.is_empty());
+    }
+
+    #[test]
+    fn a_kind_with_an_empty_registry_is_skipped_not_condemned() {
+        // No crate registers a selector or a privacy mechanism into
+        // *this* binary. Nothing registered means nothing linked, which
+        // is not the same as a typo — and reporting one here would be
+        // confidently wrong exactly where the checker knows least.
+        let c = config(Overrides {
+            aggregator: Some("test_dummy_aggregator".to_string()),
+            selector: Some("anything at all".to_string()),
+            privacy_mechanism: Some("likewise".to_string()),
+            ..Default::default()
+        });
+        let v = crate::unregistered_strategies(&c);
+        assert!(v.errors.is_empty(), "{:?}", v.errors);
+    }
+
+    #[test]
+    fn the_two_reports_can_be_read_as_one() {
+        let mut v = config(Overrides::default()).validate();
+        let before = v.errors.len();
+        let c = config(Overrides {
+            aggregator: Some("nope".to_string()),
+            ..Default::default()
+        });
+        v.merge(crate::unregistered_strategies(&c));
+        assert_eq!(v.errors.len(), before + 1);
     }
 
     /// The shipped defaults must validate clean on every axis pair —

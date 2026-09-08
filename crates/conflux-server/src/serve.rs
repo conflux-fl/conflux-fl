@@ -95,6 +95,23 @@ pub enum ServeError {
         /// The underlying error.
         source: std::io::Error,
     },
+    /// The TLS material resolved, but the gRPC server would not accept
+    /// it — a certificate/key pair that does not match, an unsupported
+    /// key type, a malformed client CA.
+    ///
+    /// Separate from [`Self::Grpc`] because this is material an operator
+    /// supplied failing at startup, not a running server failing, and
+    /// the two want different words and different reactions.
+    #[error(
+        "the gRPC server rejected the configured TLS material: {source}\n  \
+         Check CONFLUX_TLS_CERT_PATH, CONFLUX_TLS_KEY_PATH and \
+         CONFLUX_TLS_CLIENT_CA_PATH — `cflux doctor` reports the same posture \
+         without starting anything."
+    )]
+    GrpcTls {
+        /// The underlying error.
+        source: tonic::transport::Error,
+    },
     /// The gRPC server stopped with an error.
     #[error("grpc server failed: {source}")]
     Grpc {
@@ -279,7 +296,13 @@ pub async fn run_from_env(
     // but self-contradictory configurations, said out loud; errors are
     // values that guarantee a broken run, and refusing now beats
     // discovering them as behavior in round one.
-    let validation = config.validate();
+    let mut validation = config.validate();
+    // Merged rather than reported separately: a reader wants everything
+    // wrong with this configuration in one list. This binary links every
+    // strategy crate, so its registry is the complete one — which is the
+    // precondition `unregistered_strategies` documents and the reason it
+    // is not part of `validate()` itself.
+    validation.merge(conflux_config::unregistered_strategies(&config));
     for finding in &validation.warnings {
         tracing::warn!(parameter = finding.parameter, "[config] {finding}");
     }
@@ -427,12 +450,22 @@ pub async fn run_from_env(
     // and the bound is a plain `u64`.
     let max_update_bytes = state.config.max_update_bytes.value;
     let mut grpc_shutdown = shutdown_rx.clone();
+    // Applied here rather than inside the spawn below, and that placement
+    // is the point. A panic in the spawned task is only observed by the
+    // `tokio::join!` at the end of this function, which does not return
+    // until the *other two* tasks finish — and they run until shutdown.
+    // So bad TLS material used to leave a server that looked started:
+    // HTTP answering, `/health` reporting ok, rounds ticking, no gRPC
+    // listener, and the reason sitting in a handle nobody would join for
+    // hours. Refusing here matches how `Bind` already behaves.
+    let mut grpc_builder = tonic::transport::Server::builder();
+    if let Some(tls_config) = tls_config {
+        grpc_builder = grpc_builder
+            .tls_config(tls_config)
+            .map_err(|source| ServeError::GrpcTls { source })?;
+    }
     let grpc = tokio::spawn(async move {
-        let mut builder = tonic::transport::Server::builder();
-        if let Some(tls_config) = tls_config {
-            builder = builder.tls_config(tls_config).expect("invalid TLS config");
-        }
-        builder
+        grpc_builder
             .add_service(FlTransportServer::new(
                 FlTransportService::new(grpc_state).with_max_update_bytes(max_update_bytes),
             ))

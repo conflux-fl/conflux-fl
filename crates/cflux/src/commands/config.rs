@@ -13,7 +13,7 @@ use clap::{Args as ClapArgs, Subcommand};
 use conflux_config::{
     LogFormat, Overrides, ResolvedConfig, Severity, UnselectedProfiles, Validation,
     mode_profile_named, overrides_from_env, resolve_with_profiles, topology_profile_named,
-    unselected_profiles,
+    unregistered_strategies, unselected_profiles,
 };
 use serde_json::json;
 
@@ -70,6 +70,12 @@ pub struct Resolution {
     /// what `cflux doctor` reports, and what the server warns about at
     /// startup, from the same survey so the two cannot disagree.
     pub unselected: UnselectedProfiles,
+    /// Ranges, combinations, *and* strategy names nothing registers —
+    /// computed once here so `config check` and `doctor` cannot end up
+    /// checking different things. The name check lives outside
+    /// `validate()` because it needs a binary that links the strategy
+    /// crates; `cflux` is one.
+    pub validation: Validation,
 }
 
 pub fn resolve(sel: &Selection) -> Result<Resolution, CliError> {
@@ -107,7 +113,10 @@ pub fn resolve(sel: &Selection) -> Result<Resolution, CliError> {
     let config = resolve_with_profiles(&topology, &mode, file_tier, &env, &Overrides::default())?;
     let unselected =
         unselected_profiles(&profile_dir, topology_name.as_deref(), mode_name.as_deref());
+    let mut validation = config.validate();
+    validation.merge(unregistered_strategies(&config));
     Ok(Resolution {
+        validation,
         config,
         topology_chain: topology.chain,
         mode_chain: mode.chain,
@@ -183,7 +192,9 @@ pub fn run(args: Args) -> Result<Report, CliError> {
         }
         Command::Check(sel) => {
             let r = resolve(&sel)?;
-            let validation = r.config.validate();
+            // `resolve` already validated, including the strategy names
+            // `validate()` alone cannot check.
+            let validation = &r.validation;
             let mut text = header(&r);
             text.push('\n');
             for f in &validation.errors {
@@ -206,7 +217,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
                 )
             });
             let mut json = base_json(&r);
-            json.insert("findings".into(), json!(findings_json(&validation)));
+            json.insert("findings".into(), json!(findings_json(validation)));
             json.insert("ok".into(), json!(ok));
             Ok(Report {
                 text,

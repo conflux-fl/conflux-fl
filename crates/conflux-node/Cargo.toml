@@ -6,10 +6,11 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
-conflux-proto = { path = "../conflux-proto" }
-conflux-net = { path = "../conflux-net" }
+conflux-proto.workspace = true
+conflux-net.workspace = true
 # The client-side privacy transform (`clip + noise` before an update
 # leaves the node) is a distinct pipeline step from the server-side
 # transform, and there is no way to honor it without conflux-node being
@@ -18,7 +19,7 @@ conflux-net = { path = "../conflux-net" }
 # conflux-node still calls no conflux-config API directly, keeping its
 # "read env vars, mirror the defaults inline" convention (see
 # startup_guard.rs).
-conflux-privacy = { path = "../conflux-privacy" }
+conflux-privacy.workspace = true
 rand.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
 # "sync": `ReceiverStream`, which adapts the mpsc channel behind

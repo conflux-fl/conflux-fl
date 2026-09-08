@@ -6,10 +6,11 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
-conflux-config = { path = "../conflux-config" }
-conflux-proto = { path = "../conflux-proto" }
+conflux-config.workspace = true
+conflux-proto.workspace = true
 inventory.workspace = true
 thiserror.workspace = true
 

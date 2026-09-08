@@ -12,29 +12,30 @@ repository.workspace = true
 rust-version = "1.94.1"
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
 # Resolution, validation, provenance, and the strategy registry.
-conflux-config = { path = "../conflux-config" }
+conflux-config.workspace = true
 # Linked so their `inventory::submit!` registrations populate the
 # registry; the CLI calls nothing else in them. Never `conflux-attacks`:
 # the CLI is for the framework only, and CI's isolation job checks the
 # edge is absent.
-conflux-core = { path = "../conflux-core" }
-conflux-selector = { path = "../conflux-selector" }
-conflux-privacy = { path = "../conflux-privacy" }
+conflux-core.workspace = true
+conflux-selector.workspace = true
+conflux-privacy.workspace = true
 # `doctor` runs the server's own startup checks rather than its own
 # imitation of them: backend selection vs mode, the TLS posture, the JWT
 # key requirement, and the deployment-material env readers behind them.
-conflux-server = { path = "../conflux-server" }
+conflux-server.workspace = true
 # Read checkpoints directly, so `checkpoint` works while the server is down.
-conflux-store = { path = "../conflux-store" }
+conflux-store.workspace = true
 # The sidecar capability handshake — the same `Describe` call the server
 # makes at startup, so a mismatch is found before any client connects.
-conflux-net = { path = "../conflux-net" }
+conflux-net.workspace = true
 # `node start` runs the real node, for the same reason `server start`
 # runs the real server: one implementation, not two.
-conflux-node = { path = "../conflux-node" }
+conflux-node.workspace = true
 # One async call (that handshake) needs a runtime; a current-thread one
 # is enough, so the CLI never spawns a thread pool to ask one question.
 # `rt-multi-thread` because `server start` runs a real server: three

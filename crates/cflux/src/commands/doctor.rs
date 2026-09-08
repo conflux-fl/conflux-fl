@@ -301,8 +301,9 @@ pub fn run(args: Args) -> Result<Report, CliError> {
     let mode = config.mode;
     let mut checks = Vec::new();
 
-    // 1. The configuration itself.
-    let validation = config.validate();
+    // 1. The configuration itself. From `resolve`, so this and
+    // `config check` cannot disagree about what was checked.
+    let validation = &r.validation;
     checks.push(Check::new(
         "configuration",
         if !validation.errors.is_empty() {
@@ -443,7 +444,7 @@ pub fn run(args: Args) -> Result<Report, CliError> {
     let (needs_reference, needs_scores) = sidecar_needs(&config.aggregator.value);
     checks.push(sidecar_check(needs_reference, needs_scores));
 
-    Ok(report(&r, checks, &validation))
+    Ok(report(&r, checks, validation))
 }
 
 /// Whether the configured aggregator consumes a trusted reference, or
