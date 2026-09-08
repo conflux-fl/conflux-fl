@@ -12,6 +12,12 @@ backends: in-memory, file, Postgres and S3. Production mode refuses the
 in-memory one — losing a round's model to a restart is not a trade-off
 anyone opted into.
 
+## Install
+
+```bash
+cargo add conflux-store
+```
+
 ## Where this sits
 
 No internal dependencies. The round pipeline loads from it at the start of a round and checkpoints at the end.

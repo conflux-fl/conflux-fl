@@ -14,6 +14,34 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Installation instructions point at crates.io.** `cargo install
+  cflux` replaces `cargo install --git … --tag vX.Y.Z cflux` in the
+  README, the installation guide's toolchain section, and each crate's
+  own README. The git form survives where it is still the right answer —
+  tracking `main` rather than a release.
+
+  Every crate README gained an `## Install` section using `cargo add`
+  rather than a pinned `= "0.6.0"`. Fifteen files nobody will remember
+  to revisit at each release is exactly where a hardcoded version rots,
+  which is the same reasoning `install.sh` adopted in `0.4.0` and the
+  download table in `0.5.0`.
+
+  New sections cover depending on the crates as libraries — absent
+  until now, because until now there was no answer that did not involve
+  a git revision — and building a container without a checkout, since
+  `cargo install conflux-server` now works in a Dockerfile build stage.
+
+### Fixed
+
+- **The crate reference claimed `conflux-core` ships twelve aggregation
+  methods.** It ships twenty-two, across five families; the list
+  predated the optimization and trusted families. The page is the map
+  people read to find a method, and it was missing ten of them —
+  including every method the `0.2.0`–`0.4.0` work added. The audit in
+  `0.5.0` did not catch it.
+
 ## [0.6.0] — 2026-09-08
 
 The crates can go to crates.io. Getting there meant giving fifteen

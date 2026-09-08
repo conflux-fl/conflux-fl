@@ -12,6 +12,12 @@ gates which clients may join. In-memory for research; Redis when
 registrations must survive a restart, which production mode requires
 rather than suggests.
 
+## Install
+
+```bash
+cargo add conflux-registry
+```
+
 ## Where this sits
 
 No internal dependencies. Used by `conflux-server` to answer "who is available this round?"

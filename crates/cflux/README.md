@@ -16,15 +16,24 @@ imitation of them, so a check that passes here is the check that will pass
 at startup. Every command supports `--format json`, and exit codes
 distinguish *found a problem* from *could not run*.
 
+## Install
+
+```bash
+cargo install cflux
+```
+
+Or without a Rust toolchain — prebuilt binaries, checksum verified before
+anything is unpacked:
+
+```bash
+curl -fsSL https://confluxfl.dev/install.sh | sh
+```
+
 ## Example
 
 ```bash
-# Install
-cargo install cflux
-
-# What can this framework do, and what will this configuration actually do?
-cflux catalog list
-cflux config check
+cflux catalog list      # every method, its family and its paper
+cflux config check      # every resolved value, and the tier that set it
 cflux doctor            # every startup check, nothing started
 
 cflux server start

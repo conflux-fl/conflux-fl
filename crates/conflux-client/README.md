@@ -16,6 +16,12 @@ closing while you are still working.
 The Python SDK (`python/conflux_client/`) implements the same contract, so
 the two are interchangeable from the server's point of view.
 
+## Install
+
+```bash
+cargo add conflux-client
+```
+
 ## Where this sits
 
 Depends on `conflux-net` and `conflux-proto`. An alternative to running Python behind `conflux-node`.

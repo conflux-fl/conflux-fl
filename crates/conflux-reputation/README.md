@@ -15,6 +15,12 @@ and would mask the aggregator's own behavior.
 Every rejected update is logged with its score and the threshold that
 rejected it.
 
+## Install
+
+```bash
+cargo add conflux-reputation
+```
+
 ## Where this sits
 
 No internal dependencies. Sits between `conflux-buffer` and `conflux-core` in the round pipeline.

@@ -12,6 +12,12 @@ and `conflux-node` to a local `ClientApp` over loopback gRPC. Same message
 types, two hops — so the wire contract cannot drift between them, and a
 field added for one is immediately available to the other.
 
+## Install
+
+```bash
+cargo add conflux-proto
+```
+
 ## Where this sits
 
 At the bottom of the graph, with no internal dependencies. Everything that speaks the wire depends on this.

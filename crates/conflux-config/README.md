@@ -17,6 +17,12 @@ Also home to the compile-time strategy registry. An implementation
 registers itself with `inventory::submit!`, so configuration selects it by
 name (`aggregator = "krum"`) without the server knowing it exists.
 
+## Install
+
+```bash
+cargo add conflux-config
+```
+
 ## Example
 
 ```rust

@@ -15,6 +15,12 @@ should not be assumed reachable.
 mTLS and JWT authentication both live here, as does the size ceiling on
 what one client may submit.
 
+## Install
+
+```bash
+cargo add conflux-net
+```
+
 ## Where this sits
 
 Depends on `conflux-proto`. Used by both binaries and by `conflux-client`.

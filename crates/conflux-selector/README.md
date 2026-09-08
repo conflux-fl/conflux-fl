@@ -14,6 +14,12 @@ reproducible.
 Strategies register into `conflux-config`'s registry, so adding one is a
 trait implementation and a `submit!`, not a change to the server.
 
+## Install
+
+```bash
+cargo add conflux-selector
+```
+
 ## Where this sits
 
 Depends on `conflux-config`, into whose registry it submits.
