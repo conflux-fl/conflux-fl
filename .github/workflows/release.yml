@@ -35,8 +35,25 @@ jobs:
             f && /^## \[/ { exit }
             f { print }
           ' CHANGELOG.md > /tmp/notes.md
+          # Refuse rather than substitute a placeholder. The placeholder
+          # this replaces turned a caught mistake into a shipped one: a
+          # tag pushed before its release commit produced four binaries
+          # named for a version they did not contain, notes reading "No
+          # CHANGELOG section", and `latest` moved to point at them —
+          # which is what the site's one-line installer serves.
+          #
+          # Failing here creates no release, so the `binaries` job that
+          # needs it never runs and nothing ships. Fix the CHANGELOG,
+          # delete and re-push the tag.
           if [ ! -s /tmp/notes.md ]; then
-            echo "No CHANGELOG section for $v — see CHANGELOG.md." > /tmp/notes.md
+            echo "::error::CHANGELOG.md has no [$v] section — refusing to publish a release nobody wrote notes for."
+            exit 1
+          fi
+          # A section that exists but says nothing is the same failure
+          # wearing a heading.
+          if [ "$(grep -c '[^[:space:]]' /tmp/notes.md)" -lt 3 ]; then
+            echo "::error::The [$v] CHANGELOG section is empty or near-empty."
+            exit 1
           fi
           echo "--- release notes ---"; head -20 /tmp/notes.md
       - uses: softprops/action-gh-release@v2
