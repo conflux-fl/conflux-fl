@@ -16,6 +16,18 @@ capability handshake.
 Deployments not using those methods never run it, and `conflux-server`
 never depends on it.
 
+## Install
+
+```bash
+cargo add conflux-trusted-reference
+```
+
+It also ships a `conflux-trusted-reference` binary:
+
+```bash
+cargo install conflux-trusted-reference
+```
+
 ## Where this sits
 
 Depends on `conflux-proto`. An optional separate process, reached over gRPC.

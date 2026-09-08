@@ -20,6 +20,12 @@ Methods whose papers state a minimum batch size — Krum's `n >= 2f + 3`,
 Bulyan's `n >= 4f + 3` — are held to it: a batch outside the citation
 halts the run rather than returning a number that looks sound.
 
+## Install
+
+```bash
+cargo add conflux-core
+```
+
 ## Example
 
 ```rust

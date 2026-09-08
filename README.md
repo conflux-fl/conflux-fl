@@ -167,10 +167,10 @@ attached to [each release](https://github.com/conflux-fl/conflux-fl/releases)
 alongside the binaries and their checksums, if you prefer to download and
 verify by hand.
 
-With a Rust toolchain, install from the tag instead:
+With a Rust toolchain, install from crates.io instead:
 
 ```bash
-cargo install --git https://github.com/conflux-fl/conflux-fl --tag v0.6.0 cflux
+cargo install cflux
 ```
 
 ```bash
@@ -181,6 +181,21 @@ cflux doctor                          # every startup check at once
 ```
 
 **[The cflux guide →](https://confluxfl.dev/guides/cflux/)**
+
+### Use the crates
+
+The framework is fifteen crates on crates.io. Take the ones you need:
+
+```bash
+cargo add conflux-core      # 22 cited aggregation methods
+cargo add conflux-config    # layered config + the strategy registry
+```
+
+Each crate's page links its own deep dive; the
+[crate reference](https://confluxfl.dev/reference/crates/) says what every
+one owns. `conflux-server` and `conflux-node` also ship binaries, so
+`cargo install conflux-server` works — though `cflux` is the smaller
+install and starts the same server.
 
 ### Build the framework
 

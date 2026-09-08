@@ -18,6 +18,12 @@ Cumulative epsilon is logged after every round. Budget exhaustion is a
 configured decision — halt, or continue with the guarantee explicitly
 withdrawn — never a silent one.
 
+## Install
+
+```bash
+cargo add conflux-privacy
+```
+
 ## Where this sits
 
 Depends on `conflux-config`, into whose registry it submits. Applied client-side by `conflux-node` and server-side by `conflux-server`.

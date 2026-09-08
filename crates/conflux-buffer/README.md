@@ -13,6 +13,12 @@ reached, or timeout elapsed — and **says which one it was**. A run that
 quietly stops closing on quorum and starts closing on timeout has lost
 participants without failing.
 
+## Install
+
+```bash
+cargo add conflux-buffer
+```
+
 ## Where this sits
 
 Depends on `conflux-proto`. Feeds the reputation filter and then aggregation.

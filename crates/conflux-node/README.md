@@ -16,6 +16,18 @@ dummy weights, no PyTorch — unless explicitly overridden. A live
 deployment training on dummy data should not be something you discover
 from the accuracy curve.
 
+## Install
+
+```bash
+cargo add conflux-node
+```
+
+It also ships a `conflux-node` binary:
+
+```bash
+cargo install conflux-node
+```
+
 ## Where this sits
 
 Depends on `conflux-net`, `conflux-proto` and `conflux-privacy`. Ships a `conflux-node` binary; `cflux node start` runs the same code.

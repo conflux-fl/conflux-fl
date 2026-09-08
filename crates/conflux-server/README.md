@@ -18,6 +18,18 @@ surface reports `/health`, `/round/status` and `/rounds`; a transient
 backend error backs off and retries, while a violated guarantee halts the
 loop and says why.
 
+## Install
+
+```bash
+cargo add conflux-server
+```
+
+It also ships a `conflux-server` binary:
+
+```bash
+cargo install conflux-server
+```
+
 ## Where this sits
 
 Depends on most of the workspace. Ships a `conflux-server` binary; `cflux server start` runs the same code, in-process.
