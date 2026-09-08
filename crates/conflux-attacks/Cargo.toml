@@ -9,9 +9,10 @@ rust-version.workspace = true
 publish = false
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
-conflux-proto = { path = "../conflux-proto" }
+conflux-proto.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 
@@ -19,4 +20,4 @@ rand_distr.workspace = true
 # Dev-only: this crate's own tests and example run each attack against a
 # real Aggregator. Never a normal dependency — conflux-server's build
 # must never pull in attack code, even transitively.
-conflux-core = { path = "../conflux-core" }
+conflux-core.workspace = true

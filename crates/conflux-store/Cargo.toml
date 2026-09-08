@@ -11,6 +11,7 @@ repository.workspace = true
 rust-version = "1.94.1"
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
 thiserror.workspace = true

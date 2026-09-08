@@ -6,16 +6,22 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
+# A dev tool for this repository's own reproductions: it runs the
+# manifests under `baselines/`, which are not shipped. Nothing a
+# third party could use, so nothing to publish — `conflux-attacks`
+# already says the same for its own, different reason (ADR 0010).
+publish = false
 
 [dependencies]
 # `conflux-config` owns the strategy registry we validate method names
 # against. The three family crates are linked ONLY to populate that
 # registry (their `inventory::submit!` entries) — see the force-link in
 # main.rs. None of this is `conflux-attacks`; the CI isolation edge holds.
-conflux-config = { path = "../conflux-config" }
-conflux-core = { path = "../conflux-core" }
-conflux-selector = { path = "../conflux-selector" }
-conflux-privacy = { path = "../conflux-privacy" }
+conflux-config.workspace = true
+conflux-core.workspace = true
+conflux-selector.workspace = true
+conflux-privacy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 # The sweep writes JSONL, one record per round.
 serde_json.workspace = true

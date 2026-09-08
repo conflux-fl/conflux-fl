@@ -6,9 +6,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
-conflux-proto = { path = "../conflux-proto" }
+conflux-proto.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt-multi-thread", "macros"] }
 thiserror.workspace = true
 tracing.workspace = true

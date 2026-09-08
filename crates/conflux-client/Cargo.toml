@@ -6,13 +6,14 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
 # The local hop to `conflux-node` speaks the same `FlTransport` schema as
 # every other hop, so this needs no transport of its own —
 # `PullTransport` is already exactly the client half.
-conflux-net = { path = "../conflux-net" }
-conflux-proto = { path = "../conflux-proto" }
+conflux-net.workspace = true
+conflux-proto.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -40,7 +41,7 @@ tonic.workspace = true
 # Example-only (the `burn_mlp` robust-aggregation demo): the real cited
 # aggregators. A dev-dependency, so it never enters the shipped SDK — and
 # `cargo build -p conflux-client` (no examples) still doesn't compile it.
-conflux-core = { path = "../conflux-core" }
+conflux-core.workspace = true
 
 # A real Burn MLP `ClientApp` — the deep-learning-in-Rust evaluation the
 # `logreg` spike deliberately isolated itself from. Opt-in only.

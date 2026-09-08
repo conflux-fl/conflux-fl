@@ -55,6 +55,25 @@ readme = "README.md"
 # would compile capabilities into crates that have no use for them and
 # hide which crate actually depends on what.
 [workspace.dependencies]
+# The workspace's own crates. `version` alongside `path` is what makes
+# them publishable: inside the workspace the path wins, and `cargo
+# publish` strips the path and ships the version requirement, which is
+# how a consumer's `cargo add conflux-server` pulls the rest of the
+# graph. These twelve move together with `package.version` above — a
+# release bumps them here, not in twelve manifests.
+conflux-buffer = { path = "crates/conflux-buffer", version = "0.5.0" }
+conflux-config = { path = "crates/conflux-config", version = "0.5.0" }
+conflux-core = { path = "crates/conflux-core", version = "0.5.0" }
+conflux-net = { path = "crates/conflux-net", version = "0.5.0" }
+conflux-node = { path = "crates/conflux-node", version = "0.5.0" }
+conflux-privacy = { path = "crates/conflux-privacy", version = "0.5.0" }
+conflux-proto = { path = "crates/conflux-proto", version = "0.5.0" }
+conflux-registry = { path = "crates/conflux-registry", version = "0.5.0" }
+conflux-reputation = { path = "crates/conflux-reputation", version = "0.5.0" }
+conflux-selector = { path = "crates/conflux-selector", version = "0.5.0" }
+conflux-server = { path = "crates/conflux-server", version = "0.5.0" }
+conflux-store = { path = "crates/conflux-store", version = "0.5.0" }
+
 # The `cflux` command line: derive-style argument parsing.
 clap = { version = "4.5", features = ["derive"] }
 async-trait = "0.1"

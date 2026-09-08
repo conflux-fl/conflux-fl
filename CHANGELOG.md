@@ -14,6 +14,62 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A strategy name nothing registers is now a validation error, not a
+  startup panic.** One typo — `CONFLUX_AGGREGATOR=krumm` — resolved
+  cleanly, passed validation, was pronounced healthy by `cflux config
+  check` *and* `cflux doctor`, and then panicked inside `AppState::new`
+  with a backtrace. Both pre-flight commands, whose entire purpose is
+  catching this before anything starts, gave a green light.
+
+  All three now refuse, with the near miss and the full registered set:
+
+  ```
+  error: aggregator = krumm (from env var CONFLUX_AGGREGATOR): nothing
+  registers an aggregator by this name — did you mean "krum"?
+  Registered: bulyan, centered_clipping, …
+  ```
+
+  The check is `conflux_config::unregistered_strategies`, deliberately
+  *not* part of `validate()`: the registry is a property of the linked
+  binary, not of the configuration, and `conflux-config` sits beneath
+  the crates that register into it — so a binary linking it alone sees
+  an empty registry and every name, `fedavg` included, would look
+  misspelled. `conflux-server` and `cflux` both link the strategy
+  crates, so both call it; a kind whose registry is empty is skipped for
+  the same reason.
+
+- **Invalid TLS material now refuses to start instead of leaving a
+  half-running server.** `tls_config()` was applied inside the spawned
+  gRPC task, where a failure panicked a task that `tokio::join!` does
+  not observe until the *other two* finish — and those run until
+  shutdown. So bad material produced a server that looked started: HTTP
+  answering, `/health` reporting ok, rounds ticking, no gRPC listener,
+  and the reason sitting in a handle nobody would join for hours. It is
+  now applied before the spawn and returns `ServeError::GrpcTls`, which
+  names the three variables to check.
+
+### Changed
+
+- **Every published crate is publishable to crates.io.** The 39 internal
+  dependencies were bare `{ path = "../x" }`; `cargo publish` strips the
+  path and needs a version requirement to ship in its place, so nothing
+  above `conflux-proto` could be packaged. They now come from
+  `[workspace.dependencies]` with `path` *and* `version`, which is also
+  one place to bump per release rather than thirty-nine.
+
+  `conflux-baselines` joins `conflux-attacks` in `publish = false`: it
+  runs this repository's own reproduction manifests, which are not
+  shipped.
+
+- **A README for each of the fifteen published crates.** No crate set
+  `readme`, so every crates.io page would have rendered blank below the
+  description. Each now carries badges, what the crate owns, where it
+  sits in the graph, and links to its deep dive on
+  [confluxfl.dev](https://confluxfl.dev), the API reference and the
+  architecture guide.
+
 ## [0.5.0] — 2026-09-07
 
 Conflux was already deciding a great deal quietly. This release makes it

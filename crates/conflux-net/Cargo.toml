@@ -6,9 +6,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
+readme = "README.md"
 
 [dependencies]
-conflux-proto = { path = "../conflux-proto" }
+conflux-proto.workspace = true
 # tls-aws-lc, not tls-ring: conflux-store's S3Store (aws-sdk-s3)
 # pulls in rustls with the aws-lc-rs crypto provider; Cargo's workspace-wide
 # feature unification means a `cargo test --workspace` run would otherwise
