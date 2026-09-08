@@ -14,6 +14,40 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-08
+
+The crates can go to crates.io. Getting there meant giving fifteen
+published crates a version requirement each can actually be published
+with, and a README each — and checking every one of them over first,
+which is what turned up two ways the framework could mislead you about
+its own state, and a third in the release workflow.
+
+### Added
+
+- **A README for each of the fifteen published crates.** No crate set
+  `readme`, so every crates.io page would have rendered blank below the
+  description. Each now carries badges, what the crate owns, where it
+  sits in the graph, and links to its deep dive on
+  [confluxfl.dev](https://confluxfl.dev), the API reference and the
+  architecture guide.
+
+- **`conflux_config::unregistered_strategies`**, the registry check
+  behind the fix below. Public because a binary that links the strategy
+  crates — and only such a binary — can answer the question it asks.
+
+### Changed
+
+- **Every published crate is publishable to crates.io.** The 39 internal
+  dependencies were bare `{ path = "../x" }`; `cargo publish` strips the
+  path and needs a version requirement to ship in its place, so nothing
+  above `conflux-proto` could be packaged. They now come from
+  `[workspace.dependencies]` with `path` *and* `version`, which is also
+  one place to bump per release rather than thirty-nine.
+
+  `conflux-baselines` joins `conflux-attacks` in `publish = false`: it
+  runs this repository's own reproduction manifests, which are not
+  shipped.
+
 ### Fixed
 
 - **A strategy name nothing registers is now a validation error, not a
@@ -50,25 +84,22 @@ promised before `1.0`.
   now applied before the spawn and returns `ServeError::GrpcTls`, which
   names the three variables to check.
 
-### Changed
+- **The release workflow no longer publishes a release nobody wrote
+  notes for.** When `CHANGELOG.md` had no section for the tag, the
+  workflow substituted "No CHANGELOG section for $v — see CHANGELOG.md."
+  and carried on.
 
-- **Every published crate is publishable to crates.io.** The 39 internal
-  dependencies were bare `{ path = "../x" }`; `cargo publish` strips the
-  path and needs a version requirement to ship in its place, so nothing
-  above `conflux-proto` could be packaged. They now come from
-  `[workspace.dependencies]` with `path` *and* `version`, which is also
-  one place to bump per release rather than thirty-nine.
+  That fallback turned a caught mistake into a shipped one. A tag pushed
+  before its release commit produced a complete release: four binaries
+  named `cflux-vX.Y.Z-*` around a binary reporting the *previous*
+  version, placeholder notes, and `latest` moved to point at them —
+  which is what the site's one-line installer serves. It was deleted
+  minutes later, with zero downloads, but nothing in the pipeline
+  objected at any point.
 
-  `conflux-baselines` joins `conflux-attacks` in `publish = false`: it
-  runs this repository's own reproduction manifests, which are not
-  shipped.
-
-- **A README for each of the fifteen published crates.** No crate set
-  `readme`, so every crates.io page would have rendered blank below the
-  description. Each now carries badges, what the crate owns, where it
-  sits in the graph, and links to its deep dive on
-  [confluxfl.dev](https://confluxfl.dev), the API reference and the
-  architecture guide.
+  A missing section now fails the job, as does one that exists and says
+  nothing. No release is created, so the `binaries` job that needs it
+  never runs and nothing ships.
 
 ## [0.5.0] — 2026-09-07
 
@@ -1130,7 +1161,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.6.0
 [0.5.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.5.0
 [0.4.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.4.0
 [0.3.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.3.0
