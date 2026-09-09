@@ -56,7 +56,7 @@ jobs:
             exit 1
           fi
           echo "--- release notes ---"; head -20 /tmp/notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: Conflux FL ${{ github.ref_name }}
           body_path: /tmp/notes.md
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: install.sh
@@ -183,7 +183,7 @@ jobs:
             shasum -a 256 "$archive" > "$archive.sha256"
           fi
           echo "--- packaged ---"; ls -la "$archive" "$archive.sha256"
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           files: |
