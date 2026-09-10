@@ -76,6 +76,48 @@ Two obligations that are easy to miss:
   defects were found by writing it, and none was visible to a
   single-round test.
 
+- **If your method's paper states a numeric result**, it should come
+  with a reproduction under `baselines/<method>-<author>-<year>/`. Four
+  exist to copy from. What makes one count:
+  - **The expected value is measured here, not copied from the paper.**
+    `krum-blanchard-2017` records `expected = 0.88` with the measurement
+    beside it — *"0.890 held-out @ round 15 — unmoved by independent
+    client seeding, since krum selects one update per round"*. A number
+    lifted from a table proves the table was read, not that this
+    implementation reproduces it.
+  - **The scenario isolates your method's own claim.** Krum's manifest
+    sets `no_reputation = true` so the reproduction tests Krum's defense
+    rather than Conflux's separate reputation filter. If both run, a pass
+    says nothing about either.
+  - **The tolerance is justified**, not padded until it passes.
+
+  If a reproduction is genuinely impractical — the paper reports no
+  number, or it needs a dataset we cannot ship — say so in the pull
+  request. That is a reasonable answer; silence is not.
+
+## Working on `conflux-attacks`
+
+The attack crate is **not published to crates.io**, deliberately rather
+than by omission. Attack code that could run against a production
+aggregator has to be *structurally* incapable of shipping in the
+production binary: CI asserts `conflux-server`'s dependency tree never
+contains it at any depth, and `publish = false` closes the other route. A
+crates.io release would be an installable copy of the exact thing that
+edge exists to prevent.
+
+The consequence is worth stating plainly, because it lands on the people
+most likely to want the crate: security researchers are the one audience
+who must clone rather than `cargo add`.
+
+```bash
+git clone https://github.com/conflux-fl/conflux-fl
+cargo test -p conflux-attacks --test attack_vs_defense
+```
+
+That runs every shipped attack against every shipped aggregator. New
+attacks carry the same citation discipline as the defenses — a published
+attack, implemented against its paper — and join that matrix.
+
 ## Numeric code
 
 Two rules, each learned from a real defect:

@@ -16,6 +16,27 @@ promised before `1.0`.
 
 ### Added
 
+- **`CONTRIBUTING.md` states the bar a new aggregation method has to
+  clear.** The reproduction machinery has existed since `0.2.0` and four
+  baselines use it, but nothing told a contributor it was expected or
+  what counts as proof. Two things make a reproduction real, and neither
+  is guessable from outside: the expected value is **measured here, with
+  its conditions recorded beside it** rather than copied from the paper's
+  table, and the scenario **isolates the method's own claim** — Krum's
+  manifest sets `no_reputation = true` so the test measures Krum's
+  defense rather than Conflux's separate reputation filter. An
+  impractical reproduction is a fine answer in the pull request; silence
+  is not.
+
+- **The `conflux-attacks` trade-off is stated rather than discovered.**
+  The crate is `publish = false` so no installable copy of attack code
+  exists for a production build to reach — the same reasoning as the CI
+  edge that keeps it out of `conflux-server`'s tree. The cost is real and
+  now written down in both `CONTRIBUTING.md` and the attack-testing
+  guide: security researchers, the audience most likely to want it, are
+  the one group who must clone rather than `cargo add`.
+
+
 - **A prebuilt `cflux` for ARM64 Linux.** `edge` is one of the four
   topologies the framework ships, its own documentation describes it as
   "gateways, SBCs, IoT" — hardware that is overwhelmingly `aarch64` — and
@@ -32,6 +53,12 @@ promised before `1.0`.
   this target had no build before ARM runners existed.
 
 ### Fixed
+
+- **`SECURITY.md`'s supported-versions table said `0.1.x`** at `v0.6.0`.
+  It now names the current `0.x` minor rather than a number, because a
+  hardcoded version there goes stale the day after a release and a
+  security policy that is visibly out of date is worse than one that is
+  general.
 
 - **The glibc-floor check now covers every Linux target, not just the
   first one.** It was guarded on `matrix.target == 'x86_64-unknown-linux-gnu'`,
