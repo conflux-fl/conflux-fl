@@ -4,10 +4,14 @@
 
 | Version | Supported |
 |---|---|
-| 0.1.x | Yes |
+| Latest `0.x` minor | Yes |
+| Anything older | No |
 
 Conflux FL is pre-1.0. Fixes land on the current minor version; there
-are no long-term support branches yet.
+are no long-term support branches yet. The table names the *current*
+minor rather than a number on purpose — a hardcoded version here goes
+stale the day after a release, and a security policy that is visibly out
+of date is worse than one that is merely general.
 
 ## Reporting a vulnerability
 
