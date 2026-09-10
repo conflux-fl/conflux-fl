@@ -14,7 +14,36 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-10
+
+The release after going public, and mostly about being legible to the
+people who can now reach it. A topology the framework advertises finally
+has a binary for the hardware it names; the policies that governed
+contributions from inside the design records now say so where a
+contributor would look; and installing is a `cargo install` rather than a
+git URL.
+
+One latent bug went with it: the check that stops a Linux binary shipping
+with an unverified glibc floor was written when there was one Linux
+target, and adding a second under the old guard would have shipped it
+unchecked.
+
 ### Added
+
+- **A prebuilt `cflux` for ARM64 Linux.** `edge` is one of the four
+  topologies the framework ships, its own documentation describes it as
+  "gateways, SBCs, IoT" — hardware that is overwhelmingly `aarch64` — and
+  the installer answered that hardware with "no prebuilt Linux binary for
+  aarch64 yet". The framework advertised a deployment shape it had no
+  binary for.
+
+  The build runs on `ubuntu-22.04-arm`, matching the x86-64 row's Ubuntu
+  rather than the newest ARM image. Same base means the same glibc, so
+  one `MIN_GLIBC` stays correct for both Linux targets instead of needing
+  a per-architecture floor. It is also a *native* build — the runner is
+  `aarch64` — which is what makes it cheap: `cflux` links `aws-lc-sys`,
+  whose cross-compilation is a standing toolchain problem and the reason
+  this target had no build before ARM runners existed.
 
 - **`CONTRIBUTING.md` states the bar a new aggregation method has to
   clear.** The reproduction machinery has existed since `0.2.0` and four
@@ -36,37 +65,6 @@ promised before `1.0`.
   guide: security researchers, the audience most likely to want it, are
   the one group who must clone rather than `cargo add`.
 
-
-- **A prebuilt `cflux` for ARM64 Linux.** `edge` is one of the four
-  topologies the framework ships, its own documentation describes it as
-  "gateways, SBCs, IoT" — hardware that is overwhelmingly `aarch64` — and
-  the installer answered that hardware with "no prebuilt Linux binary for
-  aarch64 yet". The framework advertised a deployment shape it had no
-  binary for.
-
-  The build runs on `ubuntu-22.04-arm`, matching the x86-64 row's Ubuntu
-  rather than the newest ARM image. Same base means the same glibc, so
-  one `MIN_GLIBC` stays correct for both Linux targets instead of needing
-  a per-architecture floor. It is also a *native* build — the runner is
-  `aarch64` — which is what makes it cheap: `cflux` links `aws-lc-sys`,
-  whose cross-compilation is a standing toolchain problem and the reason
-  this target had no build before ARM runners existed.
-
-### Fixed
-
-- **`SECURITY.md`'s supported-versions table said `0.1.x`** at `v0.6.0`.
-  It now names the current `0.x` minor rather than a number, because a
-  hardcoded version there goes stale the day after a release and a
-  security policy that is visibly out of date is worse than one that is
-  general.
-
-- **The glibc-floor check now covers every Linux target, not just the
-  first one.** It was guarded on `matrix.target == 'x86_64-unknown-linux-gnu'`,
-  written when that was the only glibc-linked target. Adding ARM64 under
-  that guard would have shipped a binary whose floor was never verified —
-  reintroducing exactly what the check was added to close. It now matches
-  any `-unknown-linux-gnu` target.
-
 ### Changed
 
 - **Installation instructions point at crates.io.** `cargo install
@@ -87,6 +85,19 @@ promised before `1.0`.
   `cargo install conflux-server` now works in a Dockerfile build stage.
 
 ### Fixed
+
+- **The glibc-floor check now covers every Linux target, not just the
+  first one.** It was guarded on `matrix.target == 'x86_64-unknown-linux-gnu'`,
+  written when that was the only glibc-linked target. Adding ARM64 under
+  that guard would have shipped a binary whose floor was never verified —
+  reintroducing exactly what the check was added to close. It now matches
+  any `-unknown-linux-gnu` target.
+
+- **`SECURITY.md`'s supported-versions table said `0.1.x`** at `v0.6.0`.
+  It now names the current `0.x` minor rather than a number, because a
+  hardcoded version there goes stale the day after a release and a
+  security policy that is visibly out of date is worse than one that is
+  general.
 
 - **The crate reference claimed `conflux-core` ships twelve aggregation
   methods.** It ships twenty-two, across five families; the list
@@ -1242,7 +1253,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.7.0
 [0.6.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.6.0
 [0.5.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.5.0
 [0.4.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.4.0
