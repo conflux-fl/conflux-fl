@@ -14,6 +14,32 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Added
+
+- **A prebuilt `cflux` for ARM64 Linux.** `edge` is one of the four
+  topologies the framework ships, its own documentation describes it as
+  "gateways, SBCs, IoT" — hardware that is overwhelmingly `aarch64` — and
+  the installer answered that hardware with "no prebuilt Linux binary for
+  aarch64 yet". The framework advertised a deployment shape it had no
+  binary for.
+
+  The build runs on `ubuntu-22.04-arm`, matching the x86-64 row's Ubuntu
+  rather than the newest ARM image. Same base means the same glibc, so
+  one `MIN_GLIBC` stays correct for both Linux targets instead of needing
+  a per-architecture floor. It is also a *native* build — the runner is
+  `aarch64` — which is what makes it cheap: `cflux` links `aws-lc-sys`,
+  whose cross-compilation is a standing toolchain problem and the reason
+  this target had no build before ARM runners existed.
+
+### Fixed
+
+- **The glibc-floor check now covers every Linux target, not just the
+  first one.** It was guarded on `matrix.target == 'x86_64-unknown-linux-gnu'`,
+  written when that was the only glibc-linked target. Adding ARM64 under
+  that guard would have shipped a binary whose floor was never verified —
+  reintroducing exactly what the check was added to close. It now matches
+  any `-unknown-linux-gnu` target.
+
 ### Changed
 
 - **Installation instructions point at crates.io.** `cargo install
