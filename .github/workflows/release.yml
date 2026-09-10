@@ -112,6 +112,18 @@ jobs:
           # without changing that constant is caught by the check below,
           # but the fix belongs in the same commit as the bump.
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", archive: tar.gz }
+          # `ubuntu-22.04-arm`, deliberately matching the x86-64 row's
+          # Ubuntu rather than taking the newest ARM image. Same base means
+          # the same glibc, so one `MIN_GLIBC` in `install.sh` stays correct
+          # for both Linux targets instead of needing a per-architecture
+          # floor — and the check below now holds both to it.
+          #
+          # Native, not cross-compiled: the runner is aarch64, so `--target
+          # aarch64-unknown-linux-gnu` builds on its own architecture. That
+          # is what makes this cheap — `cflux` links `aws-lc-sys`, whose
+          # cross-compilation is a standing toolchain problem and the reason
+          # this target had no build until ARM runners existed.
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, ext: "", archive: tar.gz }
           - { os: macos-latest, target: aarch64-apple-darwin, ext: "", archive: tar.gz }
           # Cross-compiled from the arm64 runner, not built on an Intel
           # one: GitHub retired `macos-13`, and the Intel images that
@@ -143,7 +155,10 @@ jobs:
       # cannot do it: it runs on `ubuntu-latest`, so a floor derived
       # there would be a different runner's answer.
       - name: the installer's glibc floor matches this binary
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # Every glibc-linked Linux target, not just the first one: a target
+        # added without extending this would ship with its floor unchecked,
+        # reintroducing exactly what this check was added to close.
+        if: endsWith(matrix.target, '-unknown-linux-gnu')
         shell: bash
         run: |
           set -euo pipefail

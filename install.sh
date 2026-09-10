@@ -117,13 +117,17 @@ detect_target() {
 		if [ -f /etc/alpine-release ] || (ldd --version 2>&1 | grep -qi musl); then
 			die "this build links glibc and will not run on musl (Alpine).
   Build from source instead:
-    cargo install --git https://github.com/${REPO} cflux"
+    cargo install cflux"
 		fi
 		case "$arch" in
 		x86_64 | amd64) TARGET="x86_64-unknown-linux-gnu" ;;
+		# The `edge` topology names gateways, SBCs and IoT devices, which
+		# are overwhelmingly this architecture — it had no build until
+		# ARM runners made one cheap.
+		aarch64 | arm64) TARGET="aarch64-unknown-linux-gnu" ;;
 		*) die "no prebuilt Linux binary for ${arch} yet.
   Build from source instead:
-    cargo install --git https://github.com/${REPO} cflux" ;;
+    cargo install cflux" ;;
 		esac
 		ARCHIVE_EXT="tar.gz"
 		;;
