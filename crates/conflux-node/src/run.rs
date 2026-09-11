@@ -74,80 +74,164 @@ where
     }
 }
 
-/// Reads the node's configuration from the environment, registers
-/// upstream, and serves the local hop until `shutdown` completes.
+/// Everything a node needs, already resolved.
+///
+/// Separate from *reading* it because the environment is process-global:
+/// it can hold one `CONFLUX_LOCAL_ADDR`, not N of them. Running several
+/// nodes inside one process — a whole federation on one machine — needs
+/// each to be handed its own configuration directly, so resolution and
+/// running are two steps rather than one.
+///
+/// [`Self::from_env`] is the binary's path; constructing this directly is
+/// the in-process path. Both end at [`run`], so neither is a second
+/// implementation of the other.
+#[derive(Debug, Clone)]
+pub struct NodeConfig {
+    /// Behavioural mode; decides how strict the stub-client guard is.
+    pub mode: RuntimeMode,
+    /// Whether the placeholder `ClientApp` is permitted.
+    pub allow_stub_client: bool,
+    /// Which kind of `ClientApp` will connect to the local hop.
+    pub client_app_kind: ClientAppKind,
+    /// The server to register with, e.g. `http://127.0.0.1:50051`.
+    pub server_addr: String,
+    /// This node's identity upstream.
+    pub client_id: String,
+    /// Where the local hop listens for its `ClientApp`. **Must differ per
+    /// node** when several run in one process.
+    pub local_addr: SocketAddr,
+    /// Push or pull.
+    pub connection_mode: ConnectionMode,
+    /// Optional client-side DP, applied before an update leaves the node.
+    pub local_privacy: Option<GaussianClippingPrivacy>,
+    /// Seed for that mechanism, when reproducibility matters.
+    pub privacy_seed: Option<u64>,
+    /// The credential presented at registration.
+    pub auth_token: String,
+    /// Client-side TLS posture for the upstream hop.
+    pub client_tls: ClientTls,
+}
+
+/// The default credential, kept as a constant because two places compare
+/// against it: the fallback below, and the log line that reports whether
+/// a real one was configured.
+const PLACEHOLDER_AUTH_TOKEN: &str = "node-auth-token";
+
+impl NodeConfig {
+    /// Resolves a node's configuration from the `CONFLUX_*` environment —
+    /// what `conflux-node` and `cflux node start` both use.
+    pub fn from_env() -> Result<Self, RunError> {
+        let mode = match std::env::var("CONFLUX_MODE").as_deref() {
+            Ok("production") => RuntimeMode::Production,
+            _ => RuntimeMode::Research,
+        };
+        // Mirrors `conflux-config::Mode::defaults().allow_stub_client`'s own
+        // per-mode default (research=true, production=false) — kept inline
+        // here rather than a `conflux-config` dependency, see
+        // `startup_guard.rs`'s module doc comment.
+        let allow_stub_client = match std::env::var("CONFLUX_ALLOW_STUB_CLIENT").as_deref() {
+            Ok("true") => true,
+            Ok("false") => false,
+            _ => mode == RuntimeMode::Research,
+        };
+        let client_app_kind = match std::env::var("CONFLUX_CLIENT_APP_KIND").as_deref() {
+            Ok("real") => ClientAppKind::Real,
+            // Default "stub" matches the shipped placeholder
+            // (`python/conflux_client/stub_client.py`).
+            _ => ClientAppKind::Stub,
+        };
+
+        let connection_mode = match std::env::var("CONFLUX_CONNECTION_MODE").as_deref() {
+            Ok("push") => ConnectionMode::Push,
+            _ => ConnectionMode::Pull,
+        };
+
+        // Optional local DP, read from env vars for the same reason
+        // `startup_guard.rs` reads its own — `conflux-node` calls no
+        // `conflux-config` API directly, so the few values it needs are
+        // read here and their builtin fallbacks mirrored inline. These
+        // names and defaults match `conflux-config`'s
+        // `client_side_privacy_transform` (false), `clip_norm` (1.0), and
+        // `noise_multiplier` (1.0) exactly.
+        let client_side_privacy = matches!(
+            std::env::var("CONFLUX_CLIENT_SIDE_PRIVACY_TRANSFORM").as_deref(),
+            Ok("true")
+        );
+        let local_privacy = client_side_privacy
+            .then(|| {
+                Ok::<_, RunError>(GaussianClippingPrivacy {
+                    clip_norm: parse_env("CONFLUX_CLIP_NORM")?.unwrap_or(1.0),
+                    noise_multiplier: parse_env("CONFLUX_NOISE_MULTIPLIER")?.unwrap_or(1.0),
+                })
+            })
+            .transpose()?;
+
+        Ok(Self {
+            mode,
+            allow_stub_client,
+            client_app_kind,
+            server_addr: std::env::var("CONFLUX_SERVER_ADDR")
+                .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string()),
+            client_id: std::env::var("CONFLUX_CLIENT_ID").unwrap_or_else(|_| "node-1".to_string()),
+            local_addr: parse_env("CONFLUX_LOCAL_ADDR")?
+                .unwrap_or_else(|| "127.0.0.1:47100".parse().expect("a literal address")),
+            connection_mode,
+            local_privacy,
+            privacy_seed: parse_env("CONFLUX_SEED_VALUE")?,
+            // The credential this node presents at registration. Defaults to
+            // the legacy placeholder so an allow-list-by-id deployment on a
+            // trusted network keeps working unchanged; set it to a real
+            // per-client token or JWT for a server enforcing
+            // `require_node_auth` / `auth = "jwt"`.
+            auth_token: std::env::var("CONFLUX_NODE_AUTH_TOKEN")
+                .unwrap_or_else(|_| PLACEHOLDER_AUTH_TOKEN.to_string()),
+            // Optional client-side TLS, resolved from `CONFLUX_TLS_*` into
+            // one of three postures — see `resolve_client_tls`.
+            client_tls: resolve_client_tls(),
+        })
+    }
+}
+
+/// Reads the node's configuration from the environment, then runs it.
+///
+/// The binary's entry point; [`run`] is the same thing given a
+/// configuration you built yourself.
 pub async fn run_from_env(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RunError> {
-    let mode = match std::env::var("CONFLUX_MODE").as_deref() {
-        Ok("production") => RuntimeMode::Production,
-        _ => RuntimeMode::Research,
-    };
-    // Mirrors `conflux-config::Mode::defaults().allow_stub_client`'s own
-    // per-mode default (research=true, production=false) — kept inline
-    // here rather than a `conflux-config` dependency, see
-    // `startup_guard.rs`'s module doc comment.
-    let allow_stub_client = match std::env::var("CONFLUX_ALLOW_STUB_CLIENT").as_deref() {
-        Ok("true") => true,
-        Ok("false") => false,
-        _ => mode == RuntimeMode::Research,
-    };
-    let client_app_kind = match std::env::var("CONFLUX_CLIENT_APP_KIND").as_deref() {
-        Ok("real") => ClientAppKind::Real,
-        // Default "stub" matches the shipped placeholder
-        // (`python/conflux_client/stub_client.py`).
-        _ => ClientAppKind::Stub,
-    };
+    run(NodeConfig::from_env()?, shutdown).await
+}
+
+/// Registers upstream and serves the local hop until `shutdown` completes.
+///
+/// The stub-client guard runs here rather than in [`NodeConfig::from_env`]
+/// deliberately: a configuration built in code must clear the same bar as
+/// one read from the environment, or the in-process path would be a way
+/// to run production against the placeholder `ClientApp` — exactly what
+/// the guard exists to prevent.
+pub async fn run(
+    config: NodeConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), RunError> {
+    let NodeConfig {
+        mode,
+        allow_stub_client,
+        client_app_kind,
+        server_addr,
+        client_id,
+        local_addr,
+        connection_mode,
+        local_privacy,
+        privacy_seed,
+        auth_token,
+        client_tls,
+    } = config;
+
     validate_client_app_startup(mode, allow_stub_client, client_app_kind)?;
 
-    let server_addr = std::env::var("CONFLUX_SERVER_ADDR")
-        .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
-    let client_id = std::env::var("CONFLUX_CLIENT_ID").unwrap_or_else(|_| "node-1".to_string());
-    let local_addr: SocketAddr = parse_env("CONFLUX_LOCAL_ADDR")?
-        .unwrap_or_else(|| "127.0.0.1:47100".parse().expect("a literal address"));
-
-    let connection_mode = match std::env::var("CONFLUX_CONNECTION_MODE").as_deref() {
-        Ok("push") => ConnectionMode::Push,
-        _ => ConnectionMode::Pull,
-    };
-
-    // Registration is identical in both modes — only the transport that
-    // carries it differs — but it has to happen on the same transport the
-    // node will go on using, not a throwaway one, so it lives inside each
-    // branch rather than before them.
-    // Optional local DP, read from env vars for the same reason
-    // `startup_guard.rs` reads its own — `conflux-node` calls no
-    // `conflux-config` API directly, so the few values it needs are
-    // read here and their builtin fallbacks mirrored inline. These
-    // names and defaults match
-    // `conflux-config`'s `client_side_privacy_transform` (false),
-    // `clip_norm` (1.0), and `noise_multiplier` (1.0) exactly.
-    let client_side_privacy = matches!(
-        std::env::var("CONFLUX_CLIENT_SIDE_PRIVACY_TRANSFORM").as_deref(),
-        Ok("true")
-    );
-    let local_privacy = client_side_privacy.then(|| {
-        Ok::<_, RunError>(GaussianClippingPrivacy {
-            clip_norm: parse_env("CONFLUX_CLIP_NORM")?.unwrap_or(1.0),
-            noise_multiplier: parse_env("CONFLUX_NOISE_MULTIPLIER")?.unwrap_or(1.0),
-        })
-    });
-    let local_privacy = local_privacy.transpose()?;
-    let privacy_seed: Option<u64> = parse_env("CONFLUX_SEED_VALUE")?;
-
-    // The credential this node presents at registration. Defaults to the
-    // legacy placeholder so an allow-list-by-id deployment on a trusted
-    // network keeps working unchanged; set it to a real per-client token or
-    // JWT for a server enforcing `require_node_auth` / `auth = "jwt"`.
-    let auth_token =
-        std::env::var("CONFLUX_NODE_AUTH_TOKEN").unwrap_or_else(|_| "node-auth-token".to_string());
-
-    // Optional client-side TLS, resolved from `CONFLUX_TLS_*` env into one
-    // of three postures — plaintext, server-authenticated (CA + domain), or
-    // mutual (all four vars) — see `resolve_client_tls`.
-    let client_tls = resolve_client_tls();
     let tls_mode = client_tls.label();
-    let custom_auth_token = auth_token != "node-auth-token";
+    let custom_auth_token = auth_token != PLACEHOLDER_AUTH_TOKEN;
+    let client_side_privacy = local_privacy.is_some();
 
     let bridge = match connection_mode {
         ConnectionMode::Pull => {
@@ -231,8 +315,14 @@ fn apply_local_privacy(
     }
 }
 
-/// The node's client-side TLS posture, resolved from `CONFLUX_TLS_*` env.
-enum ClientTls {
+/// The node's client-side TLS posture.
+///
+/// Public because [`NodeConfig`] carries one: a caller building a
+/// configuration in code has to be able to say "plaintext" — or anything
+/// else — as precisely as the environment can. `resolve_client_tls`
+/// derives it from `CONFLUX_TLS_*` for the binary's path.
+#[derive(Debug, Clone)]
+pub enum ClientTls {
     /// No TLS — plaintext, for the local loopback or a trusted network.
     Plaintext,
     /// Server-authenticated TLS with no client certificate; the node's
@@ -244,14 +334,15 @@ enum ClientTls {
 
 impl ClientTls {
     /// The tonic config to connect with, or `None` for a plaintext hop.
-    fn config(&self) -> Option<ClientTlsConfig> {
+    pub fn config(&self) -> Option<ClientTlsConfig> {
         match self {
             ClientTls::Plaintext => None,
             ClientTls::ServerAuth(c) | ClientTls::Mutual(c) => Some(c.clone()),
         }
     }
 
-    fn label(&self) -> &'static str {
+    /// A short word for logs: `off`, `server-auth` or `mutual`.
+    pub fn label(&self) -> &'static str {
         match self {
             ClientTls::Plaintext => "off",
             ClientTls::ServerAuth(_) => "server-auth",
@@ -302,5 +393,66 @@ fn resolve_client_tls() -> ClientTls {
              CONFLUX_TLS_SERVER_CA_PATH + CONFLUX_TLS_DOMAIN (server-authenticated TLS); \
              or all four, adding CONFLUX_TLS_CLIENT_CERT_PATH + CONFLUX_TLS_CLIENT_KEY_PATH (mTLS)"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn research_default() -> NodeConfig {
+        NodeConfig {
+            mode: RuntimeMode::Research,
+            allow_stub_client: true,
+            client_app_kind: ClientAppKind::Stub,
+            server_addr: "http://127.0.0.1:50051".to_string(),
+            client_id: "node-1".to_string(),
+            local_addr: "127.0.0.1:47100".parse().unwrap(),
+            connection_mode: ConnectionMode::Pull,
+            local_privacy: None,
+            privacy_seed: None,
+            auth_token: PLACEHOLDER_AUTH_TOKEN.to_string(),
+            client_tls: ClientTls::Plaintext,
+        }
+    }
+
+    /// The reason the guard moved out of `from_env` and into `run`.
+    ///
+    /// Splitting resolution from running created a second way in — a
+    /// configuration built in code. If the guard had stayed with the
+    /// environment read, that second way would bypass it, and running a
+    /// production federation against the placeholder `ClientApp` would
+    /// become possible by construction. It has to refuse either path.
+    #[tokio::test]
+    async fn a_config_built_in_code_still_cannot_run_production_on_the_stub() {
+        let config = NodeConfig {
+            mode: RuntimeMode::Production,
+            allow_stub_client: false,
+            client_app_kind: ClientAppKind::Stub,
+            ..research_default()
+        };
+        // `run` refuses before it touches the network, so this never
+        // connects to anything.
+        let err = run(config, std::future::pending()).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                RunError::StartupGuard(StartupGuardError::ProductionRefusesStubClient)
+            ),
+            "expected the stub-client guard, got: {err}"
+        );
+    }
+
+    /// Two doors, one room: the binary's path and the in-process path must
+    /// end at the same `run`, or they are two implementations wearing one
+    /// name — the thing ADR 0004 keeps the node from becoming.
+    #[test]
+    fn from_env_and_a_hand_built_config_describe_the_same_shape() {
+        let built = research_default();
+        // Every field `from_env` sets is a field a caller can set, which is
+        // what makes the in-process path a peer rather than a subset.
+        assert_eq!(built.connection_mode, ConnectionMode::Pull);
+        assert_eq!(built.client_tls.label(), "off");
+        assert!(built.local_privacy.is_none());
     }
 }

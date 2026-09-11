@@ -14,6 +14,31 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Added
+
+- **`conflux-node` can be configured in code, not only from the
+  environment.** `NodeConfig` carries everything a node needs already
+  resolved; `NodeConfig::from_env()` reads it from `CONFLUX_*` as before,
+  and `run(config, shutdown)` runs it. `run_from_env` is now a two-line
+  wrapper over both, so the binary's path and a programmatic one end at
+  the same implementation rather than being two.
+
+  The reason is arithmetic: the environment is process-global, so it can
+  hold one `CONFLUX_LOCAL_ADDR`, not N of them. Running several nodes
+  inside a single process — a whole federation on one machine — requires
+  handing each its own configuration directly.
+
+  `ClientTls` became public for the same reason. A configuration built in
+  code has to express any posture the environment can, or the in-process
+  path is a lesser thing whose edge someone eventually hits.
+
+  **The stub-client guard moved into `run`, deliberately.** Splitting
+  resolution from running creates a second way in, and had the guard
+  stayed with the environment read, that second way would bypass it —
+  making "production against the placeholder `ClientApp`" reachable by
+  construction, which is precisely what ADR 0004's guard prevents. A test
+  fails if it is ever moved back.
+
 ## [0.7.0] — 2026-09-10
 
 The release after going public, and mostly about being legible to the
