@@ -49,6 +49,18 @@ pub enum RunError {
         /// The underlying error.
         source: std::io::Error,
     },
+    /// The local listener, already bound, would not say what address it
+    /// is bound to.
+    ///
+    /// Exceptional — the socket exists by this point — but not
+    /// recoverable: on port 0 the address the OS chose is knowable only
+    /// this way, and a node that cannot report its local hop is one no
+    /// `ClientApp` can find.
+    #[error("the local listener would not report its own address: {source}")]
+    ListenerAddr {
+        /// The underlying error.
+        source: std::io::Error,
+    },
     /// The local gRPC server stopped with an error.
     #[error("local grpc server failed: {0}")]
     LocalServer(#[source] tonic::transport::Error),
@@ -99,6 +111,10 @@ pub struct NodeConfig {
     pub client_id: String,
     /// Where the local hop listens for its `ClientApp`. **Must differ per
     /// node** when several run in one process.
+    ///
+    /// Used by [`run`], which binds it. Ignored by [`run_on`], where the
+    /// caller's listener decides — that is how N nodes get N distinct
+    /// ports without any of them being guessed.
     pub local_addr: SocketAddr,
     /// Push or pull.
     pub connection_mode: ConnectionMode,
@@ -202,14 +218,47 @@ pub async fn run_from_env(
     run(NodeConfig::from_env()?, shutdown).await
 }
 
-/// Registers upstream and serves the local hop until `shutdown` completes.
+/// Binds [`NodeConfig::local_addr`] and runs a node on it until
+/// `shutdown` completes.
 ///
-/// The stub-client guard runs here rather than in [`NodeConfig::from_env`]
-/// deliberately: a configuration built in code must clear the same bar as
-/// one read from the environment, or the in-process path would be a way
-/// to run production against the placeholder `ClientApp` — exactly what
-/// the guard exists to prevent.
+/// Binding happens before registering upstream, which is the safer
+/// order: a node that cannot get its port fails without first announcing
+/// itself to a server that would then wait for it.
 pub async fn run(
+    config: NodeConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), RunError> {
+    let local_addr = config.local_addr;
+    let listener = tokio::net::TcpListener::bind(local_addr)
+        .await
+        .map_err(|source| RunError::Bind {
+            addr: local_addr,
+            source,
+        })?;
+    run_on(listener, config, shutdown).await
+}
+
+/// Runs a node on a listener the caller already bound.
+///
+/// Exists because ports cannot be guessed. Several nodes in one process
+/// need several distinct local ports, and the only race-free way to get
+/// them is to bind `127.0.0.1:0` and read back what the OS chose — which
+/// only the caller doing the binding can learn. Passing the listener in
+/// keeps that knowledge where it is needed.
+///
+/// [`NodeConfig::local_addr`] is **ignored** here; `listener` decides.
+/// The log line reports the listener's real address, since a node bound
+/// on port 0 reporting `:0` would be worse than saying nothing.
+///
+/// The stub-client guard runs here rather than in
+/// [`NodeConfig::from_env`] deliberately, and here rather than in
+/// [`run`] for the same reason: a configuration built in code, on a
+/// listener handed in by an orchestrator, must clear the same bar as one
+/// read from the environment — or the in-process path would be a way to
+/// run production against the placeholder `ClientApp`, exactly what the
+/// guard exists to prevent.
+pub async fn run_on(
+    listener: tokio::net::TcpListener,
     config: NodeConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RunError> {
@@ -219,7 +268,10 @@ pub async fn run(
         client_app_kind,
         server_addr,
         client_id,
-        local_addr,
+        // Ignored: `listener` is already bound, and to something that
+        // may well be a different port. `run` is where this field is
+        // read.
+        local_addr: _,
         connection_mode,
         local_privacy,
         privacy_seed,
@@ -270,14 +322,11 @@ pub async fn run(
         "registered with conflux-server"
     );
 
-    let listener = tokio::net::TcpListener::bind(local_addr)
-        .await
-        .map_err(|source| RunError::Bind {
-            addr: local_addr,
-            source,
-        })?;
+    // The listener's own address, not the one that was asked for: a node
+    // bound on port 0 has a real port now, and that is the one an
+    // operator — or an orchestrator — needs to see.
     tracing::info!(
-        local_addr = %listener.local_addr().map_err(|source| RunError::Bind { addr: local_addr, source })?,
+        local_addr = %listener.local_addr().map_err(|source| RunError::ListenerAddr { source })?,
         "local gRPC server listening for the ClientApp"
     );
 

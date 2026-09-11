@@ -20,6 +20,7 @@ use std::sync::Arc;
 use conflux_config::{AuthMode, ConfigSource, Overrides, ProfileAxis};
 use conflux_net::FlTransportService;
 use conflux_proto::fl_transport_server::FlTransportServer;
+use tokio_stream::wrappers::TcpListenerStream;
 
 use crate::{AdminToken, AppState, resolve_server_tls, run_round, validate_jwt_startup};
 
@@ -87,11 +88,30 @@ pub enum ServeError {
     /// popular port.
     #[error(
         "cannot bind {addr}: {source}\n  Another process already holds that address. \
-         Choose a different one with --http-addr, or set CONFLUX_HTTP_ADDR."
+         Choose a different one with {flag}, or set {var}."
     )]
     Bind {
         /// The address that was refused.
         addr: SocketAddr,
+        /// The flag that moves it — `--grpc-addr` or `--http-addr`.
+        flag: &'static str,
+        /// The variable that moves it — `CONFLUX_GRPC_ADDR` or
+        /// `CONFLUX_HTTP_ADDR`.
+        var: &'static str,
+        /// The underlying error.
+        source: std::io::Error,
+    },
+    /// A listener that is already bound would not say what address it is
+    /// bound to.
+    ///
+    /// Exceptional — the socket exists by this point — but not
+    /// recoverable: on port 0 the address the OS chose is knowable only
+    /// this way, and a server that cannot report where it is listening
+    /// is one nothing can connect to.
+    #[error("the {which} listener would not report its own address: {source}")]
+    ListenerAddr {
+        /// Which listener: `"gRPC"` or `"HTTP"`.
+        which: &'static str,
         /// The underlying error.
         source: std::io::Error,
     },
@@ -202,6 +222,39 @@ fn report_unselected_profiles(
     }
 }
 
+/// The two listeners a server serves on, already bound.
+///
+/// Exists so a caller can bind them itself. Binding `127.0.0.1:0` lets
+/// the OS pick free ports, but only whoever bound them can read back
+/// what it picked — and an in-process federation has to know the gRPC
+/// port to tell its nodes where to connect. Passing the listeners keeps
+/// that knowledge where it is needed, instead of guessing a port and
+/// racing another process to it.
+#[derive(Debug)]
+pub struct ServerListeners {
+    /// The `FlTransport` gRPC port clients and nodes connect to.
+    pub grpc: tokio::net::TcpListener,
+    /// The HTTP admin surface — `/health`, `/round/status`, `/rounds`.
+    pub http: tokio::net::TcpListener,
+}
+
+/// Binds one address, naming both the address and the knob that moves
+/// it if the port is taken.
+async fn bind(
+    addr: SocketAddr,
+    flag: &'static str,
+    var: &'static str,
+) -> Result<tokio::net::TcpListener, ServeError> {
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|source| ServeError::Bind {
+            addr,
+            flag,
+            var,
+            source,
+        })
+}
+
 /// Resolves the whole deployment from the environment and runs it until
 /// `shutdown` completes.
 ///
@@ -209,6 +262,26 @@ fn report_unselected_profiles(
 /// calls exactly this — so "the CLI starts the same server" is a fact
 /// about the code rather than a promise in a document.
 pub async fn run_from_env(
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServeError> {
+    serve(None, shutdown).await
+}
+
+/// Like [`run_from_env`], but serving listeners the caller already bound.
+///
+/// Configuration still comes from the environment: a process runs one
+/// server, so one environment describes it perfectly well. Only the
+/// *ports* need to come from outside, and only because they cannot be
+/// guessed.
+pub async fn run_from_env_on(
+    listeners: ServerListeners,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServeError> {
+    serve(Some(listeners), shutdown).await
+}
+
+async fn serve(
+    listeners: Option<ServerListeners>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
     // Topology and mode select either a builtin or a profile file from
@@ -410,10 +483,46 @@ pub async fn run_from_env(
 
     let state = Arc::new(state);
 
-    let grpc_addr: SocketAddr = parse_env("CONFLUX_GRPC_ADDR")?
-        .unwrap_or_else(|| "127.0.0.1:50051".parse().expect("a literal address"));
-    let http_addr: SocketAddr = parse_env("CONFLUX_HTTP_ADDR")?
-        .unwrap_or_else(|| "127.0.0.1:8080".parse().expect("a literal address"));
+    // Either the caller already bound both — the in-process case, where
+    // ports must be assigned by the OS and read back rather than guessed
+    // — or they come from the environment and are bound here.
+    //
+    // Bound before the spawns either way, so "that port is already taken"
+    // is an error this function returns rather than a panic inside a
+    // detached task: the difference between a CLI that explains itself
+    // and one that prints a backtrace.
+    let (grpc_listener, http_listener) = match listeners {
+        Some(ServerListeners { grpc, http }) => (grpc, http),
+        None => {
+            let grpc_addr: SocketAddr = parse_env("CONFLUX_GRPC_ADDR")?
+                .unwrap_or_else(|| "127.0.0.1:50051".parse().expect("a literal address"));
+            let http_addr: SocketAddr = parse_env("CONFLUX_HTTP_ADDR")?
+                .unwrap_or_else(|| "127.0.0.1:8080".parse().expect("a literal address"));
+            (
+                bind(grpc_addr, "--grpc-addr", "CONFLUX_GRPC_ADDR").await?,
+                bind(http_addr, "--http-addr", "CONFLUX_HTTP_ADDR").await?,
+            )
+        }
+    };
+    let grpc_addr = grpc_listener
+        .local_addr()
+        .map_err(|source| ServeError::ListenerAddr {
+            which: "gRPC",
+            source,
+        })?;
+    let http_addr = http_listener
+        .local_addr()
+        .map_err(|source| ServeError::ListenerAddr {
+            which: "HTTP",
+            source,
+        })?;
+
+    // Both real addresses, said out loud. The gRPC one was never reported
+    // before — survivable when it came from a variable someone had just
+    // set, and not survivable now: a listener bound on port 0 has an
+    // address nobody can predict, and an in-process federation has to be
+    // able to read it back from its own logs.
+    tracing::info!(%grpc_addr, %http_addr, "listening");
 
     // The HTTP admin surface's own gate, beside the gRPC ones above.
     // `/admin/allowlist` decides who may participate, so an
@@ -469,7 +578,7 @@ pub async fn run_from_env(
             .add_service(FlTransportServer::new(
                 FlTransportService::new(grpc_state).with_max_update_bytes(max_update_bytes),
             ))
-            .serve_with_shutdown(grpc_addr, async move {
+            .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
                 // `changed()` waits for the next send, so a shutdown that
                 // fired before this task got scheduled would be missed —
                 // hence the initial `borrow()` check.
@@ -487,18 +596,8 @@ pub async fn run_from_env(
     let http_state = Arc::clone(&state);
     let http_token = admin_token.clone();
     let mut http_shutdown = shutdown_rx.clone();
-    // Bound before the spawn, so "that port is already taken" is an
-    // error this function returns rather than a panic inside a detached
-    // task — the difference between a CLI that explains itself and one
-    // that prints a backtrace.
-    let listener = tokio::net::TcpListener::bind(http_addr)
-        .await
-        .map_err(|source| ServeError::Bind {
-            addr: http_addr,
-            source,
-        })?;
     let http = tokio::spawn(async move {
-        axum::serve(listener, crate::router(http_state, http_token))
+        axum::serve(http_listener, crate::router(http_state, http_token))
             .with_graceful_shutdown(async move {
                 if *http_shutdown.borrow() {
                     return;
