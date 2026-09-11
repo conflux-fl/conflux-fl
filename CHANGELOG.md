@@ -32,12 +32,48 @@ promised before `1.0`.
   code has to express any posture the environment can, or the in-process
   path is a lesser thing whose edge someone eventually hits.
 
-  **The stub-client guard moved into `run`, deliberately.** Splitting
-  resolution from running creates a second way in, and had the guard
-  stayed with the environment read, that second way would bypass it —
-  making "production against the placeholder `ClientApp`" reachable by
-  construction, which is precisely what ADR 0004's guard prevents. A test
-  fails if it is ever moved back.
+  **The stub-client guard moved out of the environment read,
+  deliberately.** Splitting resolution from running creates a second way
+  in, and had the guard stayed with the environment read, that second way
+  would bypass it — making "production against the placeholder
+  `ClientApp`" reachable by construction, which is precisely what ADR
+  0004's guard prevents. It now sits in `run_on`, the one function every
+  path reaches. A test fails if it is ever moved back.
+
+- **The caller can bind the ports and hand the listeners over.**
+  `conflux_node::run_on(listener, config, shutdown)` and
+  `conflux_server::run_from_env_on(ServerListeners { grpc, http },
+  shutdown)` run on sockets someone else bound; `run` and `run_from_env`
+  bind from configuration as before and are now wrappers over them.
+
+  This is the second half of the same arithmetic as the entry above.
+  Several nodes in one process need several distinct local ports, and
+  every way of choosing them without binding is a guess: a base port plus
+  an index collides with whatever else is on the machine, and checking
+  that a port is free before binding it is a race rather than a check.
+  Binding `127.0.0.1:0` lets the OS assign, but only whoever binds can
+  read back what it assigned — so an API that takes an address cannot
+  give the caller the one fact it needs. An API that takes a listener
+  can.
+
+  `conflux-server` now logs both listening addresses at startup. The gRPC
+  address was never reported — survivable while it came from a variable
+  an operator had just set, and not survivable now that it can be a port
+  the OS chose.
+
+### Changed
+
+- **`ServeError::Bind` names the knob that moves the address it
+  failed on.** It carried advice about `--http-addr` and
+  `CONFLUX_HTTP_ADDR` because it was only ever raised for the HTTP
+  listener; the gRPC listener now takes the same path, so the variant
+  carries the flag and variable rather than naming one pair for both.
+  Both it and `RunError` gained a `ListenerAddr` variant, for an
+  already-bound listener that will not report its own address. Rare, and
+  distinct from failing to bind: `RunError::Bind` used to carry the
+  configured address here, which was accurate while that was also the
+  address bound and is a lie once the caller supplies the socket.
+  Breaking for code that matches either enum exhaustively.
 
 ## [0.7.0] — 2026-09-10
 
