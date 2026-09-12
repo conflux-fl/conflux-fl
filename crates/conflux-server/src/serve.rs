@@ -255,6 +255,146 @@ async fn bind(
         })
 }
 
+/// Everything a server needs, already resolved.
+///
+/// Separate from *reading* it for the same reason `conflux-node`'s
+/// `NodeConfig` is: the environment is process-global, so it describes
+/// one server. That is exactly right for a deployment — one process is
+/// one experiment (ADR 0003) — and wrong for a tool that runs a *grid*
+/// of experiments back to back in one process, which is what a baseline
+/// sweep is. Each combination needs its own aggregator, quorum and model
+/// dimension, and mutating the environment between them is unsound once
+/// a runtime has threads.
+///
+/// This does not reopen multi-tenancy. The experiments still run one at
+/// a time, each to completion, each with its own `AppState` — what
+/// changes is only that the second one need not be a second process.
+///
+/// [`Self::from_env`] is the binary's path; constructing this directly
+/// is the in-process path. Both end at [`run`] and [`run_on`], so
+/// neither is a second implementation of the other.
+///
+/// **Deployment material deliberately stays in the environment** —
+/// backends, TLS, the JWT key, the admin token, the sidecar address. The
+/// line is what varies *per experiment* against what describes the
+/// *process*: a sweep changes the aggregator, never where Redis lives.
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    /// Every parameter the layers resolved to, with its source. Carried
+    /// rather than re-derived, so the run path can honour ADR 0007 and
+    /// log the provenance of a code-built configuration exactly as it
+    /// logs one read from the environment.
+    pub resolved: conflux_config::ResolvedConfig,
+    /// The behavioural mode every startup check branches on — for a
+    /// custom profile, its `inherits` base, so a "production, but…"
+    /// profile is still production everywhere strictness is decided.
+    pub mode: conflux_config::Mode,
+    /// How many `f32` the placeholder initialization carries. Every
+    /// client's submitted weights must match it.
+    pub initial_weights_dim: usize,
+}
+
+impl ServerConfig {
+    /// Reads topology, mode, any experiment file and the per-parameter
+    /// `CONFLUX_*` overrides, and resolves them.
+    ///
+    /// Profile *discovery* belongs here rather than in the run path:
+    /// which files exist in `CONFLUX_PROFILE_DIR`, which one was
+    /// selected and which were passed over are all facts about reading
+    /// an environment, and a configuration built in code selected
+    /// nothing from a directory.
+    ///
+    /// Validation is **not** here — see [`run_on`].
+    pub fn from_env() -> Result<Self, ServeError> {
+        // Topology and mode select either a builtin or a profile file from
+        // CONFLUX_PROFILE_DIR (`<name>.toml`, extending a base via
+        // `inherits`). Unset falls back to the builtins; a name that matches
+        // *nothing* is a startup error naming what exists, never a silent
+        // fallback to `cross_device` — a typo like `cros_silo` would
+        // otherwise produce a correctly-logged, wrong deployment.
+        let profile_dir =
+            std::env::var("CONFLUX_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
+        let profile_dir = std::path::Path::new(&profile_dir);
+
+        let topology_name = std::env::var("CONFLUX_TOPOLOGY").ok();
+        let topology_profile =
+            conflux_config::topology_profile_named(profile_dir, topology_name.as_deref())?;
+        let mode_name = std::env::var("CONFLUX_MODE").ok();
+        let mode_profile = conflux_config::mode_profile_named(profile_dir, mode_name.as_deref())?;
+        // Say the chains out loud once, before the per-parameter lines do.
+        if topology_profile.chain.len() > 1 {
+            tracing::info!(
+                profile = %topology_profile.name,
+                chain = %topology_profile.chain.join(" → "),
+                dir = %profile_dir.display(),
+                "custom topology profile loaded"
+            );
+        }
+        if mode_profile.chain.len() > 1 {
+            tracing::info!(
+                profile = %mode_profile.name,
+                chain = %mode_profile.chain.join(" → "),
+                dir = %profile_dir.display(),
+                "custom mode profile loaded"
+            );
+        }
+        report_unselected_profiles(
+            profile_dir,
+            topology_name.as_deref(),
+            mode_name.as_deref(),
+            &topology_profile.name,
+            &mode_profile.name,
+        );
+
+        // Downstream startup checks (TLS posture, JWT validation, backend
+        // validation) branch on the behavioral mode, which for a custom
+        // profile is its `inherits` base — a "production, but…" profile is
+        // still production everywhere strictness is decided.
+        let mode = mode_profile.base;
+
+        // An optional experiment-level config file. Unset means `None` into
+        // the file tier. Set, it is a hard failure if unreadable: an operator who
+        // named a config file meant it, and silently continuing with
+        // defaults would produce a run whose logged provenance is correct
+        // and whose configuration is not what anyone asked for.
+        let experiment_file = std::env::var("CONFLUX_EXPERIMENT_CONFIG_PATH").ok();
+        let file_overrides = experiment_file
+            .as_ref()
+            .map(|path| conflux_config::load_experiment_file(std::path::Path::new(path)))
+            .transpose()?;
+        let file_tier = match (&experiment_file, &file_overrides) {
+            (Some(path), Some(overrides)) => Some((path.as_str(), overrides)),
+            _ => None,
+        };
+
+        // The per-parameter CONFLUX_* variables — the same mapping `cflux
+        // config check` reads, so a pre-flight and a real start cannot
+        // disagree about what a variable means.
+        let env_overrides = conflux_config::overrides_from_env()?;
+        let resolved = conflux_config::resolve_with_profiles(
+            &topology_profile,
+            &mode_profile,
+            file_tier,
+            &env_overrides,
+            &Overrides::default(),
+        )?;
+
+        // `CONFLUX_INITIAL_WEIGHTS_DIM`: the real model this deployment
+        // trains dictates this, not Conflux (a flat f32 vector is all
+        // Conflux ever sees) — e.g. the baselines set this to their
+        // model's actual parameter count. Every client's submitted weights
+        // must match it or `AggregatorError::MismatchedLength` rejects the
+        // round.
+        let initial_weights_dim: usize = parse_env("CONFLUX_INITIAL_WEIGHTS_DIM")?.unwrap_or(4);
+
+        Ok(Self {
+            resolved,
+            mode,
+            initial_weights_dim,
+        })
+    }
+}
+
 /// Resolves the whole deployment from the environment and runs it until
 /// `shutdown` completes.
 ///
@@ -264,98 +404,55 @@ async fn bind(
 pub async fn run_from_env(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
-    serve(None, shutdown).await
+    run(ServerConfig::from_env()?, shutdown).await
 }
 
 /// Like [`run_from_env`], but serving listeners the caller already bound.
-///
-/// Configuration still comes from the environment: a process runs one
-/// server, so one environment describes it perfectly well. Only the
-/// *ports* need to come from outside, and only because they cannot be
-/// guessed.
 pub async fn run_from_env_on(
     listeners: ServerListeners,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
-    serve(Some(listeners), shutdown).await
+    run_on(listeners, ServerConfig::from_env()?, shutdown).await
+}
+
+/// Runs a server from a configuration built in code, binding
+/// `CONFLUX_GRPC_ADDR` and `CONFLUX_HTTP_ADDR` as [`run_from_env`] does.
+pub async fn run(
+    config: ServerConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServeError> {
+    serve(None, config, shutdown).await
+}
+
+/// Runs a server from a configuration built in code, on listeners the
+/// caller already bound.
+///
+/// **Validation runs here rather than in [`ServerConfig::from_env`], and
+/// deliberately.** Splitting resolution from running creates a second
+/// way in, and had validation stayed with the environment read, that
+/// second way would bypass it: an aggregator naming no registered
+/// strategy, or a combination the validator refuses, would become
+/// behaviour in round one instead of a refusal at startup. Exactly the
+/// reasoning that keeps `conflux-node`'s stub-client guard in its own
+/// `run_on`. A test fails if it is ever moved back.
+pub async fn run_on(
+    listeners: ServerListeners,
+    config: ServerConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServeError> {
+    serve(Some(listeners), config, shutdown).await
 }
 
 async fn serve(
     listeners: Option<ServerListeners>,
+    server_config: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
-    // Topology and mode select either a builtin or a profile file from
-    // CONFLUX_PROFILE_DIR (`<name>.toml`, extending a base via
-    // `inherits`). Unset falls back to the builtins; a name that matches
-    // *nothing* is a startup error naming what exists, never a silent
-    // fallback to `cross_device` — a typo like `cros_silo` would
-    // otherwise produce a correctly-logged, wrong deployment.
-    let profile_dir =
-        std::env::var("CONFLUX_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
-    let profile_dir = std::path::Path::new(&profile_dir);
-
-    let topology_name = std::env::var("CONFLUX_TOPOLOGY").ok();
-    let topology_profile =
-        conflux_config::topology_profile_named(profile_dir, topology_name.as_deref())?;
-    let mode_name = std::env::var("CONFLUX_MODE").ok();
-    let mode_profile = conflux_config::mode_profile_named(profile_dir, mode_name.as_deref())?;
-    // Say the chains out loud once, before the per-parameter lines do.
-    if topology_profile.chain.len() > 1 {
-        tracing::info!(
-            profile = %topology_profile.name,
-            chain = %topology_profile.chain.join(" → "),
-            dir = %profile_dir.display(),
-            "custom topology profile loaded"
-        );
-    }
-    if mode_profile.chain.len() > 1 {
-        tracing::info!(
-            profile = %mode_profile.name,
-            chain = %mode_profile.chain.join(" → "),
-            dir = %profile_dir.display(),
-            "custom mode profile loaded"
-        );
-    }
-    report_unselected_profiles(
-        profile_dir,
-        topology_name.as_deref(),
-        mode_name.as_deref(),
-        &topology_profile.name,
-        &mode_profile.name,
-    );
-
-    // Downstream startup checks (TLS posture, JWT validation, backend
-    // validation) branch on the behavioral mode, which for a custom
-    // profile is its `inherits` base — a "production, but…" profile is
-    // still production everywhere strictness is decided.
-    let mode = mode_profile.base;
-
-    // An optional experiment-level config file. Unset means `None` into
-    // the file tier. Set, it is a hard failure if unreadable: an operator who
-    // named a config file meant it, and silently continuing with
-    // defaults would produce a run whose logged provenance is correct
-    // and whose configuration is not what anyone asked for.
-    let experiment_file = std::env::var("CONFLUX_EXPERIMENT_CONFIG_PATH").ok();
-    let file_overrides = experiment_file
-        .as_ref()
-        .map(|path| conflux_config::load_experiment_file(std::path::Path::new(path)))
-        .transpose()?;
-    let file_tier = match (&experiment_file, &file_overrides) {
-        (Some(path), Some(overrides)) => Some((path.as_str(), overrides)),
-        _ => None,
-    };
-
-    // The per-parameter CONFLUX_* variables — the same mapping `cflux
-    // config check` reads, so a pre-flight and a real start cannot
-    // disagree about what a variable means.
-    let env_overrides = conflux_config::overrides_from_env()?;
-    let config = conflux_config::resolve_with_profiles(
-        &topology_profile,
-        &mode_profile,
-        file_tier,
-        &env_overrides,
-        &Overrides::default(),
-    )?;
+    let ServerConfig {
+        resolved: config,
+        mode,
+        initial_weights_dim,
+    } = server_config;
 
     // Every resolved parameter is logged, with its source, before the
     // server is "ready".
@@ -402,13 +499,6 @@ async fn serve(
         );
     }
 
-    // `CONFLUX_INITIAL_WEIGHTS_DIM`: the real model this deployment trains
-    // dictates this, not Conflux (a flat f32 vector is all Conflux ever
-    // sees) — e.g. the e2e harnesses set this to their model's actual
-    // parameter count. Every
-    // client's submitted weights must match this dimension or
-    // `AggregatorError::MismatchedLength` rejects the round.
-    let initial_weights_dim: usize = parse_env("CONFLUX_INITIAL_WEIGHTS_DIM")?.unwrap_or(4);
     // The `auth = jwt` counterpart to the mTLS check above.
     // Loaded and validated *before* binding, so a production JWT
     // deployment with no key to verify against never starts — the same
