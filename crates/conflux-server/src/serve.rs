@@ -456,8 +456,16 @@ async fn serve(
 
     // Every resolved parameter is logged, with its source, before the
     // server is "ready".
+    //
+    // To stderr. This is diagnostic output, not the program's data
+    // output, and the difference stopped being academic once a caller
+    // could run a server *inside* a command that owns stdout for
+    // something else — `cflux fed run --format json` emits a
+    // machine-readable report there, and provenance lines interleaved
+    // into it do not parse. The same split `cflux`'s own subscriber
+    // already makes, now applied to the one place that bypassed it.
     for line in config.to_log_lines(config.config_log_format.value) {
-        println!("{line}");
+        eprintln!("{line}");
     }
 
     // Range and combination validation, after the provenance lines so

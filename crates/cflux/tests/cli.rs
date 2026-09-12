@@ -554,9 +554,16 @@ fn server_and_node_start_are_wired_and_refuse_a_bad_configuration() {
         refusal.contains("production") && refusal.contains("refusing to start"),
         "{refusal}"
     );
-    // The provenance log still reaches stdout before the refusal, which
-    // is what makes a refusal debuggable rather than merely correct.
-    assert!(stdout(&o).contains("config_log_format"), "{}", stdout(&o));
+    // The provenance log is still emitted before the refusal, which is
+    // what makes a refusal debuggable rather than merely correct.
+    //
+    // On stderr, alongside the refusal itself rather than split across
+    // two streams. It moved there when `cflux fed run` began emitting a
+    // `--format json` report on stdout while a server ran inside the
+    // same process: provenance lines interleaved into that do not parse.
+    // The property this test protects — provenance survives a refusal —
+    // is unchanged.
+    assert!(refusal.contains("config_log_format"), "{refusal}");
 
     // A node with nowhere to connect fails on the connection, not on a
     // panic, and says which address it tried.

@@ -131,6 +131,84 @@ promised before `1.0`.
   facts about reading an environment, and a configuration built in code
   selected nothing from a directory.
 
+- **`cflux fed run`: a whole federation on this machine, in one command.**
+
+  ```
+  cflux fed run                                  # 3 clients, 10 rounds, a model that learns
+  cflux fed run fed.toml --clients 20 --aggregator krum
+  cflux fed models                               # what it can run without you writing a client
+  ```
+
+  Replaces a front door that was three terminals, three processes, a
+  Python virtualenv, three hardcoded ports, one node, one client — and a
+  stub that returns fixed weights and learns nothing.
+
+  **A local federation, not a simulation, and the distinction is
+  load-bearing.** Every hop is the real one: clients reach their node over
+  the local gRPC hop, nodes reach the server over loopback gRPC, updates
+  are serialized, chunked and reassembled, and the server runs the same
+  buffer, quorum-or-timeout flush, privacy, reputation, aggregation and
+  checkpoint pipeline it runs across machines. What is missing is the
+  network — no latency, loss, NAT or bandwidth limit — and, under
+  `--isolation task`, process isolation. Nothing it produces is marked
+  `simulated`, because nothing is; `cflux sim` stays reserved for the
+  tiers that cut the wire, which are the ones that also lose client-side
+  DP, chunking and auth.
+
+  `--isolation process`, where every participant is its own OS process,
+  is named but not built. The flag refuses with that sentence rather than
+  pretending the value is a typo.
+
+  **It says what it is before it runs.** A banner names the tier, lists
+  what is real and what is not, names the aggregator and the model, and
+  carries the model's own caveat. `--format json` puts a machine-readable
+  report on stdout with `"simulated": false` in it; the banner is on
+  stderr so that report still parses.
+
+  **Configuration is a manifest plus flags.** `fed.toml` follows
+  `baselines/*/baseline.toml`'s shape rather than inventing a second
+  format — the same `[method]` and `[experiment]` sections, parsed by
+  `conflux-config` itself so a key cannot mean one thing in an experiment
+  file and another in a manifest. Flags beat the file. The manifest lands
+  in the experiment-file tier and flags in the CLI tier, so the
+  provenance lines name where every value actually came from.
+
+- **Three demo clients (`conflux_federation::demo`), so a federation can
+  be run without writing one.** `stub` (fixed weights, no training),
+  `linreg` and `logreg`. All three are deliberately dependency-free — no
+  `burn`, no `rand` — because `cflux` compiles them into the static
+  binary the installer ships, and a demo model that dragged a
+  deep-learning framework in behind it would make that binary something
+  nobody wants to download.
+
+  Two of the three are arranged so **no single client can solve the
+  problem alone**: each client's data holds a different feature nearly
+  constant, and a coefficient you never vary is one you cannot learn.
+  Without that, a demo proves only that the loop ran.
+
+  Every model carries a `caveat` that is printed whenever it runs, and a
+  test fails if one is empty. `stub` does not learn and says so on every
+  run; it is the only model with no score, because a number computed from
+  fixed weights is an invitation to read meaning into noise.
+
+  On a demo model with no privacy values set, `cflux fed run` turns
+  clipping and noise off — clip 1 / noise 1 does not converge on a
+  four-parameter toy — and says so in the banner. Leaving them on would
+  produce a demo that "runs" and teaches the reader something false.
+
+- **`FederationConfig::server`** takes a `conflux_server::ServerConfig`,
+  so a whole federation is describable as a value rather than as an
+  environment to export first. `None` keeps the previous behaviour.
+
+- **`conflux_config::parse_experiment_toml`** — the parsing half of
+  `load_experiment_file`, over text already in hand, so an experiment's
+  parameters can be written inside another document without that
+  document re-declaring the schema.
+
+- **`impl ClientApp for Box<A>`** — needed the moment a caller holds
+  several clients whose concrete types differ, such as a catalog of demo
+  models selected by name at runtime.
+
 ### Changed
 
 - **`ServeError::Bind` names the knob that moves the address it
@@ -146,6 +224,15 @@ promised before `1.0`.
   Breaking for code that matches either enum exhaustively.
 
 ### Fixed
+
+- **The server's resolved-configuration lines went to stdout.** They are
+  diagnostic output, not a program's data output, and the difference
+  stopped being academic once a caller could run a server *inside* a
+  command that owns stdout for something else: `cflux fed run
+  --format json` emits a machine-readable report there, and provenance
+  lines interleaved into it do not parse. They now go to stderr, which is
+  the same split `cflux`'s own subscriber already made and where the
+  refusal they explain already was.
 
 - **A client and a server could deadlock over a round that closed and
   reopened.** `conflux_client::run` treated every refused submission as

@@ -71,6 +71,37 @@ pub(crate) enum CliError {
     /// A checkpoint store could not be reached or read.
     #[error("{0}")]
     Checkpoint(conflux_store::StoreError),
+    /// A federation could not start, or did not finish.
+    #[error("{0}")]
+    Federation(conflux_federation::FederationError),
+    /// A file the command was asked to read could not be read.
+    #[error("could not read {path}: {source}")]
+    Read {
+        /// The file.
+        path: String,
+        /// Why the read failed.
+        source: std::io::Error,
+    },
+    /// A manifest is unparseable, or names something that does not exist.
+    #[error("{path}: {message}")]
+    Manifest {
+        /// The file, or the field, the problem is in.
+        path: String,
+        /// What is wrong with it.
+        message: String,
+    },
+    /// A flag names a capability this version does not have yet.
+    ///
+    /// Separate from an invalid value: `--isolation process` is a real
+    /// setting that will work, and telling someone their spelling is
+    /// wrong would send them looking in the wrong place.
+    #[error("{what} is not built yet — {instead}")]
+    NotYetBuilt {
+        /// The flag or value.
+        what: &'static str,
+        /// What to do instead.
+        instead: &'static str,
+    },
     /// A file the command was asked to write could not be written.
     #[error("could not write {path}: {source}")]
     Write {
@@ -113,6 +144,9 @@ enum Command {
     Server(commands::run::ServerArgs),
     /// Run a Conflux node: the bridge a local `ClientApp` connects to.
     Node(commands::run::NodeArgs),
+    /// Run a whole federation on this machine — server, nodes and
+    /// clients — over the real transport.
+    Fed(commands::fed::Args),
     /// Inspect the checkpoints a durable store holds, without starting
     /// a server.
     Checkpoint(commands::checkpoint::CheckpointArgs),
@@ -136,6 +170,7 @@ fn main() {
         Command::Doctor(args) => commands::doctor::run(args),
         Command::Server(args) => commands::run::run_server(args),
         Command::Node(args) => commands::run::run_node(args),
+        Command::Fed(args) => commands::fed::run(args),
         Command::Checkpoint(args) => commands::checkpoint::run(args),
         Command::Version => Ok(commands::version()),
     };
