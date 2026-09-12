@@ -61,6 +61,41 @@ promised before `1.0`.
   an operator had just set, and not survivable now that it can be a port
   the OS chose.
 
+- **`conflux-federation`: a whole federation in one process.** One
+  server, N nodes and N Rust `ClientApp`s as tokio tasks in the process
+  that called it. `conflux_federation::run(config, make_app)` runs the
+  lot and returns when every client has finished its rounds;
+  `Federation::start(config)` gives back a handle with every address
+  already known, for attaching clients of your own — Python trainers in
+  their own processes, say.
+
+  **Not a simulation, and the distinction is load-bearing.** Every hop is
+  the real one: clients reach their node over the local gRPC hop, nodes
+  reach the server over loopback gRPC, updates are serialized, chunked
+  and reassembled, and the server runs its usual buffer, quorum-or-timeout
+  flush, privacy, reputation, aggregation and checkpoint pipeline. The
+  only thing given up is process isolation, so a number produced here is
+  a number about the real pipeline and nothing is marked `simulated`.
+
+  It binds every listener itself, which is what the entry above exists
+  for. It also makes node *i* and client *i* share one `client_id`
+  structurally rather than by convention: the local hop absorbs a
+  client's registration but passes `submit_delta` through unchanged, so a
+  mismatched id sends the server an update from a participant it never
+  registered.
+
+  Fails loudly on a stall. `config.timeout` is a real deadline —
+  `conflux_client::run` polls for a round it has not yet done and has no
+  timeout of its own — and exceeding it names every client that did not
+  finish and how far each got, rather than returning partial results that
+  read like a completed run.
+
+  `cargo run --example one_process_regression -p conflux-federation`
+  recovers `y = w·x + b` across three clients, each of whose data holds a
+  different feature nearly constant so that no client can learn the model
+  alone. It prints each solo fit beside the federated one.
+
+
 ### Changed
 
 - **`ServeError::Bind` names the knob that moves the address it
@@ -74,6 +109,34 @@ promised before `1.0`.
   configured address here, which was accurate while that was also the
   address bound and is a lie once the caller supplies the socket.
   Breaking for code that matches either enum exhaustively.
+
+### Fixed
+
+- **A client and a server could deadlock over a round that closed and
+  reopened.** `conflux_client::run` treated every refused submission as
+  "this round is over for me" and refused to revisit that round number.
+  That is right when the round genuinely ended, and wrong when it did
+  not: the server's round loop backs off and retries the **same round
+  number** after a failed attempt — a round opened before anyone had
+  registered, which closes on a quorum of zero the instant it opens, is
+  the ordinary way in. The client then waited for a round number greater
+  than the one it had written off while the server waited for a
+  submission to the round it had just reopened, and the run hung until
+  something timed out.
+
+  A refusal is now resolved by asking what round the server is on, not by
+  reading the refusal. Still this one — the same bytes are offered again,
+  resubmitted rather than retrained, since retraining would change the
+  update the server is waiting for. Moved on — the work is spent and the
+  new round gets trained. Both directions have tests; the first fails
+  without the fix, and the second passes with or without it, which is the
+  guard against overcorrecting into a client that never gives up on a
+  round at all.
+
+  Found by running a federation in one process, where everything starts
+  within milliseconds. Across processes the startup is slow enough that
+  clients rarely land in the window — which is what made this survive
+  this long, not any property that makes it safe.
 
 ## [0.7.0] — 2026-09-10
 

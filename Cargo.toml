@@ -16,6 +16,7 @@ members = [
     "crates/conflux-attacks",
     "crates/conflux-trusted-reference",
     "crates/conflux-client",
+    "crates/conflux-federation",
     "crates/conflux-baselines",
     "crates/cflux",
 ]
@@ -59,9 +60,13 @@ readme = "README.md"
 # them publishable: inside the workspace the path wins, and `cargo
 # publish` strips the path and ships the version requirement, which is
 # how a consumer's `cargo add conflux-server` pulls the rest of the
-# graph. These twelve move together with `package.version` above — a
-# release bumps them here, not in twelve manifests.
+# graph. These thirteen move together with `package.version` above — a
+# release bumps them here, not in thirteen manifests.
 conflux-buffer = { path = "crates/conflux-buffer", version = "0.7.0" }
+# Listed here rather than only in its own manifest because
+# `conflux-federation` is the first crate to depend on it — an
+# in-process federation supplies its clients in Rust.
+conflux-client = { path = "crates/conflux-client", version = "0.7.0" }
 conflux-config = { path = "crates/conflux-config", version = "0.7.0" }
 conflux-core = { path = "crates/conflux-core", version = "0.7.0" }
 conflux-net = { path = "crates/conflux-net", version = "0.7.0" }
@@ -110,6 +115,10 @@ thiserror = "2.0"
 tokio = "1"
 tokio-postgres = "0.7"
 tokio-stream = "0.1"
+# `CancellationToken` only, which lives in `tokio-util`'s unconditional
+# `sync` module — hence no features. Already in the graph via tonic and
+# axum, so this is a direct edge to something already compiled.
+tokio-util = { version = "0.7", default-features = false }
 toml = "0.9"
 tonic = "0.14"
 tonic-prost = "0.14"

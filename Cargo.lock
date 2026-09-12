@@ -1448,6 +1448,7 @@ dependencies = [
 name = "conflux-client"
 version = "0.7.0"
 dependencies = [
+ "async-trait",
  "burn",
  "conflux-core",
  "conflux-net",
@@ -1481,6 +1482,21 @@ dependencies = [
  "thiserror 2.0.20",
  "toml",
  "wide",
+]
+
+[[package]]
+name = "conflux-federation"
+version = "0.7.0"
+dependencies = [
+ "conflux-client",
+ "conflux-node",
+ "conflux-privacy",
+ "conflux-server",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -113,9 +113,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       # Only the crates that claim 1.88. `conflux-store`,
-      # `conflux-server` and `cflux` declare 1.94.1 because `aws-sdk-s3`
-      # requires it (`cflux` reuses the server's startup checks) — checking
-      # them here would test the claim we did not make.
+      # `conflux-server`, `conflux-federation` and `cflux` declare 1.94.1
+      # because `aws-sdk-s3` requires it (`cflux` reuses the server's
+      # startup checks; `conflux-federation` runs a server in-process) —
+      # checking them here would test the claim we did not make.
       # 1.88 rather than edition 2024's own 1.85 floor: `tonic`,
       # `jsonwebtoken` and `time` each declare 1.88, so nothing above
       # `conflux-proto` can honestly promise less. See the workspace
