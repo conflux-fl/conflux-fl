@@ -1267,7 +1267,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
- "toml",
+ "toml 1.1.6+spec-1.1.0",
  "tracing-subscriber",
 ]
 
@@ -1433,7 +1433,7 @@ dependencies = [
  "conflux-selector",
  "serde",
  "serde_json",
- "toml",
+ "toml 1.1.6+spec-1.1.0",
 ]
 
 [[package]]
@@ -1471,7 +1471,7 @@ dependencies = [
  "inventory",
  "serde",
  "thiserror 2.0.20",
- "toml",
+ "toml 1.1.6+spec-1.1.0",
 ]
 
 [[package]]
@@ -1483,7 +1483,7 @@ dependencies = [
  "criterion",
  "inventory",
  "thiserror 2.0.20",
- "toml",
+ "toml 1.1.6+spec-1.1.0",
  "wide",
 ]
 
@@ -2131,7 +2131,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spin",
- "toml",
+ "toml 0.9.12+spec-1.1.0",
  "variadics_please",
  "wasm-bindgen-futures",
 ]
@@ -5759,6 +5759,21 @@ dependencies = [
  "toml_parser",
  "toml_writer",
  "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.6+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.4",
 ]
 
 [[package]]
