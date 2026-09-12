@@ -80,4 +80,6 @@ pub use round::{RoundSummary, run_round};
 pub use round_health::{RoundLoopHealth, RoundLoopState, backoff_secs};
 pub use round_history::{RoundHistory, RoundRecord};
 pub use round_verdict::RoundVerdict;
-pub use serve::{ServeError, ServerListeners, run_from_env, run_from_env_on};
+pub use serve::{
+    ServeError, ServerConfig, ServerListeners, run, run_from_env, run_from_env_on, run_on,
+};

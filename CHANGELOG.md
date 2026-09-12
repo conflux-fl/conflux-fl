@@ -96,6 +96,41 @@ promised before `1.0`.
   alone. It prints each solo fit beside the federated one.
 
 
+- **`conflux-server` can be configured in code, not only from the
+  environment.** `ServerConfig` carries a resolved configuration —
+  `ServerConfig::from_env()` reads it from `CONFLUX_*` as before — and
+  `run(config, shutdown)` / `run_on(listeners, config, shutdown)` run it.
+  `run_from_env` and `run_from_env_on` are now wrappers over both.
+
+  The same arithmetic as `NodeConfig` in 0.7.0's entry above, one level
+  up. The environment is process-global, so it describes one server, and
+  one process is one experiment (ADR 0003) — exactly right for a
+  deployment. It is wrong for a tool that runs a *grid* of experiments
+  back to back in one process, which is what a baseline sweep is: each
+  combination needs its own aggregator, quorum and model dimension, and
+  mutating the environment between them is unsound once a runtime has
+  threads.
+
+  This does not reopen multi-tenancy. The experiments still run one at a
+  time, each to completion, each with its own `AppState`; what changes is
+  only that the second one need not be a second process.
+
+  **Deployment material deliberately stays in the environment** —
+  backends, TLS, the JWT key, the admin token, the sidecar address. The
+  line is what varies *per experiment* against what describes the
+  *process*: a sweep changes the aggregator, never where Redis lives.
+
+  **Validation moved into `run_on`, deliberately** — the same reasoning
+  that put `conflux-node`'s stub-client guard there. Splitting resolution
+  from running creates a second way in, and had validation stayed with
+  the environment read, a configuration built in code could start a
+  server whose aggregator name matches no registered strategy and
+  discover it as behaviour in round one. A test fails if it is ever moved
+  back. Profile *discovery* went the other way, into `from_env`: which
+  files exist in `CONFLUX_PROFILE_DIR` and which were passed over are
+  facts about reading an environment, and a configuration built in code
+  selected nothing from a directory.
+
 ### Changed
 
 - **`ServeError::Bind` names the knob that moves the address it
