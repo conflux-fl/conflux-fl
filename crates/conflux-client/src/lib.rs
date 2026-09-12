@@ -336,20 +336,55 @@ pub async fn run<A: ClientApp>(app: &mut A, config: RunConfig) -> Result<usize, 
         }
 
         let chunks = build_chunks(&config.client_id, task.round, &result, config.chunk_bytes);
-        match transport.submit_delta(chunks).await {
-            Ok(ack) => {
-                last_round = Some(task.round);
-                completed += 1;
-                app.on_round_end(task.round, ack.accepted);
-                tracing::info!(round = task.round, accepted = ack.accepted, "submitted");
-            }
-            Err(e) => {
-                // A round closing on quorum or timeout mid-training is
-                // ordinary, not a failure. Move on rather than retrying
-                // into a round that is already over.
-                tracing::warn!(round = task.round, error = %e, "submission rejected; continuing");
-                last_round = Some(task.round);
-                app.on_round_end(task.round, false);
+
+        // Submit, and keep offering the same bytes for as long as the
+        // server is still on this round.
+        //
+        // A refusal answers one of two different questions, and the
+        // difference is the whole reason this is a loop. "This round
+        // closed while you were training" is ordinary and final — the
+        // work is spent, and the next round is where to look. "No round
+        // is currently accepting submissions" is not final at all: the
+        // server's round loop backs off and retries the *same* round
+        // number after a failed attempt, so a round can close and then
+        // reopen under the same number. Treating both as final is how a
+        // client and a server deadlock — the client waiting for a round
+        // it has already written off, the server waiting for the client.
+        //
+        // Which one it is, is answered by asking what round the server
+        // is on now rather than by parsing the refusal. If it has moved
+        // on, the round really is over; if it has not, the same bytes
+        // are still the right bytes, which is why they are resubmitted
+        // rather than retrained.
+        loop {
+            match transport.submit_delta(chunks.clone()).await {
+                Ok(ack) => {
+                    last_round = Some(task.round);
+                    completed += 1;
+                    app.on_round_end(task.round, ack.accepted);
+                    tracing::info!(round = task.round, accepted = ack.accepted, "submitted");
+                    break;
+                }
+                Err(e) => {
+                    tokio::time::sleep(config.poll_interval).await;
+                    let current = transport.fetch_task(&config.client_id).await?;
+                    if current.round != task.round {
+                        tracing::warn!(
+                            round = task.round,
+                            now = current.round,
+                            error = %e,
+                            "submission rejected and the round has moved on; continuing"
+                        );
+                        last_round = Some(task.round);
+                        app.on_round_end(task.round, false);
+                        break;
+                    }
+                    tracing::warn!(
+                        round = task.round,
+                        error = %e,
+                        "submission rejected but the server is still on this round; resubmitting"
+                    );
+                }
             }
         }
     }

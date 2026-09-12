@@ -38,6 +38,9 @@ burn = ["dep:burn"]
 tracing-subscriber.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+# Test-only: standing up a fake local hop means implementing
+# `RoundDispatcher`, which is an async trait.
+async-trait.workspace = true
 # Example-only (the `burn_mlp` robust-aggregation demo): the real cited
 # aggregators. A dev-dependency, so it never enters the shipped SDK — and
 # `cargo build -p conflux-client` (no examples) still doesn't compile it.
