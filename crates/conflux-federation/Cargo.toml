@@ -1,0 +1,33 @@
+[package]
+name = "conflux-federation"
+description = "Run a whole Conflux FL federation — server, nodes and clients — inside one process, over real loopback gRPC."
+license.workspace = true
+repository.workspace = true
+# Overrides the workspace 1.88 for the reason `conflux-server` does, and
+# by depending on it inherits the constraint: `aws-sdk-s3` declares
+# 1.94.1, and an MSRV claim the dependency graph cannot satisfy is worse
+# than none.
+rust-version = "1.94.1"
+version.workspace = true
+edition.workspace = true
+readme = "README.md"
+
+[dependencies]
+# All three halves of a federation. This is the only crate in the
+# workspace that depends on the server, a node AND a client — which is
+# what an orchestrator is.
+conflux-client.workspace = true
+conflux-node.workspace = true
+conflux-server.workspace = true
+# Only for `GaussianClippingPrivacy`, which a node template may carry.
+# `conflux-node` takes one by value and does not re-export the type.
+conflux-privacy.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+# `CancellationToken`: a federation is a tree of 2N+1 tasks, which is the
+# case this is built for. See the module docs.
+tokio-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
