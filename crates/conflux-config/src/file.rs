@@ -102,12 +102,27 @@ pub fn load_experiment_file(path: &Path) -> Result<Overrides, ConfigFileError> {
         },
     })?;
 
+    parse_experiment_toml(&text, &display)
+}
+
+/// The parsing half of [`load_experiment_file`], over text that is
+/// already in hand.
+///
+/// Exists so an experiment's parameters can be written *inside* another
+/// document — `cflux fed run`'s manifest carries an `[experiment]` table
+/// — without that document re-declaring the schema. One parser means a
+/// key cannot mean one thing in an experiment file and another in a
+/// manifest.
+///
+/// `label` is what errors name: a path, or something like
+/// `"fed.toml [experiment]"`.
+pub fn parse_experiment_toml(text: &str, label: &str) -> Result<Overrides, ConfigFileError> {
     // Stage 1: text -> a generic TOML document. `toml::Table` rather
     // than `str::parse::<toml::Value>()`, which in toml 0.9 parses a
     // bare *value* (`42`, `"x"`) and rejects a whole document.
     let table: toml::Table =
-        toml::from_str(&text).map_err(|e: toml::de::Error| ConfigFileError::Syntax {
-            path: display.clone(),
+        toml::from_str(text).map_err(|e: toml::de::Error| ConfigFileError::Syntax {
+            path: label.to_string(),
             message: e.message().to_string(),
         })?;
 
@@ -115,7 +130,7 @@ pub fn load_experiment_file(path: &Path) -> Result<Overrides, ConfigFileError> {
     toml::Value::Table(table)
         .try_into()
         .map_err(|e: toml::de::Error| ConfigFileError::Schema {
-            path: display,
+            path: label.to_string(),
             message: e.message().to_string(),
         })
 }

@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod checkpoint;
 pub mod config;
 pub mod doctor;
+pub mod fed;
 pub mod init;
 pub mod run;
 

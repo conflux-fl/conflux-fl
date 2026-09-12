@@ -36,6 +36,10 @@ conflux-net.workspace = true
 # `node start` runs the real node, for the same reason `server start`
 # runs the real server: one implementation, not two.
 conflux-node.workspace = true
+# `fed run`: the orchestrator, and the demo clients it can run without
+# anyone writing one. `conflux-client` arrives with it — `burn` is off by
+# default, so this costs the shipped binary nothing.
+conflux-federation.workspace = true
 # One async call (that handshake) needs a runtime; a current-thread one
 # is enough, so the CLI never spawns a thread pool to ask one question.
 # `rt-multi-thread` because `server start` runs a real server: three
@@ -44,6 +48,10 @@ conflux-node.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time", "signal", "macros"] }
 clap.workspace = true
 serde_json.workspace = true
+# `fed.toml`, which follows `baselines/*/baseline.toml`'s shape rather
+# than inventing a second manifest format.
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
 thiserror.workspace = true
 # `server start` and `node start` run the real server and node in this
 # process, and everything those say — quorum or timeout, rejected

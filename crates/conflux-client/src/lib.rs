@@ -249,6 +249,32 @@ pub trait ClientApp {
     fn on_round_end(&mut self, _round: u64, _accepted: bool) {}
 }
 
+/// A boxed `ClientApp` is a `ClientApp`.
+///
+/// Needed the moment a caller holds several clients whose concrete types
+/// differ — a catalog of demo models selected by name at runtime, or a
+/// federation where one participant is deliberately Byzantine. Without
+/// this, [`run`]'s `A: ClientApp` cannot be satisfied by
+/// `Box<dyn ClientApp>`, because a trait object is not `Sized` and a
+/// generic parameter is `Sized` by default.
+///
+/// Forwarding rather than relaxing [`run`] to `?Sized`: the bound stays
+/// simple, and every other caller is unaffected.
+impl<A: ClientApp + ?Sized> ClientApp for Box<A> {
+    fn train(&mut self, weights: &[f32], round: u64) -> TrainResult {
+        (**self).train(weights, round)
+    }
+    fn on_round_start(&mut self, round: u64) {
+        (**self).on_round_start(round);
+    }
+    fn on_control_variate(&mut self, c: &[f32]) {
+        (**self).on_control_variate(c);
+    }
+    fn on_round_end(&mut self, round: u64, accepted: bool) {
+        (**self).on_round_end(round, accepted);
+    }
+}
+
 /// Splits one result into chunks.
 ///
 /// `weights` and `control_variate` are split at the same offsets,

@@ -109,7 +109,7 @@ pub use preconditions::{BatchRequirement, batch_requirement};
 /// The framework's version — every workspace crate shares it. A binary
 /// that embeds the framework (`cflux`) reports it next to its own.
 pub const FRAMEWORK_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub use file::{ConfigFileError, load_experiment_file};
+pub use file::{ConfigFileError, load_experiment_file, parse_experiment_toml};
 pub use profile::{
     ModeProfile, ProfileError, TopologyProfile, load_mode_profile, load_topology_profile,
 };

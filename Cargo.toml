@@ -67,6 +67,7 @@ conflux-buffer = { path = "crates/conflux-buffer", version = "0.7.0" }
 # `conflux-federation` is the first crate to depend on it — an
 # in-process federation supplies its clients in Rust.
 conflux-client = { path = "crates/conflux-client", version = "0.7.0" }
+conflux-federation = { path = "crates/conflux-federation", version = "0.7.0" }
 conflux-config = { path = "crates/conflux-config", version = "0.7.0" }
 conflux-core = { path = "crates/conflux-core", version = "0.7.0" }
 conflux-net = { path = "crates/conflux-net", version = "0.7.0" }

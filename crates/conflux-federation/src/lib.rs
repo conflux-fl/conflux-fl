@@ -59,6 +59,8 @@
 
 #![warn(missing_docs)]
 
+pub mod demo;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -152,6 +154,14 @@ pub struct FederationConfig {
     /// the clients have stopped, that quorum is never coming, so a long
     /// grace period buys a wait rather than a cleaner exit.
     pub shutdown_grace: Duration,
+    /// The server's own configuration, or `None` to read it from the
+    /// process environment as [`conflux_server::run_from_env_on`] does.
+    ///
+    /// `Some` is what lets a caller describe a whole federation as a
+    /// value — an aggregator, a quorum and a model dimension chosen in
+    /// code rather than exported first. `cflux fed run` builds one from
+    /// a manifest; a sweep builds a different one per combination.
+    pub server: Option<conflux_server::ServerConfig>,
     /// Rounds each client completes. [`run`] only.
     pub rounds: usize,
     /// How long a client waits before re-asking its node for a round
@@ -176,6 +186,7 @@ impl Default for FederationConfig {
             nodes: 2,
             node: NodeTemplate::default(),
             client_id_prefix: "client".to_string(),
+            server: None,
             startup_timeout: Duration::from_secs(30),
             shutdown_grace: Duration::from_secs(2),
             rounds: 1,
@@ -446,17 +457,17 @@ impl Federation {
         let mut tasks = JoinSet::new();
 
         let server_cancel = cancel.clone();
+        let server_config = config.server.clone();
         tasks.spawn(async move {
-            Component::Server(
-                conflux_server::run_from_env_on(
-                    conflux_server::ServerListeners {
-                        grpc: grpc_listener,
-                        http: http_listener,
-                    },
-                    server_cancel.cancelled_owned(),
-                )
-                .await,
-            )
+            let listeners = conflux_server::ServerListeners {
+                grpc: grpc_listener,
+                http: http_listener,
+            };
+            let shutdown = server_cancel.cancelled_owned();
+            Component::Server(match server_config {
+                Some(config) => conflux_server::run_on(listeners, config, shutdown).await,
+                None => conflux_server::run_from_env_on(listeners, shutdown).await,
+            })
         });
 
         // Wait for the server before starting nodes. Not because a node
