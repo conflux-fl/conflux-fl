@@ -74,6 +74,12 @@ pub(crate) enum CliError {
     /// A federation could not start, or did not finish.
     #[error("{0}")]
     Federation(conflux_federation::FederationError),
+    /// A federation of processes could not start, or did not finish.
+    #[error("{0}")]
+    ProcessFederation(conflux_federation::process::ProcessError),
+    /// A single client could not run.
+    #[error("{0}")]
+    Client(conflux_federation::ClientError),
     /// A file the command was asked to read could not be read.
     #[error("could not read {path}: {source}")]
     Read {
@@ -89,18 +95,6 @@ pub(crate) enum CliError {
         path: String,
         /// What is wrong with it.
         message: String,
-    },
-    /// A flag names a capability this version does not have yet.
-    ///
-    /// Separate from an invalid value: `--isolation process` is a real
-    /// setting that will work, and telling someone their spelling is
-    /// wrong would send them looking in the wrong place.
-    #[error("{what} is not built yet — {instead}")]
-    NotYetBuilt {
-        /// The flag or value.
-        what: &'static str,
-        /// What to do instead.
-        instead: &'static str,
     },
     /// A file the command was asked to write could not be written.
     #[error("could not write {path}: {source}")]

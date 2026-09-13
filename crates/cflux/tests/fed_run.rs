@@ -161,17 +161,6 @@ fn the_demo_is_loud_about_what_it_is() {
 }
 
 #[test]
-fn an_unbuilt_isolation_says_so_rather_than_failing_obscurely() {
-    let out = cflux(&["fed", "run", "--isolation", "process"]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("not built yet") && stderr.contains("--isolation task"),
-        "should name the state and the alternative: {stderr}"
-    );
-}
-
-#[test]
 fn an_unknown_model_lists_what_exists() {
     let out = cflux(&["fed", "run", "--model", "resnet50"]);
     assert!(!out.status.success());
@@ -196,4 +185,200 @@ fn every_demo_model_is_listed_with_its_caveat() {
             m["name"]
         );
     }
+}
+
+/// A temp directory for one test's child logs, named so two `cargo test`
+/// runs at once cannot share it.
+fn temp_log_dir(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("cflux-fed-{tag}-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// The claim the two isolation tiers make about each other: same
+/// federation, same pipeline, different amount of process isolation. If
+/// they disagreed on what was learned, one of them would be lying about
+/// being the real pipeline.
+#[test]
+fn the_two_tiers_agree_on_what_was_learned() {
+    let dir = temp_log_dir("agree");
+    let args = ["--clients", "3", "--rounds", "15", "--model", "logreg"];
+
+    let task = cflux(&[&["--format", "json", "fed", "run"][..], &args[..]].concat());
+    assert!(
+        task.status.success(),
+        "task tier: {}",
+        String::from_utf8_lossy(&task.stderr)
+    );
+    let task = json(&task);
+
+    let process = cflux(
+        &[
+            &["--format", "json", "fed", "run"][..],
+            &args[..],
+            &["--isolation", "process", "--log-dir", dir.to_str().unwrap()][..],
+        ]
+        .concat(),
+    );
+    assert!(
+        process.status.success(),
+        "process tier: {}",
+        String::from_utf8_lossy(&process.stderr)
+    );
+    let process = json(&process);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(task["isolation"], "task");
+    assert_eq!(process["isolation"], "process");
+    // Neither is a simulation, and both say so in the machine-readable
+    // report rather than only in prose.
+    assert_eq!(task["simulated"], false);
+    assert_eq!(process["simulated"], false);
+
+    let a = task["score"]["value"].as_f64().expect("task score");
+    let b = process["score"]["value"].as_f64().expect("process score");
+    assert_eq!(
+        task["score"]["label"], process["score"]["label"],
+        "both tiers should report the same metric"
+    );
+    assert!(
+        (a - b).abs() < 1e-6,
+        "the tiers disagree about what was learned: task {a}, process {b}"
+    );
+    assert!(a > 0.9, "three clients should have learned something: {a}");
+}
+
+/// Process mode spawns the same commands an operator runs on real
+/// machines, and prints them. That printout is the deployment recipe, so
+/// it is part of the contract rather than decoration.
+#[test]
+fn process_mode_prints_what_it_ran() {
+    let dir = temp_log_dir("recipe");
+    let out = cflux(&[
+        "--format",
+        "json",
+        "fed",
+        "run",
+        "--clients",
+        "2",
+        "--rounds",
+        "2",
+        "--model",
+        "stub",
+        "--isolation",
+        "process",
+        "--log-dir",
+        dir.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json(&out);
+    let recipe: Vec<String> = v["recipe"]
+        .as_array()
+        .expect("a recipe")
+        .iter()
+        .map(|l| l.as_str().unwrap().to_string())
+        .collect();
+
+    // One server, two nodes, two clients.
+    assert_eq!(recipe.len(), 5, "{recipe:#?}");
+    assert!(recipe[0].contains("server start"), "{}", recipe[0]);
+    assert!(recipe[1].contains("node start"), "{}", recipe[1]);
+    assert!(recipe[3].contains("fed client"), "{}", recipe[3]);
+
+    // Every listener is on port 0, which is the whole point: nothing in
+    // this federation picked a port.
+    for line in recipe.iter().take(3) {
+        assert!(
+            line.contains("127.0.0.1:0"),
+            "a listener should bind port 0 and report back: {line}"
+        );
+    }
+    // And the clients were told a real address that the node reported.
+    assert!(
+        recipe[3].contains("--address http://127.0.0.1:") && !recipe[3].contains(":0 "),
+        "the client should get the node's real address: {}",
+        recipe[3]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A client that is a program cannot be a task, and saying so is better
+/// than failing later with something about trait bounds.
+#[test]
+fn a_client_command_needs_its_own_process() {
+    let manifest = temp_manifest(
+        r#"
+[client]
+command = ["python3", "-m", "trainer"]
+"#,
+    );
+    let out = cflux(&[
+        "fed",
+        "run",
+        manifest.to_str().unwrap(),
+        "--isolation",
+        "task",
+    ]);
+    let _ = std::fs::remove_file(&manifest);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--isolation process"),
+        "should name the tier that can run it: {stderr}"
+    );
+}
+
+/// An arbitrary program is driven through the same contract the SDKs
+/// implement — `--address`, `--client-id`, `--rounds` appended to
+/// whatever the manifest names. Proven here with a command that is not
+/// the built-in path, even though it happens to be the same binary.
+#[test]
+fn an_external_command_gets_the_address_and_identity_contract() {
+    let dir = temp_log_dir("command");
+    let exe = env!("CARGO_BIN_EXE_cflux");
+    let manifest = temp_manifest(&format!(
+        r#"
+[federation]
+clients = 2
+rounds  = 3
+
+[client]
+command = ["{exe}", "fed", "client", "--model", "linreg"]
+"#
+    ));
+    let out = cflux(&[
+        "--format",
+        "json",
+        "fed",
+        "run",
+        manifest.to_str().unwrap(),
+        "--isolation",
+        "process",
+        "--log-dir",
+        dir.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_file(&manifest);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json(&out);
+    assert_eq!(v["clients"].as_array().unwrap().len(), 2);
+    let recipe = v["recipe"].as_array().unwrap();
+    let client_line = recipe.last().unwrap().as_str().unwrap();
+    assert!(
+        client_line.contains("--address")
+            && client_line.contains("--client-id client-1")
+            && client_line.contains("--rounds 3"),
+        "the contract should be appended to the command: {client_line}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

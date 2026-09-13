@@ -60,6 +60,7 @@
 #![warn(missing_docs)]
 
 pub mod demo;
+pub mod process;
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -72,7 +73,7 @@ use tokio_util::sync::CancellationToken;
 // `conflux-node` and `conflux-privacy` as direct dependencies of their
 // own. An orchestrator that makes you depend on the things it
 // orchestrates has not saved you much.
-pub use conflux_client::{ClientApp, RunConfig, TrainResult};
+pub use conflux_client::{ClientApp, ClientError, RunConfig, TrainResult, run as run_client};
 pub use conflux_node::{ClientAppKind, ClientTls, ConnectionMode, RuntimeMode};
 pub use conflux_privacy::GaussianClippingPrivacy;
 

@@ -58,6 +58,37 @@ enum Command {
     /// List the demo clients this binary can run without one being
     /// written.
     Models,
+    /// Run **one** demo client against a node's local hop.
+    ///
+    /// The other half of `--isolation process`: a demo model has to be
+    /// reachable as its own process, and it speaks the same
+    /// `--address` / `--client-id` / `--rounds` contract as any Python
+    /// trainer, so the supervisor treats them identically.
+    Client(ClientArgs),
+}
+
+#[derive(ClapArgs)]
+pub struct ClientArgs {
+    /// The node's local hop, e.g. `http://127.0.0.1:47100`.
+    #[arg(long)]
+    address: String,
+    /// This client's identity. Must match the node's, or the server
+    /// receives an update from a participant it never registered.
+    #[arg(long)]
+    client_id: String,
+    /// How many rounds to complete before exiting.
+    #[arg(long, default_value_t = 1)]
+    rounds: usize,
+    /// Which demo client. `cflux fed models` lists them.
+    #[arg(long, default_value = DEFAULT_MODEL)]
+    model: String,
+    /// Write this client's score of the global model to this file.
+    ///
+    /// The same mechanism as `--addr-file`, for the same reason: a
+    /// supervisor in another process cannot see what this one learned,
+    /// and parsing it out of a log would be guesswork.
+    #[arg(long, value_name = "FILE")]
+    score_file: Option<PathBuf>,
 }
 
 /// How much of a real deployment to reproduce.
@@ -110,6 +141,10 @@ pub struct RunArgs {
     /// Seconds before the run is declared stalled.
     #[arg(long)]
     timeout_secs: Option<u64>,
+    /// Where each process writes its log, under `--isolation process`.
+    /// Defaults to `cflux-fed/` under the system temp directory.
+    #[arg(long, value_name = "DIR")]
+    log_dir: Option<PathBuf>,
 }
 
 /// A `fed.toml`.
@@ -158,13 +193,93 @@ struct MethodSection {
 struct ClientSection {
     /// One of the demo clients, by name.
     builtin: Option<String>,
+    /// Your own client, as a program and its arguments.
+    ///
+    /// `--address`, `--client-id` and `--rounds` are appended — the
+    /// contract `conflux_client`'s argument parser and
+    /// `python/conflux_client/app.py` both already implement, so a
+    /// trainer written against either SDK needs no adapter.
+    ///
+    /// Only `--isolation process` can run one: a task cannot host a
+    /// Python interpreter.
+    command: Option<Vec<String>>,
 }
 
 pub fn run(args: Args) -> Result<Report, CliError> {
     match args.command {
         Command::Run(a) => run_federation(a),
         Command::Models => Ok(models_report()),
+        Command::Client(a) => run_one_client(a),
     }
+}
+
+fn run_one_client(args: ClientArgs) -> Result<Report, CliError> {
+    let model = lookup_model(&args.model)?;
+    // Nothing reads this one back, but the demo models write into it —
+    // the same slot `fed run` uses to score what was learned.
+    let seen = Arc::new(Mutex::new(vec![0.0f32; model.weights_dim]));
+    let seen_for_score = Arc::clone(&seen);
+    let mut app = (model.make)(client_index(&args.client_id), seen);
+
+    let config = conflux_federation::RunConfig {
+        address: args.address.clone(),
+        client_id: args.client_id.clone(),
+        rounds: args.rounds,
+        poll_interval: Duration::from_millis(25),
+        ..conflux_federation::RunConfig::default()
+    };
+    let completed = crate::commands::run::runtime()?
+        .block_on(conflux_federation::run_client(&mut app, config))
+        .map_err(CliError::Client)?;
+
+    // What this client's last-seen global model is worth, for whoever
+    // started it. Written to a file rather than logged, because a
+    // supervisor parsing logs is guessing.
+    let global = seen_for_score.lock().expect("mutex poisoned").clone();
+    let score = model.score.map(|f| f(&global));
+    if let (Some(path), Some(score)) = (&args.score_file, score) {
+        crate::commands::run::write_report_file(
+            path,
+            &format!("label={}\nvalue={}\n", score.label, score.value),
+        )?;
+    }
+
+    Ok(Report::plain(
+        format!("{} completed {completed} round(s)\n", args.client_id),
+        json!({
+            "ok": true,
+            "client_id": args.client_id,
+            "model": model.name,
+            "rounds_completed": completed,
+        }),
+        0,
+    ))
+}
+
+/// The trailing number of `client-3`, which is also that client's data
+/// shard.
+///
+/// A demo model's shard is chosen by index, and in process mode the only
+/// thing the client is told is its identity — so the index has to come
+/// back out of it. `0` for an id with no trailing number, which is a
+/// perfectly good shard for a caller who never asked for several.
+fn client_index(client_id: &str) -> usize {
+    client_id
+        .rsplit('-')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
+}
+
+/// The demo model called `name`, or an error listing what exists.
+fn lookup_model(name: &str) -> Result<&'static demo::DemoModel, CliError> {
+    demo::lookup(name).ok_or_else(|| CliError::Manifest {
+        path: "client.builtin".to_string(),
+        message: format!(
+            "{name:?} is not a demo client — this binary has {}",
+            demo::names().join(", ")
+        ),
+    })
 }
 
 fn models_report() -> Report {
@@ -227,22 +342,21 @@ fn run_federation(args: RunArgs) -> Result<Report, CliError> {
         .or(manifest.federation.timeout_secs)
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-    if isolation == Isolation::Process {
-        return Err(CliError::NotYetBuilt {
-            what: "--isolation process",
-            instead: "run with --isolation task, which is the same federation with \
-                      the participants as tasks rather than processes. Process \
-                      isolation is the next tier and is not built yet.",
+    let client_command = manifest.client.command.clone();
+    if client_command.is_some() && isolation == Isolation::Task {
+        return Err(CliError::Manifest {
+            path: "client.command".to_string(),
+            message: "a command needs its own process — run with --isolation process. \
+                      The task tier runs clients as tokio tasks in this process, which \
+                      cannot host a program."
+                .to_string(),
         });
     }
 
-    let model = demo::lookup(&model_name).ok_or_else(|| CliError::Manifest {
-        path: "client.builtin".to_string(),
-        message: format!(
-            "{model_name:?} is not a demo client — this binary has {}",
-            demo::names().join(", ")
-        ),
-    })?;
+    // A demo model is still resolved in process mode: it is what
+    // `cflux fed client` will run, and its weights_dim is what the
+    // server must be initialized to.
+    let model = lookup_model(&model_name)?;
 
     // The experiment table goes through `conflux-config`'s own parser,
     // so `[experiment]` here means exactly what it means in an
@@ -315,6 +429,19 @@ fn run_federation(args: RunArgs) -> Result<Report, CliError> {
     };
 
     banner(clients, rounds, isolation, model, &resolved, privacy_off);
+
+    if isolation == Isolation::Process {
+        return run_as_processes(
+            clients,
+            rounds,
+            timeout_secs,
+            model,
+            client_command,
+            &resolved,
+            mode,
+            args.log_dir.clone(),
+        );
+    }
 
     let config = FederationConfig {
         nodes: clients,
@@ -451,4 +578,191 @@ fn banner(
             model.weights_dim
         );
     }
+}
+
+/// `--isolation process`: every participant in its own OS process.
+///
+/// The commands are this binary's own — `cflux server start`,
+/// `cflux node start`, `cflux fed client` — which is what makes the
+/// printed recipe worth anything: those are the same commands an
+/// operator runs on real machines, and an installed `cflux` needs no
+/// sibling binaries on disk to run them.
+#[allow(clippy::too_many_arguments)]
+fn run_as_processes(
+    clients: usize,
+    rounds: usize,
+    timeout_secs: u64,
+    model: &'static demo::DemoModel,
+    client_command: Option<Vec<String>>,
+    resolved: &conflux_config::ResolvedConfig,
+    mode: Mode,
+    log_dir: Option<PathBuf>,
+) -> Result<Report, CliError> {
+    use conflux_federation::process::{ProcessParticipant, ProcessPlan, Spawn, own_exe};
+
+    let exe_err = |source| CliError::Read {
+        path: "this executable".to_string(),
+        source,
+    };
+
+    // The children read their configuration from the environment, the
+    // same way every Conflux binary does — so the resolved values are
+    // handed over as `CONFLUX_*` rather than re-derived per child, and a
+    // child's own provenance lines name where each came from.
+    let mut server = own_exe(&["server", "start"]).map_err(exe_err)?;
+    for (var, value) in server_env(resolved, mode, model) {
+        server = server.env(var, value);
+    }
+
+    let log_dir = log_dir.unwrap_or_else(|| std::env::temp_dir().join("cflux-fed"));
+    let participants = (0..clients)
+        .map(|i| {
+            let client_id = format!("client-{i}");
+            let client = match &client_command {
+                Some(parts) if !parts.is_empty() => {
+                    let mut c = Spawn::new(&parts[0]);
+                    for a in &parts[1..] {
+                        c = c.arg(a);
+                    }
+                    c
+                }
+                // No command given: run one of this binary's own demo
+                // clients, which speaks exactly the same contract.
+                _ => own_exe(&["fed", "client"])
+                    .map_err(exe_err)?
+                    .flag("--model", model.name)
+                    .flag("--score-file", log_dir.join(format!("{client_id}.score"))),
+            };
+            Ok(ProcessParticipant {
+                client_id,
+                node: own_exe(&["node", "start"]).map_err(exe_err)?,
+                client,
+            })
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
+
+    let plan = ProcessPlan {
+        server,
+        participants,
+        rounds,
+        startup_timeout: Duration::from_secs(60),
+        run_timeout: Duration::from_secs(timeout_secs),
+        log_dir: log_dir.clone(),
+    };
+
+    let summary = conflux_federation::process::run(plan).map_err(CliError::ProcessFederation)?;
+
+    let mut text = format!(
+        "\nfederation complete — {} client(s), {} round(s)\n",
+        summary.clients.len(),
+        rounds
+    );
+    for outcome in &summary.clients {
+        text.push_str(&format!("  {:<12} exited cleanly\n", outcome.client_id));
+    }
+    // Each client scored the global model it last saw and wrote the
+    // number to a file, because a supervisor in another process has no
+    // other way to see what was learned.
+    let scores = collect_scores(&log_dir, &summary);
+    match scores.as_slice() {
+        [] => text.push_str("\n  No score: this model has none, or no client reported one.\n"),
+        values => {
+            let mean = values.iter().map(|(_, v)| v).sum::<f32>() / values.len() as f32;
+            text.push_str(&format!(
+                "\n  {} across {} client(s): {:.4}\n",
+                values[0].0,
+                values.len(),
+                mean
+            ));
+            // Each client scored the global model *it* last saw, and two
+            // clients can be a round apart. Averaging them is honest;
+            // calling it "the" score would not be.
+            text.push_str("  (each scored the global model it last saw, so this is a mean)\n");
+        }
+    }
+    text.push_str(&format!(
+        "\n  round records: http://{}/rounds\n",
+        summary.server_http_addr
+    ));
+    text.push_str(&format!("\n  logs: {}\n", log_dir.display()));
+    text.push_str("\n  What ran, which is also what you would run on real machines:\n");
+    for line in &summary.recipe {
+        text.push_str(&format!("    {line}\n"));
+    }
+
+    let json = json!({
+        "ok": true,
+        "clients": summary.clients.iter().map(|c| json!({
+            "client_id": c.client_id,
+            "exit_code": c.exit_code,
+        })).collect::<Vec<_>>(),
+        "rounds": rounds,
+        "model": model.name,
+        "isolation": "process",
+        "simulated": false,
+        "grpc_addr": summary.server_grpc_addr.to_string(),
+        "http_addr": summary.server_http_addr.to_string(),
+        "log_dir": log_dir.display().to_string(),
+        "recipe": summary.recipe,
+        "score": scores.first().map(|(label, _)| json!({
+            "label": label,
+            "value": scores.iter().map(|(_, v)| v).sum::<f32>() / scores.len() as f32,
+            "clients_reporting": scores.len(),
+        })),
+    });
+    Ok(Report::plain(text, json, 0))
+}
+
+/// Reads back what each client scored, skipping any that reported none.
+fn collect_scores(
+    log_dir: &Path,
+    summary: &conflux_federation::process::ProcessSummary,
+) -> Vec<(String, f32)> {
+    summary
+        .clients
+        .iter()
+        .filter_map(|c| {
+            let path = log_dir.join(format!("{}.score", c.client_id));
+            let text = std::fs::read_to_string(path).ok()?;
+            let mut label = None;
+            let mut value = None;
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("label=") {
+                    label = Some(rest.to_string());
+                } else if let Some(rest) = line.strip_prefix("value=") {
+                    value = rest.parse().ok();
+                }
+            }
+            Some((label?, value?))
+        })
+        .collect()
+}
+
+/// The `CONFLUX_*` variables a child server needs to resolve to exactly
+/// what this command already resolved.
+fn server_env(
+    resolved: &conflux_config::ResolvedConfig,
+    mode: Mode,
+    model: &demo::DemoModel,
+) -> Vec<(String, String)> {
+    vec![
+        ("CONFLUX_MODE".into(), mode.label().to_string()),
+        (
+            "CONFLUX_AGGREGATOR".into(),
+            resolved.aggregator.value.clone(),
+        ),
+        ("CONFLUX_SELECTOR".into(), resolved.selector.value.clone()),
+        (
+            "CONFLUX_CLIP_NORM".into(),
+            resolved.clip_norm.value.to_string(),
+        ),
+        (
+            "CONFLUX_NOISE_MULTIPLIER".into(),
+            resolved.noise_multiplier.value.to_string(),
+        ),
+        (
+            "CONFLUX_INITIAL_WEIGHTS_DIM".into(),
+            model.weights_dim.to_string(),
+        ),
+    ]
 }
