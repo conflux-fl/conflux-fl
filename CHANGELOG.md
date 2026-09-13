@@ -14,6 +14,78 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Added
+
+- **`cflux fed run --isolation process`: the same federation, with every
+  participant in its own OS process.** The tier above `task` in fidelity,
+  and the only one that can host a client the orchestrator cannot link —
+  a Python trainer, or anything else speaking the SDK's contract.
+
+  ```bash
+  cflux fed run --clients 5 --rounds 20 --isolation process
+  ```
+
+  **The two tiers agree on what was learned**, and a test asserts it: the
+  same manifest run both ways produces the same held-out score to within
+  1e-6. That is what makes the fast tier trustworthy — not an argument
+  that it should be, but a check that it is.
+
+  **It prints what it ran**, and that printout is the deployment recipe:
+
+  ```
+  cflux server start --addr-file … --grpc-addr 127.0.0.1:0 --http-addr 127.0.0.1:0
+  cflux node start   --addr-file … --server http://127.0.0.1:42381 --client-id client-0 …
+  cflux fed client   --model logreg --address http://127.0.0.1:38827 --client-id client-0 …
+  ```
+
+  Those are this binary's own subcommands, spawned from
+  `current_exe()` — so an installed `cflux` needs no sibling binaries on
+  disk, and the commands it runs locally are the commands an operator
+  runs on real machines.
+
+- **`--addr-file` on `cflux server start` and `cflux node start`.** The
+  child binds `127.0.0.1:0`, writes the address the OS actually gave it,
+  and only then serves.
+
+  This is what keeps the last guess out of the system. The task tier
+  binds every listener itself because it can; separate processes cannot
+  share a listener without passing file descriptors, which is Unix-only
+  and awkward. The tempting alternative is for the supervisor to pick the
+  ports — and every way of doing that is a guess, whether it is
+  base-plus-index or a check-then-bind race. Having the child report
+  instead is race-free and works identically on every platform.
+
+  Written via a temporary file and a rename, because the reader is
+  polling for it: a partial read of a half-written file hands back an
+  address that is a *prefix* of the real one, which parses and then
+  connects to the wrong port.
+
+- **`cflux fed client`** runs one demo client against a node's local hop,
+  speaking the same `--address` / `--client-id` / `--rounds` contract as
+  any Python trainer — so the supervisor treats built-in and external
+  clients identically. `--score-file` is how it reports what the global
+  model was worth, since a supervisor in another process cannot see it
+  and parsing a log would be guesswork.
+
+- **`[client] command` in `fed.toml`** names your own client as a program
+  and its arguments. `--address`, `--client-id` and `--rounds` are
+  appended — the contract `conflux_client`'s parser and
+  `python/conflux_client/app.py` both already implement, so a trainer
+  written against either SDK needs no adapter. Refused under
+  `--isolation task`, which names the tier that can run it rather than
+  failing later.
+
+- **`conflux_federation::process`** is the supervisor underneath: it
+  spawns, waits for each child to report its address, routes every
+  child's output to a named log, and kills everything on the way out
+  however it leaves — `Drop`, so an early return, a `?` or a panic all
+  clean up. Four failure modes a shell script gets wrong: a child that
+  dies during startup is reported as *that child's* error rather than a
+  timeout elsewhere; a failure quotes the tail of the log that explains
+  it; nothing is left running; and "the port answers" is never mistaken
+  for "our process answered", because the address came from the child.
+
+
 ## [0.8.0] — 2026-09-13
 
 The release where the framework got a front door.
