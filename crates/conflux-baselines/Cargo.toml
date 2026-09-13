@@ -19,6 +19,10 @@ publish = false
 # registry (their `inventory::submit!` entries) — see the force-link in
 # main.rs. None of this is `conflux-attacks`; the CI isolation edge holds.
 conflux-config.workspace = true
+# The process supervisor, shared with `cflux fed run --isolation process`
+# — so a reproduction and a demo federation are orchestrated by one
+# implementation rather than two that drift.
+conflux-federation.workspace = true
 conflux-core.workspace = true
 conflux-selector.workspace = true
 conflux-privacy.workspace = true

@@ -14,6 +14,60 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`conflux-baselines` runs on the shared supervisor.** The reproduction
+  runner had its own copy of process orchestration, with the defects the
+  rest of the workspace spent three releases removing: `node_base + i`
+  for node ports, an `ensure_free` connect-probe that is check-then-bind
+  rather than a check, `wait_for_child_port`, and a second `Processes`
+  type. All of it is gone — **124 lines deleted** — in favour of
+  `conflux_federation::process`, the same supervisor
+  `cflux fed run --isolation process` uses.
+
+  **A reproduction no longer needs a free port.** Before this, a run on a
+  machine with anything on 8080 refused to start until three
+  `CONFLUX_*_PORT` variables were set by hand. That is not hypothetical:
+  it is what happened on the machine this change was written on. Now every
+  listener binds `127.0.0.1:0` and reports back, so the variables are gone
+  rather than merely defaulted.
+
+  **Verified against real reproductions, not reasoning.** `krum` gives
+  `held_out_accuracy = 0.8900` before and after, and `fedavg` gives
+  `0.9270` — the value its own manifest records. The round series is also
+  *better*: the old runner reported rounds 1–10 and 12–16 for a 15-round
+  request, missing one and overrunning by one, because the evaluator was
+  racing the teardown. It now reports exactly 1–15.
+
+  It spawns `cflux server start` and `cflux node start` rather than the
+  `conflux-server` and `conflux-node` binaries, so `cargo build -p cflux`
+  replaces building two — and `--addr-file`, which is what lets a listener
+  bind port 0, exists only there.
+
+- **`conflux_federation::process` grew observers.** An `Observer` is a
+  client that attaches to an existing participant's node rather than
+  having one of its own — an evaluator, which registers like any client,
+  never submits, and reports what the global model is worth. Giving it a
+  node of its own would add a participant to the registry and change the
+  quorum the round waits for.
+
+  `run_watching` delivers a streaming observer's stdout line by line as it
+  arrives, off a reader thread, so the supervisor stays able to notice a
+  trainer dying while the evaluator is quiet.
+
+  **The run ends when the clients *and* the observers have finished.** An
+  evaluator asked for N rounds has not finished reporting when the last
+  trainer exits, and killing it there truncates the number the run exists
+  to produce.
+
+- **A client's `--address` is passed without a scheme.** The two SDKs
+  disagree underneath — Python's `grpc.insecure_channel` wants a bare
+  `host:port`, tonic wants a `http://` URL — and both document the bare
+  form as their `--address` default. That is the form a client can always
+  accept, so it is the one the supervisor sends; `cflux fed client` adds
+  the scheme it needs rather than making the caller know which language is
+  on the other side.
+
 ### Added
 
 - **`cflux fed run --isolation process`: the same federation, with every

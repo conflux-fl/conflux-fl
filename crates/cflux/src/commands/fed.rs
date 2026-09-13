@@ -69,7 +69,13 @@ enum Command {
 
 #[derive(ClapArgs)]
 pub struct ClientArgs {
-    /// The node's local hop, e.g. `http://127.0.0.1:47100`.
+    /// The node's local hop, e.g. `127.0.0.1:47100`.
+    ///
+    /// A scheme is added if you leave it off. Both SDKs default to the
+    /// bare form, but the runtimes underneath disagree — Python's
+    /// `grpc.insecure_channel` wants `host:port` and tonic wants a URL —
+    /// so this accepts either rather than making the caller know which
+    /// language is on the other side.
     #[arg(long)]
     address: String,
     /// This client's identity. Must match the node's, or the server
@@ -221,8 +227,13 @@ fn run_one_client(args: ClientArgs) -> Result<Report, CliError> {
     let seen_for_score = Arc::clone(&seen);
     let mut app = (model.make)(client_index(&args.client_id), seen);
 
+    let address = if args.address.contains("://") {
+        args.address.clone()
+    } else {
+        format!("http://{}", args.address)
+    };
     let config = conflux_federation::RunConfig {
-        address: args.address.clone(),
+        address,
         client_id: args.client_id.clone(),
         rounds: args.rounds,
         poll_interval: Duration::from_millis(25),
@@ -644,6 +655,9 @@ fn run_as_processes(
     let plan = ProcessPlan {
         server,
         participants,
+        // No evaluator here: a demo client scores itself and writes the
+        // number to a file, which is cheaper than a sixth process.
+        observers: Vec::new(),
         rounds,
         startup_timeout: Duration::from_secs(60),
         run_timeout: Duration::from_secs(timeout_secs),

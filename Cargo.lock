@@ -1429,6 +1429,7 @@ version = "0.8.0"
 dependencies = [
  "conflux-config",
  "conflux-core",
+ "conflux-federation",
  "conflux-privacy",
  "conflux-selector",
  "serde",

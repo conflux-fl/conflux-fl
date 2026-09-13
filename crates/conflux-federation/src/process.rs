@@ -115,7 +115,40 @@ pub struct ProcessParticipant {
     /// The client. `--address`, `--client-id` and `--rounds` are
     /// appended, which is the contract `conflux_client`'s own argument
     /// parser and `python/conflux_client/app.py` both implement.
+    ///
+    /// The address is passed **without a scheme** — `127.0.0.1:47100`,
+    /// which is what both SDKs use as their `--address` default. The two
+    /// runtimes disagree underneath: Python's `grpc.insecure_channel`
+    /// wants a bare `host:port` and tonic wants a `http://` URL. The bare
+    /// form is the one a client can always accept, so it is the one sent,
+    /// and a Rust client adds the scheme it needs.
     pub client: Spawn,
+}
+
+/// A client that attaches to an existing participant's node rather than
+/// having one of its own.
+///
+/// The case this exists for is an **evaluator**: something that registers
+/// like any other client, never submits, and reports what the global
+/// model is worth each round. It needs a local hop, but giving it a node
+/// of its own would put an extra participant in the server's registry and
+/// change the quorum the round is waiting for.
+#[derive(Debug, Clone)]
+pub struct Observer {
+    /// Its identity. Distinct from the participant whose node it shares.
+    pub client_id: String,
+    /// Which participant's local hop to attach to, by index.
+    pub node: usize,
+    /// The program. `--address` is appended; `--client-id` is not,
+    /// because an evaluator's own flags vary and it is not submitting
+    /// under an identity the server aggregates.
+    pub spawn: Spawn,
+    /// Send this observer's stdout to [`run`]'s callback, line by line,
+    /// as it arrives.
+    ///
+    /// An evaluator's output *is* the progress of the run, so a caller
+    /// wants it while it happens rather than in a file afterwards.
+    pub stream_stdout: bool,
 }
 
 /// Everything needed to run one federation as processes.
@@ -125,6 +158,10 @@ pub struct ProcessPlan {
     pub server: Spawn,
     /// Every participant, in order.
     pub participants: Vec<ProcessParticipant>,
+    /// Extra clients sharing an existing participant's node — an
+    /// evaluator, typically. Started after the trainers, so what they
+    /// observe is a running federation.
+    pub observers: Vec<Observer>,
     /// Rounds each client is asked for.
     pub rounds: usize,
     /// How long any one participant may take to report its address and
@@ -233,6 +270,16 @@ pub enum ProcessError {
         /// The identities still going.
         unfinished: Vec<String>,
     },
+    /// An observer names a participant that does not exist.
+    #[error("observer {observer} asks for node {node}, but this federation has {participants}")]
+    NoSuchNode {
+        /// Which observer.
+        observer: String,
+        /// The index it asked for.
+        node: usize,
+        /// How many there are.
+        participants: usize,
+    },
     /// A log file or the log directory could not be created.
     #[error("could not open {path}: {source}")]
     Log {
@@ -263,6 +310,18 @@ impl Children {
     fn push(&mut self, label: &str, child: Child) -> &mut Child {
         self.running.push((label.to_string(), child));
         &mut self.running.last_mut().expect("just pushed").1
+    }
+
+    /// Whether the child with this label has finished.
+    ///
+    /// `true` for a label that is not here, so a caller waiting on
+    /// something that was never started does not wait forever.
+    fn has_exited(&mut self, label: &str) -> bool {
+        self.running
+            .iter_mut()
+            .find(|(l, _)| l == label)
+            .map(|(_, c)| !matches!(c.try_wait(), Ok(None)))
+            .unwrap_or(true)
     }
 }
 
@@ -316,6 +375,35 @@ fn spawn(label: &str, s: &Spawn, log_dir: &Path) -> Result<(Child, PathBuf), Pro
     cmd.args(&s.args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
+        .stderr(Stdio::from(errors));
+    for (k, v) in &s.env {
+        cmd.env(k, v);
+    }
+    let child = cmd.spawn().map_err(|source| ProcessError::Spawn {
+        label: label.to_string(),
+        program: s.program.to_string_lossy().into_owned(),
+        source,
+    })?;
+    Ok((child, log_path))
+}
+
+/// [`spawn`], but with stdout kept for the caller to read rather than
+/// redirected to the log. Errors still go to the log, so a failure is
+/// explicable either way.
+fn spawn_streaming(
+    label: &str,
+    s: &Spawn,
+    log_dir: &Path,
+) -> Result<(Child, PathBuf), ProcessError> {
+    let log_path = log_dir.join(format!("{label}.log"));
+    let errors = std::fs::File::create(&log_path).map_err(|source| ProcessError::Log {
+        path: log_path.display().to_string(),
+        source,
+    })?;
+    let mut cmd = Command::new(&s.program);
+    cmd.args(&s.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::from(errors));
     for (k, v) in &s.env {
         cmd.env(k, v);
@@ -408,6 +496,21 @@ fn health_ok(addr: SocketAddr) -> bool {
 /// Blocking, deliberately: this is process supervision, not async I/O.
 /// Every child is killed when this returns, whichever way it returns.
 pub fn run(plan: ProcessPlan) -> Result<ProcessSummary, ProcessError> {
+    run_watching(plan, |_| {})
+}
+
+/// [`run`], with every streaming observer's stdout delivered line by line
+/// as it arrives.
+///
+/// `on_line` is called from this thread, between polls, so it can print,
+/// parse or accumulate without any locking of its own. The lines come off
+/// a background reader thread through a channel — reading a child's
+/// stdout is blocking, and doing it inline would stop the supervisor
+/// noticing that a trainer had died.
+pub fn run_watching(
+    plan: ProcessPlan,
+    mut on_line: impl FnMut(&str),
+) -> Result<ProcessSummary, ProcessError> {
     std::fs::create_dir_all(&plan.log_dir).map_err(|source| ProcessError::Log {
         path: plan.log_dir.display().to_string(),
         source,
@@ -495,7 +598,7 @@ pub fn run(plan: ProcessPlan) -> Result<ProcessSummary, ProcessError> {
             &log,
             plan.startup_timeout,
         )?;
-        node_urls.push(format!("http://{addr}"));
+        node_urls.push(addr.to_string());
     }
 
     // --- the clients -----------------------------------------------------
@@ -515,6 +618,53 @@ pub fn run(plan: ProcessPlan) -> Result<ProcessSummary, ProcessError> {
         let (child, log) = spawn(&label, &client, &plan.log_dir)?;
         clients.push((i, p.client_id.clone(), child, log));
     }
+
+    // --- observers -------------------------------------------------------
+    //
+    // After the trainers, so what an evaluator sees is a federation that
+    // is already running rather than one still assembling.
+    let (lines_tx, lines_rx) = std::sync::mpsc::channel::<String>();
+    let mut observer_labels: Vec<String> = Vec::new();
+    for (i, o) in plan.observers.iter().enumerate() {
+        let label = format!("observer-{i}-{}", o.client_id);
+        let node_url = node_urls
+            .get(o.node)
+            .ok_or_else(|| ProcessError::NoSuchNode {
+                observer: o.client_id.clone(),
+                node: o.node,
+                participants: node_urls.len(),
+            })?;
+        let observer = o.spawn.clone().flag("--address", node_url);
+        recipe.push(observer.recipe());
+
+        observer_labels.push(label.clone());
+        if o.stream_stdout {
+            let (mut child, _log) = spawn_streaming(&label, &observer, &plan.log_dir)?;
+            let stdout = child.stdout.take().expect("piped above");
+            let tx = lines_tx.clone();
+            // A reader thread rather than an inline loop: reading a
+            // child's stdout blocks, and the supervisor has to stay able
+            // to notice a trainer dying while the evaluator is quiet.
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stdout)
+                    .lines()
+                    .map_while(Result::ok)
+                {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            children.push(&label, child);
+        } else {
+            let (child, _log) = spawn(&label, &observer, &plan.log_dir)?;
+            children.push(&label, child);
+        }
+    }
+    // The only remaining sender is held by the reader threads, so the
+    // channel closes when they do.
+    drop(lines_tx);
 
     // --- wait ------------------------------------------------------------
     let deadline = Instant::now() + plan.run_timeout;
@@ -545,7 +695,26 @@ pub fn run(plan: ProcessPlan) -> Result<ProcessSummary, ProcessError> {
                 Err(_) => still_running.push(client_id.clone()),
             }
         }
-        if still_running.is_empty() {
+        // Whatever the observers have said since the last poll, handed
+        // over before the loop sleeps — a caller printing progress should
+        // see it as it happens.
+        while let Ok(line) = lines_rx.try_recv() {
+            on_line(&line);
+        }
+
+        // An observer is part of the run, not a spectator on it: an
+        // evaluator asked for N rounds has not finished reporting when
+        // the last trainer exits, and killing it there truncates the
+        // very number the run exists to produce. So the run is over when
+        // the clients *and* the observers have stopped.
+        let observers_done = observer_labels.iter().all(|l| children.has_exited(l));
+
+        if still_running.is_empty() && observers_done {
+            // Anything said in the last instant, before the remaining
+            // children are killed on the way out.
+            while let Ok(line) = lines_rx.try_recv() {
+                on_line(&line);
+            }
             break;
         }
         if Instant::now() >= deadline {

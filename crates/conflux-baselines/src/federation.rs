@@ -10,11 +10,9 @@
 //! What it reads back is the evaluator's `held_out_accuracy` line — the
 //! server's own model as a client sees it, not a local reconstruction.
 
-use std::io::{BufRead, BufReader};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 /// Local SGD steps each client takes per round.
 ///
@@ -113,104 +111,6 @@ impl Outcome {
     }
 }
 
-/// Every process this federation started, killed when it goes out of
-/// scope.
-///
-/// A `Drop` rather than a cleanup call at the end: the run can fail at
-/// any of a dozen points, and a server left holding port 50051 turns one
-/// failed baseline into every later baseline failing too.
-#[derive(Default)]
-struct Processes {
-    children: Vec<Child>,
-}
-
-impl Processes {
-    fn push(&mut self, child: Child) -> &mut Child {
-        self.children.push(child);
-        self.children.last_mut().expect("just pushed")
-    }
-}
-
-impl Drop for Processes {
-    fn drop(&mut self) {
-        for child in &mut self.children {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-/// Local ports this federation uses. Every one is overridable, because a
-/// developer machine is allowed to already be using 8080.
-struct Ports {
-    grpc: u16,
-    admin: u16,
-    node_base: u16,
-}
-
-impl Ports {
-    fn from_env() -> Self {
-        fn var(name: &str, default: u16) -> u16 {
-            std::env::var(name)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
-        }
-        Self {
-            grpc: var("CONFLUX_GRPC_PORT", 50051),
-            admin: var("CONFLUX_ADMIN_PORT", 8080),
-            node_base: var("CONFLUX_NODE_PORT_BASE", 47100),
-        }
-    }
-}
-
-/// Refuses to start when something already holds a port this federation
-/// needs.
-///
-/// Checked before spawning, because a port that answers is not evidence
-/// that *our* process answered it. An unrelated service on 8080 will
-/// satisfy any startup probe instantly — before our server has even
-/// tried to bind — and the run then fails much later as a transport
-/// error from the first node, pointing at the wrong thing entirely.
-fn ensure_free(port: u16, what: &str, var: &str) -> Result<(), String> {
-    if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-        return Err(format!(
-            "127.0.0.1:{port} is already in use and the {what} needs it — stop whatever holds \
-             it, or set {var}"
-        ));
-    }
-    Ok(())
-}
-
-/// Waits until `child` is accepting connections on `port`.
-///
-/// A TCP probe rather than an HTTP health check: the runner needs to
-/// know the listener is up, and adding an HTTP client to a build tool to
-/// learn the same thing costs a dependency for nothing.
-///
-/// The child's liveness is checked alongside the port because a port
-/// alone answers the wrong question. Something *else* on the machine can
-/// hold 8080 — which is how this first failed — and then the probe
-/// succeeds against a stranger while our server is already dead, turning
-/// a one-line bind error into a transport error from the first node.
-/// Watching the process instead reports the bind failure where it
-/// happened.
-fn wait_for_child_port(child: &mut Child, port: u16, timeout: Duration) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        match child.try_wait() {
-            Ok(Some(status)) => return Err(format!("it exited early ({status})")),
-            Ok(None) => {}
-            Err(e) => return Err(format!("cannot check whether it is running: {e}")),
-        }
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    Err("it did not accept a connection in time".to_string())
-}
-
 /// The last few lines of a child's log, for a failure message.
 ///
 /// A process that failed to start said why on its stderr, and a runner
@@ -287,19 +187,14 @@ fn prepare(repo_root: &Path, plan: &Plan, work_dir: &Path) -> Result<usize, Stri
 }
 
 /// Runs one federation and returns every round the evaluator reported.
+///
+/// The orchestration itself lives in `conflux_federation::process`, the
+/// same supervisor `cflux fed run --isolation process` uses. This
+/// function's job is the parts that are specific to reproducing a paper:
+/// preparing the shards, describing the participants, and reading the
+/// evaluator's numbers back.
 pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
-    let ports = Ports::from_env();
-    // Up front, before the data preparation spends a minute on a run
-    // that cannot succeed.
-    ensure_free(ports.grpc, "server's gRPC transport", "CONFLUX_GRPC_PORT")?;
-    ensure_free(ports.admin, "server's admin API", "CONFLUX_ADMIN_PORT")?;
-    for i in 0..plan.clients {
-        ensure_free(
-            ports.node_base + i as u16,
-            &format!("local hop for client-{i}"),
-            "CONFLUX_NODE_PORT_BASE",
-        )?;
-    }
+    use conflux_federation::process::{Observer, ProcessParticipant, ProcessPlan, Spawn};
 
     let work_dir = work_dir(repo_root);
     let _ = std::fs::remove_dir_all(&work_dir);
@@ -308,192 +203,149 @@ pub(crate) fn run(repo_root: &Path, plan: &Plan) -> Result<Outcome, String> {
     let dim = prepare(repo_root, plan, &work_dir)?;
     println!("  prepared {} clients; model dimension {dim}", plan.clients);
 
-    let mut procs = Processes::default();
-    let server_bin = repo_root.join("target/debug/conflux-server");
-    let node_bin = repo_root.join("target/debug/conflux-node");
-    for bin in [&server_bin, &node_bin] {
-        if !bin.exists() {
-            return Err(format!(
-                "{} is missing — run `cargo build -p conflux-server -p conflux-node` first",
-                bin.display()
-            ));
-        }
+    // One binary instead of two, and the same one an operator installs.
+    // `cflux server start` and `cflux node start` hand off to exactly the
+    // `run_from_env` the dedicated binaries call, so nothing about the
+    // run changes — but `--addr-file` only exists here, and that is what
+    // lets every listener bind port 0.
+    let cflux = repo_root.join("target/debug/cflux");
+    if !cflux.exists() {
+        return Err(format!(
+            "{} is missing — run `cargo build -p cflux` first",
+            cflux.display()
+        ));
     }
 
     // The reputation filter is a separate defense from the aggregator's
     // own. A robustness baseline turns it off so the number measures the
     // method the paper describes rather than two filters in series.
     let min_reputation = if plan.no_reputation { "0.0" } else { "0.3" };
-    let server = procs.push(
-        Command::new(&server_bin)
-            .env("CONFLUX_TOPOLOGY", "cross_device")
-            .env("CONFLUX_MODE", "research")
-            .env("CONFLUX_AGGREGATOR", plan.aggregator)
-            .env(
-                "CONFLUX_ROBUST_BYZANTINE_FRACTION",
-                plan.byzantine_fraction
-                    .unwrap_or(DEFAULT_BYZANTINE_FRACTION)
-                    .to_string(),
-            )
-            .env("CONFLUX_MIN_REPUTATION_SCORE", min_reputation)
-            .env("CONFLUX_QUORUM", plan.clients.to_string())
-            .env("CONFLUX_SCAFFOLD_NUM_CLIENTS", plan.clients.to_string())
-            .env("CONFLUX_ROUND_TIMEOUT_SECS", "60")
-            // The harnesses measure convergence, not privacy: a clip
-            // wide enough to be inert and no noise, so a number that
-            // moves moved because of the aggregator.
-            .env("CONFLUX_CLIP_NORM", "1000")
-            .env("CONFLUX_NOISE_MULTIPLIER", "0")
-            .env("CONFLUX_INITIAL_WEIGHTS_DIM", dim.to_string())
-            .env("CONFLUX_GRPC_ADDR", format!("127.0.0.1:{}", ports.grpc))
-            .env("CONFLUX_HTTP_ADDR", format!("127.0.0.1:{}", ports.admin))
-            .env("RUST_LOG", "warn")
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(
-                std::fs::File::create(work_dir.join("server.log"))
-                    .map_err(|e| format!("cannot open the server log: {e}"))?,
-            ))
-            .spawn()
-            .map_err(|e| format!("could not start conflux-server: {e}"))?,
-    );
-    if let Err(why) = wait_for_child_port(server, ports.admin, Duration::from_secs(30)) {
-        return Err(format!(
-            "conflux-server never listened on 127.0.0.1:{}: {why} — something else may hold that \
-             port (set CONFLUX_ADMIN_PORT, and CONFLUX_GRPC_PORT){}",
-            ports.admin,
-            tail(&work_dir, "server.log")
-        ));
-    }
-
-    for i in 0..plan.clients {
-        let port = ports.node_base + i as u16;
-        let node = procs.push(
-            Command::new(&node_bin)
-                .env("CONFLUX_CLIENT_ID", format!("client-{i}"))
-                .env("CONFLUX_LOCAL_ADDR", format!("127.0.0.1:{port}"))
-                .env(
-                    "CONFLUX_SERVER_ADDR",
-                    format!("http://127.0.0.1:{}", ports.grpc),
-                )
-                .env("RUST_LOG", "warn")
-                .stdout(Stdio::null())
-                .stderr(Stdio::from(
-                    std::fs::File::create(work_dir.join(format!("node_{i}.log")))
-                        .map_err(|e| format!("cannot open a node log: {e}"))?,
-                ))
-                .spawn()
-                .map_err(|e| format!("could not start conflux-node {i}: {e}"))?,
-        );
-        if let Err(why) = wait_for_child_port(node, port, Duration::from_secs(20)) {
-            return Err(format!(
-                "conflux-node {i} never listened on 127.0.0.1:{port}: {why}{}",
-                tail(&work_dir, &format!("node_{i}.log"))
-            ));
-        }
-    }
+    let server = Spawn::new(&cflux)
+        .arg("server")
+        .arg("start")
+        .env("CONFLUX_TOPOLOGY", "cross_device")
+        .env("CONFLUX_MODE", "research")
+        .env("CONFLUX_AGGREGATOR", plan.aggregator)
+        .env(
+            "CONFLUX_ROBUST_BYZANTINE_FRACTION",
+            plan.byzantine_fraction
+                .unwrap_or(DEFAULT_BYZANTINE_FRACTION)
+                .to_string(),
+        )
+        .env("CONFLUX_MIN_REPUTATION_SCORE", min_reputation)
+        .env("CONFLUX_QUORUM", plan.clients.to_string())
+        .env("CONFLUX_SCAFFOLD_NUM_CLIENTS", plan.clients.to_string())
+        .env("CONFLUX_ROUND_TIMEOUT_SECS", "60")
+        // The harnesses measure convergence, not privacy: a clip wide
+        // enough to be inert and no noise, so a number that moves moved
+        // because of the aggregator.
+        .env("CONFLUX_CLIP_NORM", "1000")
+        .env("CONFLUX_NOISE_MULTIPLIER", "0")
+        .env("CONFLUX_INITIAL_WEIGHTS_DIM", dim.to_string())
+        .env("RUST_LOG", "warn");
 
     let py = python(repo_root);
-    for i in 0..plan.clients {
-        let port = ports.node_base + i as u16;
-        let mut cmd = Command::new(&py);
-        cmd.args(["-m", "_harness.trainer", "--model", plan.recipe.model])
-            .args([
-                "--shard",
-                &work_dir.join(format!("shard_{i}.pt")).display().to_string(),
-            ])
-            .args(["--address", &format!("127.0.0.1:{port}")])
-            .args(["--client-id", &format!("client-{i}")])
-            .args(["--rounds", &plan.rounds.to_string()])
-            .args(["--steps", &LOCAL_STEPS_PER_ROUND.to_string()])
-            // Derived rather than shared: every client reseeding to the
-            // same value would make five trainers draw the same batches,
-            // which is a different experiment from the one intended. The
-            // model init stays shared — federated learning requires it —
-            // and only the sampling varies.
-            .args(["--trainer-seed", &(plan.seed * 1000 + i).to_string()])
-            .current_dir(repo_root.join("baselines"))
-            .stdout(Stdio::null())
-            // Kept, not discarded: a trainer that cannot start is the
-            // most likely reason a run produces no metric, and throwing
-            // its explanation away turns a five-second diagnosis into a
-            // guess. Written to a file per trainer rather than inherited
-            // so five clients do not interleave into nonsense.
-            .stderr(Stdio::from(
-                std::fs::File::create(work_dir.join(format!("trainer_{i}.log")))
-                    .map_err(|e| format!("cannot open a trainer log: {e}"))?,
-            ));
-        // The attackers are the last `attackers` clients, so a run with
-        // none is byte-identical to a clean run.
-        if i >= plan.clients.saturating_sub(plan.attackers) && plan.attackers > 0 {
-            cmd.arg("--poison");
-        }
-        procs.push(
-            cmd.spawn()
-                .map_err(|e| format!("could not start trainer {i}: {e}"))?,
-        );
-    }
+    let baselines_dir = repo_root.join("baselines");
+    let participants: Vec<ProcessParticipant> = (0..plan.clients)
+        .map(|i| {
+            let mut client = Spawn::new(&py)
+                .arg("-m")
+                .arg("_harness.trainer")
+                .flag("--model", plan.recipe.model)
+                .flag("--shard", work_dir.join(format!("shard_{i}.pt")))
+                .flag("--steps", LOCAL_STEPS_PER_ROUND.to_string())
+                // Derived rather than shared: every client reseeding to
+                // the same value would make five trainers draw the same
+                // batches, which is a different experiment from the one
+                // intended. The model init stays shared — federated
+                // learning requires it — and only the sampling varies.
+                .flag("--trainer-seed", (plan.seed * 1000 + i).to_string())
+                .env("PYTHONPATH", &baselines_dir);
+            // The attackers are the last `attackers` clients, so a run
+            // with none is byte-identical to a clean run.
+            if i >= plan.clients.saturating_sub(plan.attackers) && plan.attackers > 0 {
+                client = client.arg("--poison");
+            }
+            ProcessParticipant {
+                client_id: format!("client-{i}"),
+                node: Spawn::new(&cflux)
+                    .arg("node")
+                    .arg("start")
+                    .env("RUST_LOG", "warn"),
+                client,
+            }
+        })
+        .collect();
 
     // The evaluator registers like any other client and never submits,
-    // so what it scores is the server's model as clients receive it.
-    let evaluator = procs.push(
-        Command::new(&py)
-            .args(["-m", "_harness.evaluator", "--model", plan.recipe.model])
-            .args(["--address", &format!("127.0.0.1:{}", ports.node_base)])
-            .args([
-                "--held-out",
-                &work_dir.join("held_out.pt").display().to_string(),
-            ])
-            .args(["--rounds", &plan.rounds.to_string()])
-            .args(["--timeout", "900"])
-            // Every client's own training data, so each round reports the
-            // spread across clients beside the pooled number.
-            .args(["--shards"])
-            .args(
-                (0..plan.clients)
-                    .map(|i| work_dir.join(format!("shard_{i}.pt")).display().to_string()),
-            )
-            .current_dir(repo_root.join("baselines"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::from(
-                std::fs::File::create(work_dir.join("evaluator.log"))
-                    .map_err(|e| format!("cannot open the evaluator log: {e}"))?,
-            ))
-            .spawn()
-            .map_err(|e| format!("could not start the evaluator: {e}"))?,
+    // so what it scores is the server's model as clients receive it. It
+    // shares client 0's local hop rather than taking a node of its own,
+    // which would put a sixth participant in the registry and change the
+    // quorum the round is waiting for.
+    let evaluator = Observer {
+        client_id: "evaluator".to_string(),
+        node: 0,
+        stream_stdout: true,
+        spawn: Spawn::new(&py)
+            .arg("-m")
+            .arg("_harness.evaluator")
+            .flag("--model", plan.recipe.model)
+            .flag("--held-out", work_dir.join("held_out.pt"))
+            .flag("--rounds", plan.rounds.to_string())
+            .flag("--timeout", "900")
+            // Every client's own training data, so each round reports
+            // the spread across clients beside the pooled number.
+            .arg("--shards")
+            .env("PYTHONPATH", &baselines_dir),
+    };
+    let evaluator = (0..plan.clients).fold(evaluator, |mut e, i| {
+        e.spawn = e.spawn.arg(work_dir.join(format!("shard_{i}.pt")));
+        e
+    });
+
+    let mut rounds: Vec<RoundMetric> = Vec::new();
+    let outcome = conflux_federation::process::run_watching(
+        ProcessPlan {
+            server,
+            participants,
+            observers: vec![evaluator],
+            rounds: plan.rounds as usize,
+            startup_timeout: Duration::from_secs(60),
+            run_timeout: Duration::from_secs(1800),
+            log_dir: work_dir.clone(),
+        },
+        |line| {
+            println!("  {line}");
+            // A round line carries all three; anything else is commentary.
+            let (Some(round), Some(accuracy), Some(loss)) = (
+                field(line, "round="),
+                field(line, "held_out_accuracy="),
+                field(line, "held_out_loss="),
+            ) else {
+                return;
+            };
+            let metric = RoundMetric {
+                round: round as u32,
+                accuracy,
+                loss,
+                client_acc_min: field(line, "client_acc_min="),
+                client_acc_std: field(line, "client_acc_std="),
+            };
+            // The evaluator polls, so it can report the same round twice;
+            // the later reading is the one taken.
+            match rounds.iter_mut().find(|r| r.round == metric.round) {
+                Some(existing) => *existing = metric,
+                None => rounds.push(metric),
+            }
+        },
     );
 
-    let stdout = evaluator
-        .stdout
-        .take()
-        .ok_or("the evaluator has no stdout")?;
-    let mut rounds: Vec<RoundMetric> = Vec::new();
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        println!("  {line}");
-        // A round line carries all three; anything else is commentary.
-        let (Some(round), Some(accuracy), Some(loss)) = (
-            field(&line, "round="),
-            field(&line, "held_out_accuracy="),
-            field(&line, "held_out_loss="),
-        ) else {
-            continue;
-        };
-        let metric = RoundMetric {
-            round: round as u32,
-            accuracy,
-            loss,
-            client_acc_min: field(&line, "client_acc_min="),
-            client_acc_std: field(&line, "client_acc_std="),
-        };
-        // The evaluator polls, so it can report the same round twice;
-        // the later reading is the one taken.
-        match rounds.iter_mut().find(|r| r.round == metric.round) {
-            Some(existing) => *existing = metric,
-            None => rounds.push(metric),
-        }
+    if let Err(e) = outcome {
+        return Err(format!("{e}"));
     }
     if rounds.is_empty() {
         let mut message = String::from("the evaluator never reported held_out_accuracy");
-        for name in ["evaluator.log", "trainer_0.log", "server.log"] {
+        for name in ["observer-0-evaluator.log", "client-0.log", "server.log"] {
             message.push_str(&tail(&work_dir, name));
         }
         return Err(message);
