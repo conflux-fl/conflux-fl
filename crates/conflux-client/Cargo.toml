@@ -24,7 +24,7 @@ tracing.workspace = true
 # containment the optional trusted-reference sidecar uses. Nothing but
 # the `burn_mlp` example (which requires this feature) touches it.
 # CPU-only: the `ndarray` backend + `autodiff`, no GPU/CUDA/LibTorch.
-burn = { version = "0.18", optional = true, default-features = false, features = [
+burn = { version = "0.21", optional = true, default-features = false, features = [
     "ndarray",
     "autodiff",
     "std",
