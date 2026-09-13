@@ -1251,7 +1251,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "cflux"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "conflux-config",
@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-attacks"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-core",
  "conflux-proto",
@@ -1425,7 +1425,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-baselines"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-config",
  "conflux-core",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-buffer"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-proto",
  "thiserror 2.0.20",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-client"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "burn",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-config"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "inventory",
  "serde",
@@ -1476,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-config",
  "conflux-proto",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-federation"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-client",
  "conflux-node",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-net"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "conflux-proto",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-node"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "conflux-net",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-privacy"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-config",
  "inventory",
@@ -1552,7 +1552,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-proto"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "prost",
  "protoc-bin-vendored",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-registry"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "redis",
  "thiserror 2.0.20",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-reputation"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "tracing",
  "tracing-test",
@@ -1582,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-selector"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-config",
  "inventory",
@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-server"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-store"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-trusted-reference"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "conflux-core",
  "conflux-net",

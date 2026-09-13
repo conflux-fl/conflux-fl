@@ -25,7 +25,7 @@ members = [
 # true`, so a version bump or a license change is one edit here rather
 # than thirteen — and cannot be applied to twelve crates by accident.
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 # **Set by the dependencies, not by our own source.** `edition = "2024"`
 # stabilized in 1.85 and nothing this workspace *writes* needs anything
@@ -62,23 +62,23 @@ readme = "README.md"
 # how a consumer's `cargo add conflux-server` pulls the rest of the
 # graph. These thirteen move together with `package.version` above — a
 # release bumps them here, not in thirteen manifests.
-conflux-buffer = { path = "crates/conflux-buffer", version = "0.7.0" }
+conflux-buffer = { path = "crates/conflux-buffer", version = "0.8.0" }
 # Listed here rather than only in its own manifest because
 # `conflux-federation` is the first crate to depend on it — an
 # in-process federation supplies its clients in Rust.
-conflux-client = { path = "crates/conflux-client", version = "0.7.0" }
-conflux-federation = { path = "crates/conflux-federation", version = "0.7.0" }
-conflux-config = { path = "crates/conflux-config", version = "0.7.0" }
-conflux-core = { path = "crates/conflux-core", version = "0.7.0" }
-conflux-net = { path = "crates/conflux-net", version = "0.7.0" }
-conflux-node = { path = "crates/conflux-node", version = "0.7.0" }
-conflux-privacy = { path = "crates/conflux-privacy", version = "0.7.0" }
-conflux-proto = { path = "crates/conflux-proto", version = "0.7.0" }
-conflux-registry = { path = "crates/conflux-registry", version = "0.7.0" }
-conflux-reputation = { path = "crates/conflux-reputation", version = "0.7.0" }
-conflux-selector = { path = "crates/conflux-selector", version = "0.7.0" }
-conflux-server = { path = "crates/conflux-server", version = "0.7.0" }
-conflux-store = { path = "crates/conflux-store", version = "0.7.0" }
+conflux-client = { path = "crates/conflux-client", version = "0.8.0" }
+conflux-federation = { path = "crates/conflux-federation", version = "0.8.0" }
+conflux-config = { path = "crates/conflux-config", version = "0.8.0" }
+conflux-core = { path = "crates/conflux-core", version = "0.8.0" }
+conflux-net = { path = "crates/conflux-net", version = "0.8.0" }
+conflux-node = { path = "crates/conflux-node", version = "0.8.0" }
+conflux-privacy = { path = "crates/conflux-privacy", version = "0.8.0" }
+conflux-proto = { path = "crates/conflux-proto", version = "0.8.0" }
+conflux-registry = { path = "crates/conflux-registry", version = "0.8.0" }
+conflux-reputation = { path = "crates/conflux-reputation", version = "0.8.0" }
+conflux-selector = { path = "crates/conflux-selector", version = "0.8.0" }
+conflux-server = { path = "crates/conflux-server", version = "0.8.0" }
+conflux-store = { path = "crates/conflux-store", version = "0.8.0" }
 
 # The `cflux` command line: derive-style argument parsing.
 clap = { version = "4.5", features = ["derive"] }
