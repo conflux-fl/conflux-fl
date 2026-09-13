@@ -16,6 +16,33 @@ promised before `1.0`.
 
 ### Changed
 
+- **Burn 0.18 → 0.21**, for the optional `burn` feature and the
+  `burn_mlp` example that is the Rust edge of every baseline.
+
+  Two API changes: `Backend::Device` moved out of the trait into
+  `BackendTypes`, so the alias `burn::tensor::Device<B>` is now the path
+  that works; and `Backend::seed` seeds a *device* rather than the
+  backend globally, so it takes one.
+
+  **No baseline number moved.** All four Rust edges were measured before
+  and after and are byte-identical: `bulyan` 0.9125, `fedavg` 0.9500,
+  `krum` 0.7125, `trimmed-mean` 0.9775. No `expected` value in any
+  manifest needed changing, which is the outcome that makes this upgrade
+  safe rather than merely compiling.
+
+  `CC0-1.0` joins the `deny.toml` allow list: burn 0.21 pulls
+  `tiny-keccak`, which carries it. Allowed with the caveat written down —
+  CC0 deliberately does not grant patent rights, which matters for a
+  patent-encumbered contribution and does not for a Keccak implementation
+  of a published algorithm.
+
+  This also settles a question left open on 2026-09-10, when CI reported
+  `burn v0.21.0` reaching `tiny-keccak` while `conflux-client` declared
+  `burn = "0.18"`, and the resolution was recorded as not understood.
+  There was no discrepancy: that log came from the dependabot branch,
+  where `burn = "0.21"` does resolve to 0.21 and does pull `tiny-keccak`.
+
+
 - **`conflux-baselines` runs on the shared supervisor.** The reproduction
   runner had its own copy of process orchestration, with the defects the
   rest of the workspace spent three releases removing: `node_base + i`

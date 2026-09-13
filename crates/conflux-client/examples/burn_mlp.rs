@@ -39,7 +39,7 @@ use burn::module::{Module, Param};
 use burn::nn::{Linear, LinearConfig};
 use burn::optim::{GradientsParams, Optimizer, SgdConfig};
 use burn::tensor::backend::Backend;
-use burn::tensor::{Tensor, TensorData, activation};
+use burn::tensor::{Device, Tensor, TensorData, activation};
 
 use conflux_client::{ClientApp, TrainResult, is_placeholder_init};
 // The REAL cited aggregators. The Burn client feeds them exactly as the
@@ -50,8 +50,12 @@ use conflux_proto::{ClientDelta, encode_weights};
 
 // The training backend: NdArray (pure-Rust CPU) wrapped in Autodiff so
 // `.backward()` works. `Dev` is its device handle (CPU).
+//
+// `Device<B>` rather than `<B as Backend>::Device`: burn 0.21 moved the
+// device out of `Backend` into its own `BackendTypes`, and the alias is
+// the path that survives both.
 type AB = Autodiff<NdArray>;
-type Dev = <AB as Backend>::Device;
+type Dev = Device<AB>;
 
 const DIM: usize = 4; // the problem's feature count (true w = [1,1,1,1])
 const HIDDEN: usize = 16; // the hidden layer LR does not have
@@ -69,7 +73,7 @@ struct Mlp<B: Backend> {
 }
 
 impl<B: Backend> Mlp<B> {
-    fn build(device: &B::Device) -> Self {
+    fn build(device: &Device<B>) -> Self {
         Self {
             fc1: LinearConfig::new(DIM, HIDDEN).init(device),
             fc2: LinearConfig::new(HIDDEN, 1).init(device),
@@ -374,7 +378,9 @@ fn main() {
     let byz = args.attackers as f32 / args.clients.max(1) as f32;
 
     let device: Dev = Default::default();
-    AB::seed(0); // reproducible init
+    // Reproducible init. burn 0.21 seeds a *device* rather than the
+    // backend globally, which is why this takes one.
+    AB::seed(&device, 0);
 
     let (test_xs, test_ys) = global_test_set(400);
     // One shared initialization every client starts from — flat, so it

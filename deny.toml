@@ -45,6 +45,19 @@ allow = [
   # `dirs`). Accepting it is a deliberate licensing decision, scoped to
   # that optional feature.
   "MPL-2.0",
+  # Creative Commons Zero — a public-domain dedication, and permissive
+  # beyond MIT in what it allows. Pulled in ONLY via the optional `burn`
+  # dependency, by `tiny-keccak` (a hashing crate in burn's tree since
+  # 0.21).
+  #
+  # Accepted with one caveat worth writing down rather than discovering
+  # later: CC0 deliberately does *not* grant patent rights, which is why
+  # some organizations discourage it for code. That matters for a
+  # patent-encumbered contribution, and does not for a Keccak
+  # implementation of a published algorithm. Scoped to an optional
+  # feature either way — `cargo deny` without `--all-features` never
+  # resolves burn, so this entry does not match at all there.
+  "CC0-1.0",
 ]
 
 [bans]
