@@ -14,6 +14,42 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-13
+
+The release where the framework got a front door.
+
+Before it, an installed `cflux` could inspect — the method catalog, a
+resolved configuration, a checkpoint — and could start one server or one
+node. Running an actual federation meant three terminals, a Python
+virtualenv, three ports chosen by hand, and a stub client that returns
+fixed weights and learns nothing. Now:
+
+```bash
+cflux fed run
+```
+
+Three clients, ten rounds, real gRPC on ports nobody chose, and a model
+that is actually recovered — `linreg` reaches held-out MSE 0.0000 and
+`logreg` 99.25% held-out accuracy. No Python, no toolchain, no ports.
+
+Underneath it are four changes that had to come first, each useful on its
+own: a node and a server that can be configured **in code** rather than
+only from a process-global environment; listeners the **caller** binds,
+because N participants need N ports and every way of choosing them
+without binding is a guess; and `conflux-federation`, the sixteenth
+published crate, which runs a server, N nodes and N clients as tasks in
+one process over the real transport.
+
+**It is a local federation, not a simulation**, and the distinction is
+enforced rather than asserted. Every hop is real; what is missing is the
+network, and — under `--isolation task` — process isolation. Nothing it
+produces is marked `simulated`, because nothing is. `cflux sim` stays
+reserved for the tiers that cut the wire.
+
+Running the whole federation in one process also found a real deadlock
+between a client and a server, which multi-process runs had been hiding
+by being slow. See **Fixed**.
+
 ### Added
 
 - **`conflux-node` can be configured in code, not only from the
@@ -1499,7 +1535,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.8.0
 [0.7.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.7.0
 [0.6.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.6.0
 [0.5.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.5.0

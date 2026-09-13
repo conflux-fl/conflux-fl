@@ -184,7 +184,7 @@ cflux doctor                          # every startup check at once
 
 ### Use the crates
 
-The framework is fifteen crates on crates.io. Take the ones you need:
+The framework is sixteen crates on crates.io. Take the ones you need:
 
 ```bash
 cargo add conflux-core      # 22 cited aggregation methods
