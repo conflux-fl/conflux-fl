@@ -300,10 +300,12 @@ fn process_mode_prints_what_it_ran() {
             "a listener should bind port 0 and report back: {line}"
         );
     }
-    // And the clients were told a real address that the node reported.
+    // And the clients were told a real address that the node reported —
+    // without a scheme, which is what both SDKs' `--address` defaults
+    // use and the only form a Python client can accept.
     assert!(
-        recipe[3].contains("--address http://127.0.0.1:") && !recipe[3].contains(":0 "),
-        "the client should get the node's real address: {}",
+        recipe[3].contains("--address 127.0.0.1:") && !recipe[3].contains("--address 127.0.0.1:0"),
+        "the client should get the node's real address, unschemed: {}",
         recipe[3]
     );
     let _ = std::fs::remove_dir_all(&dir);
