@@ -95,6 +95,26 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     // opened expecting.
     check_batch_requirement(state, round, flush.deltas.len() as u32)?;
 
+    // A defined order, before anything reads the batch.
+    //
+    // The buffer collects submissions as they arrive, and arrival order
+    // is whatever the network and the scheduler produced that round. Most
+    // methods do not care — an average is an average. Selection-based
+    // robust methods do: `bulyan` picks iteratively and breaks ties by
+    // position, so the same set of updates in a different order is a
+    // different result. `conflux-core` is already careful to be
+    // deterministic *given* an ordering (see `robust.rs`'s
+    // `sort_unstable` on selected indices); supplying one is this
+    // function's job, and it was not being done.
+    //
+    // Sorted by client id: arbitrary, but stable across runs, across
+    // machines, and across however the round happened to fill. A
+    // reproduction that depends on packet arrival order is not a
+    // reproduction.
+    let mut flush = flush;
+    flush.deltas.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+    let flush = flush;
+
     let decoded = decode_flushed_deltas(&flush.deltas)?;
     let decoded = filter_by_per_client_budget(state, decoded, round)?;
     let decoded = apply_server_side_privacy(state, decoded);
