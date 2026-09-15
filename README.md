@@ -170,14 +170,24 @@ verify by hand.
 With a Rust toolchain, install from crates.io instead:
 
 ```bash
-cargo install cflux
+cargo install cflux --locked
 ```
+
+`--locked` builds against the `Cargo.lock` published inside the crate, so
+you get the versions the release was tested against rather than whatever
+resolves today. Right now it is **required**, not just advisable: an
+upstream AWS SDK release (`aws-smithy-types 1.7.0`) made a breaking change
+inside a semver-compatible version, and the `aws-smithy-json` the SDK
+still pulls does not compile against it. The
+[installation guide](https://confluxfl.dev/installation/) has the detail.
+Prebuilt binaries are unaffected — they are already compiled.
 
 ```bash
 cflux catalog list                    # every method, its family and paper
 cflux config check --topology cross_silo --mode production
 cflux init --name my_deployment --docker
 cflux doctor                          # every startup check at once
+cflux fed run                         # a real federation that actually learns
 ```
 
 **[The cflux guide →](https://confluxfl.dev/guides/cflux/)**
