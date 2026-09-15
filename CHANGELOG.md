@@ -14,7 +14,81 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`rustls` 0.23.43 → 0.23.45**, for RUSTSEC-2026-0285: TLS 1.3
+  handshake messages were accepted at the wrong encryption level when
+  they followed a key-changing message in the same record — a plaintext
+  `EncryptedExtensions` packed in with the `ServerHello`, for instance.
+
+  Transitive, through `aws-smithy-http-client` and `tonic`, so it reached
+  every crate that talks over the wire. A lockfile bump; nothing declares
+  `rustls` directly.
+
+  The transcript stays authenticated, so this is not a path to altering
+  or completing a handshake — the effect is that a peer could send in
+  plaintext what should have been encrypted without the connection being
+  refused. RFC 8446 §5.1 requires terminating with `unexpected_message`.
+
+- **A round aggregated its batch in arrival order, which is not an
+  order.** The buffer collects submissions as they arrive, and that
+  sequence is whatever the network and the scheduler produced. The batch
+  is now sorted by client id before anything reads it.
+
+  `conflux-core` was already careful to be deterministic *given* an
+  ordering — `robust.rs` sorts the indices it selected, with a comment
+  saying why. Supplying that ordering is the server's job, and it was not
+  being done.
+
+  The effect ranges further than it looks. `bulyan` returned 0.9375,
+  0.8875 and 0.9250 on three consecutive runs over identical inputs,
+  because it selects iteratively and breaks ties by position. But the
+  regression test fails on **`fedavg`** first: floating-point summation
+  is not associative, so even a weighted average was not bit-reproducible
+  across two arrival orders.
+
+  Found by moving the Rust baseline edge onto the real pipeline. Across
+  processes this would have looked like flakiness; in one process it was
+  reproducible enough to chase.
+
 ### Changed
+
+- **The Rust baseline edge runs the real pipeline.** `burn_mlp` used to
+  train every client and call `conflux_core::build_aggregator` directly —
+  the real cited aggregator and nothing else. No server, no gRPC, no
+  serialization, no buffer, no quorum. Its round loop is now
+  `conflux_federation::run`, so the Rust edge exercises the same
+  federation the Python edge does.
+
+  This makes `reference/crates.md` true as written. It claimed
+  `conflux-baselines` "orchestrates a real federation for its Python **or
+  Rust** edge" and that "a reproduction… has to run the real pipeline
+  rather than a simulation". For the Rust edge, neither was so.
+
+  **No baseline number moved**: `bulyan` 0.9125, `fedavg` 0.9500, `krum`
+  0.7125, `trimmed-mean` 0.9775 — identical to the figures the old path
+  produced, once the batch has a defined order.
+
+  **The Rust edge is now subject to the framework's own cited-requirement
+  validation**, which the old path skipped for want of a server. Running
+  `bulyan` at five clients is refused outright: *at n = 5 with
+  robust_byzantine_fraction = 0.2, bulyan trims/excludes f = 1, and
+  Bulyan requires n ≥ 4f + 3*. A reproduction can no longer aggregate
+  outside a method's stated regime without being told.
+
+  Two supporting changes. Each client is handed the one shared
+  initialization rather than drawing its own on the placeholder round —
+  averaging models that began in different places averages nothing, and
+  clients now train concurrently, so a draw from the backend's RNG would
+  have depended on task scheduling. And the clients are asked for one
+  round more than the run reports, because at round *k* a client is
+  handed the model as of *k−1* aggregations.
+
+  `conflux-federation` re-exports `ServerConfig`:
+  `FederationConfig::server` is a public field of that type, so nobody
+  could fill it in without depending on `conflux-server` directly —
+  making it necessary to depend on the thing being orchestrated in order
+  to describe it.
 
 - **Burn 0.18 → 0.21**, for the optional `burn` feature and the
   `burn_mlp` example that is the Rust edge of every baseline.
