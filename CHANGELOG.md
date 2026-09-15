@@ -16,6 +16,20 @@ promised before `1.0`.
 
 ### Fixed
 
+- **`rustls` 0.23.43 → 0.23.45**, for RUSTSEC-2026-0285: TLS 1.3
+  handshake messages were accepted at the wrong encryption level when
+  they followed a key-changing message in the same record — a plaintext
+  `EncryptedExtensions` packed in with the `ServerHello`, for instance.
+
+  Transitive, through `aws-smithy-http-client` and `tonic`, so it reached
+  every crate that talks over the wire. A lockfile bump; nothing declares
+  `rustls` directly.
+
+  The transcript stays authenticated, so this is not a path to altering
+  or completing a handshake — the effect is that a peer could send in
+  plaintext what should have been encrypted without the connection being
+  refused. RFC 8446 §5.1 requires terminating with `unexpected_message`.
+
 - **A round aggregated its batch in arrival order, which is not an
   order.** The buffer collects submissions as they arrive, and that
   sequence is whatever the network and the scheduler produced. The batch
