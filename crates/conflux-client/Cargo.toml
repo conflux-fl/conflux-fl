@@ -48,7 +48,15 @@ async-trait.workspace = true
 # this crate — which cargo permits precisely because a dev-dependency
 # does not enter the dependent's own build graph. Nothing a consumer of
 # `conflux-client` builds can see it.
-conflux-federation.workspace = true
+#
+# **Path only, deliberately: do not make this `workspace = true`.** That
+# would add a `version`, and `cargo publish` resolves every versioned
+# dependency from the registry — dev-dependencies included. The cycle is
+# then unpublishable: `conflux-federation 0.9.0` cannot exist until
+# `conflux-client 0.9.0` does, and vice versa. Cargo drops a
+# dev-dependency with no `version` from the published manifest, which is
+# exactly right here, since a consumer never builds these examples.
+conflux-federation = { path = "../conflux-federation" }
 # Example-only: `burn_mlp` resolves the server's configuration the same
 # way `conflux-baselines` exports it for the Python edge, so both edges
 # of a baseline measure the same deployment.
