@@ -14,7 +14,48 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-09-15
+
+The release where a reproduction started having to clear the same bar a
+deployment does.
+
+0.8.0 gave the framework a front door — one command that runs a real
+federation. This one takes the same machinery and points it at the
+project's own claims. The Rust edge of every baseline used to call the
+cited aggregator directly and nothing else: no server, no gRPC, no
+buffer, no quorum. It now runs the whole pipeline, which means it is also
+subject to the configuration validation a deployment gets. Running
+`bulyan` at five clients is refused outright, because Bulyan requires
+n ≥ 4f + 3 — a reproduction can no longer aggregate outside a method's
+stated regime without being told.
+
+Doing that surfaced a defect worth the trip on its own: **a round
+aggregated its batch in whatever order submissions happened to arrive**.
+`bulyan` returned 0.9375, 0.8875 and 0.9250 on three consecutive runs
+over identical inputs. The regression test fails on `fedavg` too, since
+floating-point summation is not associative. Batches are now ordered, and
+no baseline number moved as a result — they were already what the ordered
+batch produces.
+
+Also here: `--isolation process`, the tier where every participant is its
+own OS process, so a Python trainer can join a `cflux fed run`; the
+supervisor underneath it, which `conflux-baselines` adopted, deleting its
+own copy and the port guessing with it; burn 0.21; and `rustls` 0.23.45
+for RUSTSEC-2026-0285, which the published 0.8.0 binaries carry.
+
+
 ### Fixed
+
+- **The dev-dependency cycle made the workspace unpublishable.**
+  `conflux-client` dev-depends on `conflux-federation`, which depends on
+  it. Cargo permits that for building, because a dev-dependency does not
+  enter the dependent's build graph — but `cargo publish` resolves every
+  *versioned* dependency from the registry, dev-dependencies included,
+  and neither crate's new version can exist before the other's.
+
+  Declared path-only now, with no `version`, which cargo drops from the
+  published manifest. Caught by `cargo publish --dry-run` during the
+  release, which is the whole reason that step exists.
 
 - **`rustls` 0.23.43 → 0.23.45**, for RUSTSEC-2026-0285: TLS 1.3
   handshake messages were accepted at the wrong encryption level when
@@ -1762,7 +1803,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.9.0
 [0.8.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.8.0
 [0.7.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.7.0
 [0.6.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.6.0
