@@ -34,6 +34,8 @@
 //! single client can solve it alone (each sees one informative feature),
 //! scored on the global problem.
 
+use std::sync::{Arc, Mutex};
+
 use burn::backend::{Autodiff, NdArray};
 use burn::module::{Module, Param};
 use burn::nn::{Linear, LinearConfig};
@@ -42,11 +44,11 @@ use burn::tensor::backend::Backend;
 use burn::tensor::{Device, Tensor, TensorData, activation};
 
 use conflux_client::{ClientApp, TrainResult, is_placeholder_init};
-// The REAL cited aggregators. The Burn client feeds them exactly as the
-// server would, so a robust baseline reproduces through the actual
-// `conflux-core` Krum/Trimmed-Mean — never a re-implementation.
-use conflux_core::{AggregatorParams, build_aggregator};
-use conflux_proto::{ClientDelta, encode_weights};
+// The REAL cited aggregators reach this run through the **server**, not
+// through a call here: `conflux-federation` starts one, and it resolves
+// `--aggregator` out of the same strategy registry a deployment does.
+// This example no longer touches `conflux-core` at all, which is the
+// point — there is nothing left for it to re-implement.
 
 // The training backend: NdArray (pure-Rust CPU) wrapped in Autodiff so
 // `.backward()` works. `Dev` is its device handle (CPU).
@@ -177,22 +179,41 @@ struct BurnMlpClient {
     /// A Byzantine client submits a large-offset update instead of
     /// training — the same attack the Python harness's `--poison` uses.
     poison: bool,
+    /// The one initialization every client starts from, used on the
+    /// round where the server sends its all-zero placeholder.
+    ///
+    /// Passed in rather than drawn here, and the reason is the
+    /// federation: averaging models that began in different places
+    /// averages nothing meaningful, and clients now train *concurrently*,
+    /// so a draw from the backend's RNG would depend on task scheduling
+    /// and the run would stop being reproducible. One init, decided once.
+    init: Arc<Vec<f32>>,
+    /// Every global model this client is handed, so the run can be scored
+    /// after it ends — `run` owns the apps, and reading the server's
+    /// final checkpoint back is not exposed.
+    seen: Arc<Mutex<Vec<f32>>>,
 }
 
 impl ClientApp for BurnMlpClient {
     fn train(&mut self, weights: &[f32], _round: u64) -> TrainResult {
+        // The server's all-zero placeholder would break ReLU symmetry
+        // (see `is_placeholder_init`), so round one starts from the
+        // shared init instead. Resolved once, here, so the attacker and
+        // the honest clients agree about what round one was.
+        let source: &[f32] = if is_placeholder_init(weights) {
+            &self.init
+        } else {
+            weights
+        };
+        *self.seen.lock().expect("mutex poisoned") = source.to_vec();
+
         if self.poison {
-            let offset: Vec<f32> = weights.iter().map(|w| w + 20.0).collect();
+            let offset: Vec<f32> = source.iter().map(|w| w + 20.0).collect();
             return TrainResult::new(offset, self.ys.len() as u64);
         }
 
         let mut model = Mlp::<AB>::build(&self.device);
-        // The server's all-zero placeholder would break ReLU symmetry
-        // (see `is_placeholder_init`), so on the first round keep this
-        // client's own random init instead of loading zeros.
-        if !is_placeholder_init(weights) {
-            load(&mut model, weights, &self.device);
-        }
+        load(&mut model, source, &self.device);
 
         let x = matrix(&self.xs, &self.device);
         let y = column(&self.ys, &self.device);
@@ -211,40 +232,6 @@ impl ClientApp for BurnMlpClient {
             .with_local_steps(self.steps as u32) // FedNova
             .with_local_loss(loss_before) // q-FedAvg
     }
-}
-
-// ---------------------------------------------------------------------------
-// Aggregation — the REAL cited `conflux-core` implementations, fed the same
-// way the server feeds them. No aggregation math is re-implemented here.
-// ---------------------------------------------------------------------------
-
-fn aggregate(name: &str, results: &[TrainResult], byzantine_fraction: f32, round: u64) -> Vec<f32> {
-    let agg = build_aggregator(
-        name,
-        AggregatorParams {
-            byzantine_fraction,
-            ..Default::default()
-        },
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("build_aggregator('{name}') failed: {e:?}");
-        std::process::exit(1);
-    });
-    let batch: Vec<ClientDelta> = results
-        .iter()
-        .enumerate()
-        .map(|(i, r)| ClientDelta {
-            client_id: format!("c{i}"),
-            round,
-            weights: encode_weights(&r.weights),
-            num_samples: r.num_samples,
-            ..Default::default()
-        })
-        .collect();
-    agg.aggregate(&batch).unwrap_or_else(|e| {
-        eprintln!("aggregate failed: {e:?}");
-        std::process::exit(1);
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +372,7 @@ fn main() {
     let (test_xs, test_ys) = global_test_set(400);
     // One shared initialization every client starts from — flat, so it
     // travels the same wire the federation uses.
-    let init = flatten(&Mlp::<AB>::build(&device));
+    let init = Arc::new(flatten(&Mlp::<AB>::build(&device)));
 
     println!(
         "config: aggregator={} clients={} attackers={} rounds={} steps={}",
@@ -404,6 +391,8 @@ fn main() {
                 lr,
                 device,
                 poison,
+                init: Arc::clone(&init),
+                seen: Arc::new(Mutex::new(Vec::new())),
             }
         })
         .collect();
@@ -416,7 +405,7 @@ fn main() {
         if c.poison {
             continue;
         }
-        let mut w = init.clone();
+        let mut w = init.as_ref().clone();
         for r in 0..args.rounds as u64 {
             w = c.train(&w, r).weights;
         }
@@ -427,21 +416,37 @@ fn main() {
         );
     }
 
-    // Federated, through the REAL aggregator.
+    // Federated, through the REAL pipeline — not just the real
+    // aggregator.
+    //
+    // This used to be a loop here: train every client, call
+    // `conflux-core` directly, repeat. That exercised the cited
+    // aggregation and nothing else — no server, no gRPC, no chunking, no
+    // buffer, no quorum. A reproduction is a claim about the framework,
+    // so it now runs the federation `conflux-federation` runs: real
+    // loopback gRPC, real serialization, the server's own round loop.
     println!(
-        "\n=== federated ({}, {} Burn clients, {} poisoned, {} rounds) ===",
+        "\n=== federated ({}, {} Burn clients, {} poisoned, {} rounds, real pipeline) ===",
         args.aggregator, args.clients, args.attackers, args.rounds
     );
-    let mut global = init.clone();
-    for r in 0..args.rounds as u64 {
-        let results: Vec<TrainResult> = clients.iter_mut().map(|c| c.train(&global, r)).collect();
-        global = aggregate(&args.aggregator, &results, byz, r);
+
+    let seen = Arc::new(Mutex::new(init.as_ref().clone()));
+    let summary = run_federation(&args, byz, Arc::clone(&seen), clients).unwrap_or_else(|e| {
+        eprintln!("the federation failed: {e}");
+        std::process::exit(1);
+    });
+    for outcome in &summary.clients {
         println!(
-            "  round {r}: global acc = {:.3}",
-            accuracy(&global, &test_xs, &test_ys, &device)
+            "  {} completed {} round(s)",
+            outcome.client_id, outcome.rounds_completed
         );
     }
 
+    // The model after `args.rounds` aggregations. Reachable because the
+    // clients were asked for one round more than that: at round k a
+    // client is handed the model as of k-1 aggregations, so round
+    // `rounds + 1` hands it exactly the one this run is about.
+    let global = seen.lock().expect("mutex poisoned").clone();
     let final_acc = accuracy(&global, &test_xs, &test_ys, &device);
     println!(
         "\n=== federated {} final: {final_acc:.3} on the global test set ===",
@@ -460,4 +465,79 @@ fn main() {
             "local-only ~0.67 vs federated {final_acc:.3} — the gap is the evidence a Burn client federates."
         );
     }
+}
+
+/// Runs the clients as a real federation and returns when every one has
+/// finished.
+///
+/// The server's configuration mirrors what `conflux-baselines` exports
+/// for the Python edge, so the two edges of a baseline are measuring the
+/// same deployment rather than two different ones: clipping wide enough
+/// to be inert, no noise, reputation filtering off, and a quorum of every
+/// client — the harness measures convergence and robustness, not privacy.
+fn run_federation(
+    args: &Args,
+    byzantine_fraction: f32,
+    seen: Arc<Mutex<Vec<f32>>>,
+    clients: Vec<BurnMlpClient>,
+) -> Result<conflux_federation::FederationSummary, String> {
+    // Taken from the init rather than computed from DIM and HIDDEN: the
+    // server rejects an update whose length disagrees with its
+    // placeholder, and a constant that drifted from the model would fail
+    // as a length mismatch rather than as the arithmetic error it was.
+    let weights_dim = seen.lock().expect("mutex poisoned").len();
+
+    use conflux_config::{Mode, Overrides, Topology};
+
+    let overrides = Overrides {
+        aggregator: Some(args.aggregator.clone()),
+        robust_byzantine_fraction: Some(byzantine_fraction),
+        quorum: Some(args.clients as u32),
+        scaffold_num_clients: Some(args.clients as u32),
+        reputation_filter_enabled: Some(false),
+        clip_norm: Some(1000.0),
+        noise_multiplier: Some(0.0),
+        round_timeout_secs: Some(60),
+        ..Overrides::default()
+    };
+    let resolved = conflux_config::resolve(
+        Topology::CrossDevice,
+        Mode::Research,
+        None,
+        &Overrides::default(),
+        &overrides,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Each client keeps a handle on the same slot, so whichever writes
+    // last leaves the newest global model there.
+    let mut apps: Vec<BurnMlpClient> = clients;
+    for app in &mut apps {
+        app.seen = Arc::clone(&seen);
+    }
+    let mut apps = apps.into_iter();
+
+    let config = conflux_federation::FederationConfig {
+        nodes: args.clients,
+        // One more than the run is about: at round k a client sees the
+        // model as of k-1 aggregations, so this is what makes the model
+        // after `args.rounds` of them observable at all.
+        rounds: args.rounds + 1,
+        timeout: std::time::Duration::from_secs(900),
+        server: Some(conflux_federation::ServerConfig {
+            resolved,
+            mode: Mode::Research,
+            initial_weights_dim: weights_dim,
+        }),
+        ..conflux_federation::FederationConfig::default()
+    };
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(conflux_federation::run(config, move |_| {
+            apps.next().expect("one app per node")
+        }))
+        .map_err(|e| e.to_string())
 }

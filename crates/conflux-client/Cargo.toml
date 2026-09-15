@@ -41,10 +41,18 @@ tonic.workspace = true
 # Test-only: standing up a fake local hop means implementing
 # `RoundDispatcher`, which is an async trait.
 async-trait.workspace = true
-# Example-only (the `burn_mlp` robust-aggregation demo): the real cited
-# aggregators. A dev-dependency, so it never enters the shipped SDK — and
-# `cargo build -p conflux-client` (no examples) still doesn't compile it.
-conflux-core.workspace = true
+# Also example-only: `burn_mlp` runs its clients through a real
+# federation rather than aggregating them itself.
+#
+# This is a **dev-dependency cycle** — `conflux-federation` depends on
+# this crate — which cargo permits precisely because a dev-dependency
+# does not enter the dependent's own build graph. Nothing a consumer of
+# `conflux-client` builds can see it.
+conflux-federation.workspace = true
+# Example-only: `burn_mlp` resolves the server's configuration the same
+# way `conflux-baselines` exports it for the Python edge, so both edges
+# of a baseline measure the same deployment.
+conflux-config.workspace = true
 
 # A real Burn MLP `ClientApp` — the deep-learning-in-Rust evaluation the
 # `logreg` spike deliberately isolated itself from. Opt-in only.

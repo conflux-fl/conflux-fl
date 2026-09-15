@@ -1723,7 +1723,8 @@ version = "0.8.0"
 dependencies = [
  "async-trait",
  "burn",
- "conflux-core",
+ "conflux-config",
+ "conflux-federation",
  "conflux-net",
  "conflux-proto",
  "thiserror 2.0.20",

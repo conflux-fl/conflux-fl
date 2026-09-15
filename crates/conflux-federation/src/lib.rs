@@ -76,6 +76,12 @@ use tokio_util::sync::CancellationToken;
 pub use conflux_client::{ClientApp, ClientError, RunConfig, TrainResult, run as run_client};
 pub use conflux_node::{ClientAppKind, ClientTls, ConnectionMode, RuntimeMode};
 pub use conflux_privacy::GaussianClippingPrivacy;
+// [`FederationConfig::server`] is a public field of this type, so a
+// caller cannot fill it in without being able to name it. Re-exported
+// rather than left to a direct `conflux-server` dependency, which would
+// make describing a federation require depending on the thing being
+// orchestrated.
+pub use conflux_server::ServerConfig;
 
 /// What every node in the federation shares.
 ///
