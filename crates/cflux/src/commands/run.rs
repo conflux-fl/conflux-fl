@@ -160,10 +160,22 @@ async fn shutdown_signal() {
 /// `try_init` rather than `init`: failing to install a subscriber is not
 /// a reason to refuse to start a server.
 fn init_logging() {
+    init_logging_at("info");
+}
+
+/// [`init_logging`], with a different default when `RUST_LOG` is unset.
+///
+/// `server start` wants `info`: you are watching a server, and its
+/// per-round lines are the point. `fed run` wants `warn`, because there
+/// the *summary* is the output and forty rounds of info would bury it —
+/// while the things you must not miss (a round loop that stopped, an
+/// exhausted privacy budget, a rejected update) are warnings and errors
+/// either way.
+pub(crate) fn init_logging_at(default: &str) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default)),
         )
         .with_writer(std::io::stderr)
         .try_init();

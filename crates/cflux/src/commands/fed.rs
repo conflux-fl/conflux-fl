@@ -220,6 +220,8 @@ pub fn run(args: Args) -> Result<Report, CliError> {
 }
 
 fn run_one_client(args: ClientArgs) -> Result<Report, CliError> {
+    crate::commands::run::init_logging_at("warn");
+
     let model = lookup_model(&args.model)?;
     // Nothing reads this one back, but the demo models write into it —
     // the same slot `fed run` uses to score what was learned.
@@ -324,6 +326,16 @@ fn load_manifest(path: &Path) -> Result<Manifest, CliError> {
 }
 
 fn run_federation(args: RunArgs) -> Result<Report, CliError> {
+    // Without this, everything the framework says out loud goes nowhere:
+    // quorum-or-timeout, every rejected update and its score, cumulative
+    // epsilon, and a round loop that stopped. `server start` has had a
+    // subscriber since 0.3.0; this command did not, which made the
+    // banner's promise that "the accountant will warn every round" a
+    // promise nothing could keep.
+    //
+    // To stderr, so `--format json` keeps stdout parseable.
+    crate::commands::run::init_logging_at("warn");
+
     let manifest = match &args.manifest {
         Some(path) => load_manifest(path)?,
         None => Manifest::default(),

@@ -14,6 +14,51 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cflux fed run` said nothing the framework said.** It installed no
+  `tracing` subscriber, so everything the server reported went nowhere:
+  quorum-or-timeout, every rejected update and its score, cumulative
+  epsilon, and a round loop that stopped. `server start` and `node start`
+  have had one since 0.3.0.
+
+  The banner's promise that "the accountant will warn every round that
+  there is no guarantee" was therefore one nothing could keep. It can
+  now. Default level is `warn` rather than `server start`'s `info`,
+  because here the *summary* is the output and forty rounds of info would
+  bury it — while the things you must not miss are warnings and errors
+  either way. `RUST_LOG` overrides. To stderr, so `--format json` keeps
+  stdout parseable.
+
+- **A federation reported a stall when the server had refused.** The
+  round loop stops on a fatal error — an exhausted privacy budget, or a
+  batch that cannot satisfy the configured method's cited requirement —
+  and said why. But `conflux-federation` watched only the clients, so the
+  caller was told "5 of 5 clients were still running" after waiting out
+  the full client timeout.
+
+  It now asks `/health` for the round loop's own state, and races that
+  against the clients rather than checking only at the deadline. Asking
+  for Bulyan with five clients:
+
+  ```
+  error: the server stopped running rounds: round 1: bulyan would aggregate
+  a batch of 5, but Bulyan requires n ≥ 4f + 3 (f = 1 here, so it needs 7)
+  — refusing to produce a result outside the cited guarantee. Set
+  CONFLUX_QUORUM to 7 or more so rounds wait for a batch the citation
+  covers.
+  ```
+
+  **Two seconds instead of five minutes**, and the reason instead of a
+  symptom. `FederationError::RoundLoopStopped` is separate from `Stalled`
+  because the two ask for different reactions: one means look at the
+  clients, the other means the server refused to produce a result.
+
+  Found while writing the framework comparison, which claimed Conflux
+  refuses methods outside their cited regime — then turned out to be
+  quoting an error the headline command could not produce.
+
+
 ## [0.9.0] — 2026-09-15
 
 The release where a reproduction started having to clear the same bar a
