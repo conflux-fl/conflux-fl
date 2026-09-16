@@ -384,3 +384,79 @@ command = ["{exe}", "fed", "client", "--model", "linreg"]
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A method configured outside its cited regime is refused, and the
+/// refusal is what the caller is told.
+///
+/// Bulyan requires n ≥ 4f + 3. At five clients with the default
+/// Byzantine fraction it needs seven, so the server's round loop stops
+/// rather than aggregating outside the guarantee the paper proves.
+///
+/// Two things are asserted, and the second is the one that was broken:
+/// the message names the citation, **and** it arrives in seconds. The
+/// federation used to wait out its whole 300-second client timeout and
+/// then report a generic stall, burying a reason that had been available
+/// since the first round.
+#[test]
+fn a_method_outside_its_cited_regime_is_refused_quickly_and_by_name() {
+    let started = std::time::Instant::now();
+    let out = cflux(&[
+        "fed",
+        "run",
+        "--clients",
+        "5",
+        "--rounds",
+        "2",
+        "--model",
+        "logreg",
+        "--aggregator",
+        "bulyan",
+    ]);
+    let elapsed = started.elapsed();
+
+    assert!(!out.status.success(), "bulyan at n = 5 must not succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("the server stopped running rounds"),
+        "should report the server's own refusal, not a client stall: {stderr}"
+    );
+    assert!(
+        stderr.contains("4f + 3") && stderr.contains("cited guarantee"),
+        "the refusal should name the citation it is protecting: {stderr}"
+    );
+    // The default client timeout is 300s. Anything close to that means
+    // the race against the round loop was lost and the old behaviour is
+    // back.
+    assert!(
+        elapsed < std::time::Duration::from_secs(60),
+        "should fail as soon as the round loop gives up, not wait out the \
+         client timeout; took {elapsed:?}"
+    );
+}
+
+/// The framework's own diagnostics reach the terminal.
+///
+/// `fed run` installed no tracing subscriber, so everything the server
+/// said — quorum-or-timeout, rejected updates, cumulative epsilon, a
+/// round loop that stopped — went nowhere. The banner even promised the
+/// accountant would warn every round, which nothing could keep.
+#[test]
+fn the_frameworks_own_warnings_reach_stderr() {
+    let out = cflux(&[
+        "fed",
+        "run",
+        "--clients",
+        "2",
+        "--rounds",
+        "2",
+        "--model",
+        "stub",
+        "--aggregator",
+        "bulyan",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("conflux_server") || stderr.contains("ERROR"),
+        "the server's own tracing output should reach stderr: {stderr}"
+    );
+}

@@ -263,6 +263,18 @@ pub enum FederationError {
         /// The underlying error.
         source: conflux_client::ClientError,
     },
+    /// The server stopped running rounds, and said why.
+    ///
+    /// Distinct from [`Self::Stalled`] because the two ask for different
+    /// reactions: a stall means look at the clients, and this means the
+    /// server refused to produce a result — an exhausted privacy budget,
+    /// or a batch that cannot satisfy the configured method's cited
+    /// requirement.
+    #[error("the server stopped running rounds: {reason}")]
+    RoundLoopStopped {
+        /// What the round loop reported before it stopped.
+        reason: String,
+    },
     /// The run hit its deadline with clients still going.
     ///
     /// Loud by design. A federation that quietly returned partial results
@@ -389,26 +401,65 @@ async fn bind_ephemeral(what: &str) -> Result<(TcpListener, SocketAddr), Federat
     Ok((listener, addr))
 }
 
-/// A bare HTTP/1.1 `GET /health`, returning true on a `200`.
+/// A bare HTTP/1.1 `GET /health`, returning the whole response.
 ///
 /// Hand-written rather than pulled from an HTTP client: this crate needs
-/// exactly one request, on loopback, to a response it reads four bytes
-/// of. A dependency for that would cost more than it explains.
-async fn health_ok(addr: SocketAddr) -> bool {
+/// one request, on loopback, against a server it started itself. A
+/// dependency for that would cost more than it explains.
+async fn get_health(addr: SocketAddr) -> Option<String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await else {
-        return false;
-    };
+    let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
     let request = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(request.as_bytes()).await.is_err() {
-        return false;
-    }
+    stream.write_all(request.as_bytes()).await.ok()?;
     let mut response = String::new();
-    if stream.read_to_string(&mut response).await.is_err() {
-        return false;
+    stream.read_to_string(&mut response).await.ok()?;
+    Some(response)
+}
+
+/// Whether the admin surface is serving.
+async fn health_ok(addr: SocketAddr) -> bool {
+    get_health(addr)
+        .await
+        .is_some_and(|r| r.starts_with("HTTP/1.1 200"))
+}
+
+/// Resolves when the round loop has stopped, with its reason.
+///
+/// Polled *while* the clients are still being waited on rather than only
+/// after the deadline: the loop gives up within a round, and telling
+/// someone five minutes later that the server refused at the first one
+/// wastes the whole timeout for information that was available
+/// immediately.
+async fn await_round_loop_failure(addr: SocketAddr) -> String {
+    loop {
+        if let Some(reason) = round_loop_failure(addr).await {
+            return reason;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    response.starts_with("HTTP/1.1 200")
+}
+
+/// Why the round loop gave up, if it did.
+///
+/// `/health` reports the loop's own state, and that is the difference
+/// between "the clients are slow" and "the server refused to continue
+/// and said why". Without asking, a run the server deliberately stopped
+/// — an exhausted privacy budget, a batch that cannot satisfy a method's
+/// cited requirement — looks exactly like one that merely ran out of
+/// time.
+async fn round_loop_failure(addr: SocketAddr) -> Option<String> {
+    let response = get_health(addr).await?;
+    if !response.contains("\"round_loop\":\"stopped\"") {
+        return None;
+    }
+    // One field, one shape, from a server this crate started itself —
+    // so read it directly rather than taking a JSON dependency for it.
+    let key = "\"last_error\":\"";
+    let start = response.find(key)? + key.len();
+    let rest = &response[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 impl Federation {
@@ -849,7 +900,16 @@ where
     let grpc_addr = federation.server_grpc_addr();
     let http_addr = federation.server_http_addr();
 
-    let result = match tokio::time::timeout(timeout, collect).await {
+    // The clients, raced against the server giving up. Whichever happens
+    // first decides what the caller is told.
+    let outcome = tokio::select! {
+        finished = tokio::time::timeout(timeout, collect) => finished,
+        reason = await_round_loop_failure(http_addr) => {
+            Ok(Err(FederationError::RoundLoopStopped { reason }))
+        }
+    };
+
+    let result = match outcome {
         Ok(Ok(clients)) => Ok(FederationSummary {
             clients,
             server_grpc_addr: grpc_addr,
@@ -857,23 +917,32 @@ where
         }),
         Ok(Err(error)) => Err(error),
         Err(_) => {
-            // Which clients were still going, and how far each got. The
-            // finished ones have already dropped out of the JoinSet, so
-            // anything still in it is unfinished.
-            let unfinished: Vec<ClientProgress> = (0..total)
-                .map(|index| ClientProgress {
-                    index,
-                    client_id: federation.client_id(index).to_string(),
-                    rounds_attempted: counters[index].load(Ordering::Relaxed),
-                    rounds_requested: rounds,
-                })
-                .filter(|p| p.rounds_attempted < rounds)
-                .collect();
-            Err(FederationError::Stalled {
-                timeout,
-                total,
-                unfinished,
-            })
+            // Before blaming the clients: did the server stop running
+            // rounds on purpose? A loop that refused to continue has a
+            // reason, and reporting a timeout instead buries it in a log
+            // line the caller may not even have a subscriber for.
+            match round_loop_failure(http_addr).await {
+                Some(reason) => Err(FederationError::RoundLoopStopped { reason }),
+                None => {
+                    // Which clients were still going, and how far each
+                    // got. The finished ones have already dropped out of
+                    // the JoinSet, so anything still in it is unfinished.
+                    let unfinished: Vec<ClientProgress> = (0..total)
+                        .map(|index| ClientProgress {
+                            index,
+                            client_id: federation.client_id(index).to_string(),
+                            rounds_attempted: counters[index].load(Ordering::Relaxed),
+                            rounds_requested: rounds,
+                        })
+                        .filter(|p| p.rounds_attempted < rounds)
+                        .collect();
+                    Err(FederationError::Stalled {
+                        timeout,
+                        total,
+                        unfinished,
+                    })
+                }
+            }
         }
     };
 
