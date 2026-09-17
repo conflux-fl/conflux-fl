@@ -14,6 +14,12 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-09-17
+
+A patch release. Nothing here changes an API; two of the three entries
+are about a command saying what it already knew, and the third is a
+claim in the documentation that stopped being true.
+
 ### Fixed
 
 - **`cflux fed run` said nothing the framework said.** It installed no
@@ -1887,7 +1893,8 @@ credentials, and the move of the documentation to its own site.
   findings; the Redis/Postgres integration tests now read the
   `CONFLUX_TEST_*` URLs instead of hardcoding the dev container ports.
 
-[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/conflux-fl/conflux-fl/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.9.1
 [0.9.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.9.0
 [0.8.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.8.0
 [0.7.0]: https://github.com/conflux-fl/conflux-fl/releases/tag/v0.7.0
