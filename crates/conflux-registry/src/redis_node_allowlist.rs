@@ -40,8 +40,14 @@ impl RedisNodeAllowlist {
     ) -> Result<Self, NodeAuthError> {
         let client =
             redis::Client::open(redis_url).map_err(|e| NodeAuthError::Backend(e.to_string()))?;
+        // Same explicit config as `RedisRegistry::connect_with_key`: this
+        // allow-list gates every node registration, so a busy Redis must
+        // not read as a rejected node.
+        let config = redis::aio::ConnectionManagerConfig::new()
+            .set_response_timeout(Some(crate::REDIS_RESPONSE_TIMEOUT))
+            .set_connection_timeout(Some(crate::REDIS_CONNECTION_TIMEOUT));
         let conn = client
-            .get_connection_manager()
+            .get_connection_manager_with_config(config)
             .await
             .map_err(|e| NodeAuthError::Backend(e.to_string()))?;
         Ok(Self {

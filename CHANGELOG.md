@@ -16,6 +16,37 @@ promised before `1.0`.
 
 ### Fixed
 
+- **Every Redis registry operation carried a 500 ms ceiling nobody set.**
+  `RedisRegistry` and `RedisNodeAllowlist` opened their connections with
+  `get_connection_manager()`, which takes `redis`'s
+  `ConnectionManagerConfig::default()` — a 500 ms response timeout and a
+  1 s connection timeout. Those applied to every `register`,
+  `heartbeat`, `active_clients`, `evict_expired` and allow-list `check`
+  in a deployment, and the allow-list one gates node registration: a
+  busy Redis read as a rejected node.
+
+  Nothing in the codebase named the value, which is the opposite of the
+  posture the rest of the configuration keeps. It was three orders of
+  magnitude tighter than the timescales around it — the shortest
+  `round_timeout_secs` is 300 s, the shortest `client_registry_ttl`
+  900 s.
+
+  Both connections now set `REDIS_RESPONSE_TIMEOUT` and
+  `REDIS_CONNECTION_TIMEOUT` explicitly, at five seconds. The
+  distinction the timeout has to draw is *"the backend is down"* versus
+  *"the backend was briefly busy"*, and 500 ms cannot draw it: a normal
+  Redis command is well under a millisecond, so anything outstanding at
+  five seconds is an outage rather than contention.
+
+  **Found by a CI failure, reproduced deliberately.** Two tests got
+  `Backend("timed out")` on a loaded runner sharing one Redis between
+  thirty-odd parallel connections. Stalling Redis for one second with
+  `CLIENT PAUSE` reproduces it exactly — the inherited 500 ms fails
+  after 500.76 ms with that same message, and five seconds completes in
+  1.04 s. The reproduction is not in the test suite on purpose:
+  `CLIENT PAUSE` stalls the whole server, so a permanent test using it
+  would make its siblings flaky in the way this fix exists to stop.
+
 - **`deploy/run_client.sh` built the node from source on every client
   machine.** It looked only in this repository's `target/`, and ran
   `cargo build --release -p conflux-node` when it found nothing — so

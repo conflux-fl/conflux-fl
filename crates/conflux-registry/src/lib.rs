@@ -58,6 +58,41 @@ use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// How long a single Redis command may take before the registry reports
+/// the backend as failed.
+///
+/// **Set here rather than inherited.** `redis`'s `ConnectionManager`
+/// defaults to a 500 ms response timeout and a 1 s connection timeout,
+/// and taking those by default meant every `register`, `heartbeat`,
+/// `active_clients`, `evict_expired` and allow-list `check` in a
+/// deployment carried a 500 ms ceiling that nothing in this codebase
+/// named — the opposite of the "say so, out loud" posture the rest of
+/// the configuration keeps. It surfaced as a CI failure: two tests got
+/// `Backend("timed out")` on their first command while a loaded runner
+/// shared one Redis between thirty-odd parallel connections.
+///
+/// Five seconds, because the distinction this timeout has to draw is
+/// *"the backend is down"* versus *"the backend was briefly busy"*, and
+/// 500 ms cannot draw it — a normal Redis command is well under a
+/// millisecond, so anything still outstanding at five seconds is an
+/// outage rather than contention. It stays far below the timescales
+/// around it: the shortest `round_timeout_secs` is 300 s and the
+/// shortest `client_registry_ttl` 900 s, so a genuinely dead Redis still
+/// fails a round promptly instead of hanging it.
+///
+/// A deployment that needs to tune this is a reason to lift it into
+/// `conflux-config` with the rest of the resolved parameters; until one
+/// asks, a named constant with its reasoning beats a config knob nobody
+/// sets.
+pub(crate) const REDIS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long one attempt to open a Redis connection may take. Same
+/// reasoning as [`REDIS_RESPONSE_TIMEOUT`]: `ConnectionManager` defaults
+/// this to 1 s, which is a guess about the network rather than about
+/// this deployment, and a connection attempt under load is exactly when
+/// it is least true.
+pub(crate) const REDIS_CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Identifies one client across registration, heartbeat, and selection.
 ///
 /// Wrapping the raw `String` in its own type (a "newtype") means a
