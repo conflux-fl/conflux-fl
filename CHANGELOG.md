@@ -59,6 +59,45 @@ promised before `1.0`.
   quoting an error the headline command could not produce.
 
 
+### Changed
+
+- **Dependencies.** `toml` 0.9 → 1.1, the one manifest bump: the crate
+  reached 1.0 and four crates here read it. It resolves to
+  `1.1.6+spec-1.1.0` — the build metadata is the TOML *spec* version the
+  parser implements, not a Cargo convention. MSRV is unaffected; the
+  whole `toml` stack declares 1.85, under the 1.88 floor.
+
+  Lockfile only: `redis` 1.6.0 → 1.7.0, `combine` 4.6.7 → 4.6.8,
+  `aws-config` 1.11.0 → 1.12.0 and the smithy crates it carries.
+  Targeted rather than a blanket `cargo update`, which would have moved
+  66 crates for no stated reason — `cargo audit` reports no
+  vulnerabilities across all 743, and the lockfile published inside these
+  crates is exactly what `cargo install --locked` builds.
+
+- **`softprops/action-gh-release` v2 → v3** in the release workflow.
+  `v3.0.0` is only Node 20 → Node 24, which hosted runners support, but
+  `v3.0.2` fixes uploading small checksum assets — and the `binaries` job
+  uploads `dist/*.sha256`, which is that case exactly. `v2` has been
+  frozen at `2.6.2` since April. Nothing is gained by waiting for a later
+  release to be the first to run it: CI never exercises `release.yml`,
+  which triggers on tags only, so some release is the first either way.
+
+- **`--locked` is advice again, not a requirement.** `README.md` and the
+  installation guide both said the build fails without it. That was true
+  when written — `aws-smithy-types 1.7.0` made `Document` non-exhaustive
+  inside a semver-compatible release, and the `aws-smithy-json` the AWS
+  SDK still pulled did not compile against it.
+
+  The guide predicted the break would clear when `aws-config` moved up to
+  `aws-smithy-json 0.64`. It went the other way: AWS yanked both
+  `aws-smithy-types 1.7.0` and `aws-smithy-json 0.64.0` on 14 September
+  and reissued the work as 1.6.4 and 0.63.1 the next day. A fresh resolve
+  now picks those up, and `cargo install cflux --version 0.9.0` without
+  `--locked` builds. Both pages now say what `--locked` is for —
+  reproducibility — and keep the episode as history rather than deleting
+  it.
+
+
 ## [0.9.0] — 2026-09-15
 
 The release where a reproduction started having to clear the same bar a
