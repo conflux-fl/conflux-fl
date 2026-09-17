@@ -45,8 +45,14 @@ impl RedisRegistry {
     ) -> Result<Self, RegistryError> {
         let client =
             redis::Client::open(redis_url).map_err(|e| RegistryError::Backend(e.to_string()))?;
+        // With an explicit config, not `get_connection_manager()` — see
+        // `REDIS_RESPONSE_TIMEOUT` for why inheriting the crate's
+        // defaults was wrong here.
+        let config = redis::aio::ConnectionManagerConfig::new()
+            .set_response_timeout(Some(crate::REDIS_RESPONSE_TIMEOUT))
+            .set_connection_timeout(Some(crate::REDIS_CONNECTION_TIMEOUT));
         let conn = client
-            .get_connection_manager()
+            .get_connection_manager_with_config(config)
             .await
             .map_err(|e| RegistryError::Backend(e.to_string()))?;
         Ok(Self {
