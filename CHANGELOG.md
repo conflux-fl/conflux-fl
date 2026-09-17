@@ -14,6 +14,33 @@ promised before `1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`deploy/run_client.sh` built the node from source on every client
+  machine.** It looked only in this repository's `target/`, and ran
+  `cargo build --release -p conflux-node` when it found nothing — so
+  deploying twenty clients meant twenty checkouts and twenty Rust
+  toolchains, on the path whose whole premise is machines you do not
+  control.
+
+  The released `cflux` binary has carried the node as `cflux node start`
+  since the CLI gained it, prebuilt for Linux x86-64 and ARM64, macOS and
+  Windows. The script now prefers `cflux` on `PATH`, then `conflux-node`
+  on `PATH`, and only then a source build — and when it is not inside a
+  checkout it says so and points at the installer rather than failing
+  inside `cargo`. Both entry points read the same `CONFLUX_*`
+  environment, so nothing else in the script changed.
+
+  Verified end to end with only the installed binary on `PATH`: the
+  script started `cflux node start`, the node registered, `cflux fed
+  client` completed a round, and the server logged `num_submitted: 1,
+  num_passed: 1` flushed on quorum.
+
+  The guide had the matching gap — it never said how the binaries reach
+  the machines, and recommended a Rust trainer "single binary" the
+  project does not ship. It now opens with installing `cflux`, and says
+  plainly that the node ships prebuilt and the trainer is yours to write.
+
 ## [0.9.1] — 2026-09-17
 
 A patch release. Nothing here changes an API; two of the three entries
