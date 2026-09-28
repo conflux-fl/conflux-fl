@@ -16,6 +16,40 @@ promised before `1.0`.
 
 ### Fixed
 
+- **A round accepted updates of the wrong length, and checkpointed
+  them.** `conflux-proto` states the invariant already — a
+  `ClientDelta`'s weights are "the same length as the TaskResponse this
+  client trained from" — and nothing enforced it.
+
+  `conflux-core::decode_and_validate` compares every update against *the
+  first update in the batch*, which is the most it can do:
+  `Aggregator::aggregate` receives only `&[ClientDelta]` and cannot know
+  what the round dispatched. A consistency check has two blind spots
+  that a consistency check must have. A federation where **every** client
+  runs the wrong architecture agrees with itself and passes. And when one
+  client differs, the error names whichever disagrees with the first —
+  which may be the only correct one.
+
+  The first is the serious one. A three-client federation submitting
+  9-parameter updates to a 4-parameter round did not fail: the round
+  **succeeded**, and silently replaced the global model with one of a
+  different dimension, which every later round then dispatched. The
+  federation reported itself healthy throughout.
+
+  The server is the only place that knows the dispatched length, so the
+  check is there, beside the existing non-finite exclusion and behaving
+  the same way: the update is excluded and the reason logged with the
+  client id, the expected length and the length received. Excluded rather
+  than fatal, because one misconfigured client should not stop a
+  federation of correct ones — but the warning repeats every round,
+  because unlike a diverging client, a wrong-length client will never
+  recover on its own.
+
+  The check is skipped only when the server holds no model at all, where
+  round one legitimately establishes the dimension. A placeholder is not
+  that case: it is a non-empty all-zero vector, and an update against it
+  is checked like any other.
+
 - **Every Redis registry operation carried a 500 ms ceiling nobody set.**
   `RedisRegistry` and `RedisNodeAllowlist` opened their connections with
   `get_connection_manager()`, which takes `redis`'s

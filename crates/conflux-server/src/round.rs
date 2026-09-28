@@ -115,7 +115,11 @@ pub async fn run_round(state: &Arc<AppState>) -> Result<RoundSummary, ServerErro
     flush.deltas.sort_by(|a, b| a.client_id.cmp(&b.client_id));
     let flush = flush;
 
-    let decoded = decode_flushed_deltas(&flush.deltas)?;
+    // The length this round dispatched, which is what an update must
+    // match. `None` only before any model exists at all — see the
+    // function's own comment.
+    let expected_len = (!weights.is_empty()).then_some(weights.len());
+    let decoded = decode_flushed_deltas(&flush.deltas, expected_len)?;
     let decoded = filter_by_per_client_budget(state, decoded, round)?;
     let decoded = apply_server_side_privacy(state, decoded);
 
@@ -326,7 +330,37 @@ fn filter_by_per_client_budget(
 /// that reference is ever computed — regardless
 /// of whether `reputation_filter_enabled` is on, since this is a plain
 /// correctness bug, not a robustness policy choice.
-fn decode_flushed_deltas(deltas: &[ClientDelta]) -> Result<Vec<(String, Vec<f32>)>, ServerError> {
+///
+/// Also excludes an update whose length is not `expected_len`. The
+/// proto states this invariant already — a `ClientDelta`'s weights are
+/// "the same length as the TaskResponse this client trained from" — and
+/// nothing enforced it.
+///
+/// **Why here rather than in `conflux-core`.** `decode_and_validate`
+/// compares every update against *the first update in the batch*,
+/// because `Aggregator::aggregate` receives only `&[ClientDelta]` and
+/// genuinely cannot know what the round dispatched. That check is a
+/// consistency check, and it has two blind spots a consistency check
+/// must have: a federation where **every** client runs the wrong
+/// architecture agrees with itself and passes, and when one client
+/// differs the error names whichever disagrees with the first — which
+/// may be the only correct one. The server is the only place that knows
+/// the dispatched length, so the check belongs here.
+///
+/// `expected_len` is `None` only when the server holds no model at all,
+/// where round one legitimately establishes the dimension. A
+/// placeholder is *not* that case: it is a non-empty all-zero vector, a
+/// client is expected to return an update of the same length, and it is
+/// checked like any other round.
+///
+/// Excluded rather than fatal, matching the non-finite case above — one
+/// misconfigured client should not stop a federation of correct ones.
+/// The warning repeats every round because, unlike a diverging client,
+/// a wrong-length client will never recover on its own.
+fn decode_flushed_deltas(
+    deltas: &[ClientDelta],
+    expected_len: Option<usize>,
+) -> Result<Vec<(String, Vec<f32>)>, ServerError> {
     let decoded: Vec<(String, Vec<f32>)> = deltas
         .iter()
         .map(|delta| {
@@ -344,6 +378,19 @@ fn decode_flushed_deltas(deltas: &[ClientDelta]) -> Result<Vec<(String, Vec<f32>
     Ok(decoded
         .into_iter()
         .filter(|(client_id, weights)| {
+            if let Some(expected) = expected_len
+                && weights.len() != expected
+            {
+                tracing::warn!(
+                    client_id = %client_id,
+                    expected,
+                    got = weights.len(),
+                    "update excluded: wrong length for this round's model — the \
+                     client is training a different architecture, which is a \
+                     configuration problem rather than a transient one"
+                );
+                return false;
+            }
             let finite = weights.iter().all(|w| w.is_finite());
             if !finite {
                 tracing::warn!(
@@ -671,8 +718,9 @@ mod tests {
             delta("c", 3.0),
             delta("d", 4.0),
         ];
-        // What `decode_flushed_deltas` produces: `b` is gone.
-        let decoded = decode_flushed_deltas(&deltas).unwrap();
+        // What `decode_flushed_deltas` produces: `b` is gone. These are
+        // one-element updates, so the round's dispatched length is 1.
+        let decoded = decode_flushed_deltas(&deltas, Some(1)).unwrap();
         assert_eq!(decoded.len(), 3);
         let passed: HashSet<String> = decoded.iter().map(|(id, _)| id.clone()).collect();
 
